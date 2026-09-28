@@ -72,7 +72,10 @@ jobs:
             platform: macos-latest
             target: aarch64-apple-darwin
           - label: macos-x64
-            platform: macos-13
+            # macos-13（Intel）于 2025-12-04 已完全退役：被弃用的 runner label **不会报错**，
+            # 而是排队到 24 小时上限后被自动取消（表现为该作业长期 queued，拖垮整个运行）。
+            # macos-15-intel 是 GitHub 现存的最后一个托管 x86_64 macOS 镜像（约可用至 2027-08）。
+            platform: macos-15-intel
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
