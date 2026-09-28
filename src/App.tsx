@@ -61,36 +61,47 @@ type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
+// 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
+type Recording = { file_name: string; path: string; active: boolean };
 // 截图结果。后端只回文件名、路径与字节数，不回传任何像素数据。
 type Screenshot = { file_name: string; path: string; bytes: number };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false };
 function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
     if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") {
-      // 旧版本没有 keep_awake 字段，缺省视为开启。
+      // 旧版本没有 keep_awake / record 字段：前者缺省视为开启，后者缺省视为关闭。
       return {
         quality: value.quality,
         rotation: value.rotation,
         fullscreen: value.fullscreen,
         always_on_top: value.always_on_top,
         keep_awake: typeof value.keep_awake === "boolean" ? value.keep_awake : true,
+        record: typeof value.record === "boolean" ? value.record : false,
       };
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
   return defaultOptions;
 }
 
-// 截图文件名按**本机时间**生成（后端不猜时区），随后由后端按 ASCII 白名单严格校验。
-// 只使用数字与短横线，任何路径分隔符都不会出现在这里。
-function screenshotFileName(now: Date) {
+// 截图与录像的文件名都按**本机时间**生成（后端不猜时区），随后由后端按 ASCII 白名单
+// 严格校验。只使用数字与短横线，任何路径分隔符都不会出现在这里。
+function localTimestamp(now: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
   const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `MirrorDock-${date}-${time}.png`;
+  return `${date}-${time}`;
+}
+
+function screenshotFileName(now: Date) {
+  return `MirrorDock-${localTimestamp(now)}.png`;
+}
+
+function recordingFileName(now: Date) {
+  return `MirrorDock-${localTimestamp(now)}.mp4`;
 }
 
 function formatBytes(bytes: number) {
@@ -200,6 +211,9 @@ function App() {
   const [screenshot, setScreenshot] = useState<Screenshot | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const [screenshotBusy, setScreenshotBusy] = useState(false);
+  const [recording, setRecording] = useState<Recording | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [recordingBusy, setRecordingBusy] = useState(false);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
@@ -213,6 +227,10 @@ function App() {
         const current = await invoke<MirrorSession>("mirror_session");
         if (!disposed) { setSession(current); setSessionError(null); }
       } catch { if (!disposed) setSessionError("无法更新会话状态，请重新打开应用后检查。"); }
+      try {
+        const captured = await invoke<Recording | null>("current_recording");
+        if (!disposed) setRecording(captured);
+      } catch { /* 录制信息是附加信息，读不到不影响会话状态本身的展示。 */ }
       if (!disposed) timer = setTimeout(() => void poll(), 1000);
     }
     void poll();
@@ -233,7 +251,10 @@ function App() {
     setApplyingOptions(true);
     setApplyNotice(null);
     try {
-      const result = await invoke<SessionUpdate>("update_session_options", { options });
+      const result = await invoke<SessionUpdate>("update_session_options", {
+        options,
+        recordFileName: options.record ? recordingFileName(new Date()) : null,
+      });
       setSession(result.session);
       setApplyNotice(result.applied ? "新设置已生效：镜像窗口已按新设置重新打开。" : result.note ?? "设置与当前会话一致，未重启镜像窗口。");
     } catch (error) {
@@ -313,7 +334,12 @@ function App() {
     setLaunchError(null);
     setApplyNotice(null);
     try {
-      await invoke("start_mirroring", { serial, options });
+      await invoke("start_mirroring", {
+        serial,
+        options,
+        // 只有开启录制时才生成文件名；后端在未开启录制时会忽略它。
+        recordFileName: options.record ? recordingFileName(new Date()) : null,
+      });
       try { localStorage.setItem("mirrordock.lastDeviceSerial", serial); } catch { setSettingsNotice("无法保存最近设备，本次连接不受影响。"); }
       // 启动成功后端才记入最近设备，这里同步刷新以反映新的排序。
       void refreshRecentDevices();
@@ -403,6 +429,31 @@ function App() {
       await revealItemInDir(screenshot.path);
     } catch (error) {
       setScreenshotError(errorMessage(error, "无法打开截图所在的文件夹。"));
+    }
+  }
+
+  // 撤销：删除这段录像。正在录制中的文件会被后端拒绝，界面如实展示原因。
+  async function removeRecording() {
+    if (!recording) return;
+    setRecordingBusy(true);
+    setRecordingError(null);
+    try {
+      await invoke("delete_recording", { fileName: recording.file_name });
+      setRecording(null);
+    } catch (error) {
+      setRecordingError(errorMessage(error, "无法删除这段录像。"));
+    } finally {
+      setRecordingBusy(false);
+    }
+  }
+
+  async function revealRecording() {
+    if (!recording) return;
+    setRecordingError(null);
+    try {
+      await revealItemInDir(recording.path);
+    } catch (error) {
+      setRecordingError(errorMessage(error, "无法打开录像所在的文件夹。"));
     }
   }
 
@@ -534,6 +585,7 @@ function App() {
           <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
           <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
           <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
+          <label><input type="checkbox" checked={options.record} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）</label>
           {sessionActive && (
             <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
               {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
@@ -616,6 +668,26 @@ function App() {
             )}
             {screenshotError && <p className="capability-pending" role="alert">{screenshotError}</p>}
             <p className="capability-pending">受保护页面（如支付、密码输入）由 Android 自行屏蔽，截出来会是黑屏，这不是故障。</p>
+          </div>
+          <div className="capability-panel recording-panel" aria-live="polite">
+            <strong>录像</strong>
+            {recording ? (
+              <div className="screenshot-result">
+                <p className="capability-summary">
+                  {recording.active ? "正在录制：" : "已结束录制："}{recording.file_name}
+                </p>
+                <p className="screenshot-path">{recording.path}</p>
+                <span>
+                  <button className="text-button" type="button" onClick={() => void revealRecording()}>在文件夹中显示</button>
+                  <button className="text-button danger" type="button" disabled={recordingBusy || recording.active} onClick={() => void removeRecording()}>删除这段录像</button>
+                </span>
+                {recording.active && <p className="screenshot-path">录像正在写入，结束镜像后才会定型；录制中无法删除。</p>}
+              </div>
+            ) : (
+              <p className="capability-pending">当前没有录像。在「镜像窗口设置」中打开「录制这一会话的画面」，然后开始镜像即可录制。</p>
+            )}
+            {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
+            <p className="capability-pending">录像保存在本机的视频目录（Windows / Linux 为「视频」，macOS 为「影片」）下的 MirrorDock 文件夹，不会上传。录像由镜像窗口直接写入文件，结束镜像即同时结束录制。</p>
           </div>
           </>
         ) : (

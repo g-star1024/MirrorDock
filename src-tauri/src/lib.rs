@@ -71,8 +71,10 @@ struct AdbCheck {
 ///   trusted_list_unavailable / trusted_list_unreadable / trusted_list_write_failed
 ///   lock_probe_failed / wake_failed
 ///   recent_list_unavailable / recent_list_unreadable / recent_list_write_failed
-///   screenshot_name_invalid / screenshot_dir_unavailable / screenshot_not_image
-///   screenshot_failed / screenshot_write_failed / screenshot_missing / screenshot_delete_failed
+///   media_name_invalid（截图与录像共用的文件名校验）
+///   screenshot_dir_unavailable / screenshot_not_image / screenshot_failed
+///   screenshot_write_failed / screenshot_missing / screenshot_delete_failed
+///   recording_dir_unavailable / recording_in_progress / recording_missing / recording_delete_failed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AppError {
     code: &'static str,
@@ -279,10 +281,15 @@ trait MirrorProcess: Send {
 
 trait MirrorRuntime: Send + Sync {
     fn is_available(&self) -> bool;
+    /// 启动镜像进程。`record_path` 非空时同时把画面录制成该文件。
+    ///
+    /// 录制与画面共用同一个 scrcpy 进程，因此**只能在启动时决定**，无法在会话中
+    /// 单独开关；路径由调用方给出（前端不参与拼接本机路径）。
     fn start(
         &self,
         serial: &str,
         options: &SessionOptions,
+        record_path: Option<&Path>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error>;
 }
 
@@ -326,6 +333,12 @@ struct SessionOptions {
     /// 期间不休眠。scrcpy 退出时会恢复设备原有的休眠与电量策略。默认开启。
     #[serde(default = "keep_awake_by_default")]
     keep_awake: bool,
+    /// 是否把本会话的画面录制成 MP4 保存到本机。
+    ///
+    /// **默认关闭**：录制会产生大文件，而且文件内容就是屏幕像素。与 `keep_awake`
+    /// 的默认值取向不同——「保护用户」的默认值可以替用户打开，「替用户留存一份屏幕
+    /// 副本」必须由用户自己决定。
+    record: bool,
 }
 
 impl Default for SessionOptions {
@@ -336,6 +349,7 @@ impl Default for SessionOptions {
             always_on_top: false,
             rotation: 0,
             keep_awake: true,
+            record: false,
         }
     }
 }
@@ -494,16 +508,24 @@ impl MirrorRuntime for ScrcpyRuntime {
         &self,
         serial: &str,
         options: &SessionOptions,
+        record_path: Option<&Path>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
-        let child = Command::new(scrcpy_binary())
+        let mut command = Command::new(scrcpy_binary());
+        command
             .arg("--serial")
             .arg(serial)
             .args(
                 options
                     .arguments()
                     .map_err(|_| std::io::Error::other("invalid session options"))?,
-            )
-            .spawn()?;
+            );
+        if let Some(path) = record_path {
+            // 固定参数直接调用：路径作为单个 argv 传入，不做任何 shell 拼接或插值。
+            command
+                .arg(format!("--record={}", path.to_string_lossy()))
+                .arg("--record-format=mp4");
+        }
+        let child = command.spawn()?;
         Ok(Box::new(SystemMirrorProcess { child }))
     }
 }
@@ -523,6 +545,11 @@ struct SessionState {
     /// 在启动时确定，无法在运行中改写。要让界面能判断「这次修改是否真的需要重启
     /// 镜像窗口」，就必须知道上一次启动到底用了什么参数。
     options: SessionOptions,
+    /// 最近一次会话的录制文件路径（若开启了录制）。
+    ///
+    /// 会话结束后**刻意保留**：录好的文件仍在磁盘上，用户需要能看到它、打开它或删掉
+    /// 它。至于「是否仍在录制」，由是否存在运行中的进程决定，而不是由这个字段决定。
+    record_path: Option<String>,
 }
 
 struct SessionStore(Arc<Mutex<SessionState>>);
@@ -534,6 +561,7 @@ impl Default for SessionStore {
             process: None,
             epoch: 0,
             options: SessionOptions::default(),
+            record_path: None,
         })))
     }
 }
@@ -599,12 +627,14 @@ fn attach_process(
     process: Box<dyn MirrorProcess>,
     serial: String,
     options: SessionOptions,
+    record_path: Option<String>,
 ) -> Result<u64, AppError> {
     let mut state = store.lock()?;
     state.epoch = state.epoch.wrapping_add(1);
     state.session = MirrorSession::streaming(serial);
     state.process = Some(process);
     state.options = options;
+    state.record_path = record_path;
     Ok(state.epoch)
 }
 
@@ -1187,10 +1217,10 @@ fn remember_recent_device(app: &AppHandle, serial: &str, label: &str) {
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
 /// 文件名长度上限。文件名由前端按本地时间生成，必须当作不可信输入。
-const MAX_SCREENSHOT_NAME_LEN: usize = 128;
+const MAX_MEDIA_NAME_LEN: usize = 128;
 
 /// 同名文件自动加序号时最多尝试的次数，避免异常情况下无界循环。
-const MAX_SCREENSHOT_NAME_ATTEMPTS: u32 = 100;
+const MAX_MEDIA_NAME_ATTEMPTS: u32 = 100;
 
 /// 一张已保存的截图。
 ///
@@ -1206,11 +1236,11 @@ struct Screenshot {
     bytes: usize,
 }
 
-fn screenshot_name_invalid_error() -> AppError {
+fn media_name_invalid_error() -> AppError {
     AppError::new(
-        "screenshot_name_invalid",
-        "截图文件名不可用。",
-        "请使用字母、数字、短横线和下划线组成的 .png 文件名。",
+        "media_name_invalid",
+        "文件名不可用。",
+        "请使用字母、数字、短横线和下划线组成的文件名。",
     )
 }
 
@@ -1222,25 +1252,29 @@ fn screenshot_dir_unavailable_error() -> AppError {
     )
 }
 
-/// 校验前端给出的文件名。
+/// 校验一个由外部给出的文件名，并要求它属于给定扩展名。
 ///
 /// 这是本机写入路径的一部分，必须按不可信输入处理：只放行 ASCII 白名单，因此
 /// `/`、`\`、`..`、控制字符以及隐藏文件前缀都无法通过，也就不存在路径穿越。
-fn validate_screenshot_name(name: &str) -> Result<String, AppError> {
+fn validate_media_name(name: &str, extension: &str) -> Result<String, AppError> {
     let name = name.trim();
-    if name.is_empty() || name.len() > MAX_SCREENSHOT_NAME_LEN {
-        return Err(screenshot_name_invalid_error());
+    if name.is_empty() || name.len() > MAX_MEDIA_NAME_LEN {
+        return Err(media_name_invalid_error());
     }
     let allowed = name
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
-    if !allowed || name.starts_with('.') {
-        return Err(screenshot_name_invalid_error());
+    if !allowed || name.starts_with('.') || name.contains("..") {
+        return Err(media_name_invalid_error());
     }
-    if !name.to_ascii_lowercase().ends_with(".png") {
-        return Err(screenshot_name_invalid_error());
+    if !name.to_ascii_lowercase().ends_with(&format!(".{extension}")) {
+        return Err(media_name_invalid_error());
     }
     Ok(name.to_owned())
+}
+
+fn validate_screenshot_name(name: &str) -> Result<String, AppError> {
+    validate_media_name(name, "png")
 }
 
 /// 确认 adb 返回的字节流真的是 PNG。
@@ -1269,15 +1303,18 @@ fn screenshot_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
 
 /// 在目标目录里为 `name` 找一个尚未被占用的文件名。
 ///
-/// 前端按秒生成文件名，连续截图会撞名；撞名时顺延加序号，而不是覆盖用户已有的截图。
-fn unique_screenshot_path(directory: &Path, name: &str) -> PathBuf {
+/// 前端按秒生成文件名，连续操作会撞名；撞名时顺延加序号，而不是覆盖用户已有的文件。
+fn unique_file_path(directory: &Path, name: &str) -> PathBuf {
     let first = directory.join(name);
     if !first.exists() {
         return first;
     }
-    let stem = name.strip_suffix(".png").unwrap_or(name);
-    for index in 1..=MAX_SCREENSHOT_NAME_ATTEMPTS {
-        let candidate = directory.join(format!("{stem}-{index}.png"));
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) => (stem, format!(".{extension}")),
+        None => (name, String::new()),
+    };
+    for index in 1..=MAX_MEDIA_NAME_ATTEMPTS {
+        let candidate = directory.join(format!("{stem}-{index}{extension}"));
         if !candidate.exists() {
             return candidate;
         }
@@ -1292,7 +1329,7 @@ fn save_screenshot_bytes(
     bytes: &[u8],
 ) -> Result<Screenshot, AppError> {
     fs::create_dir_all(directory).map_err(|_| screenshot_dir_unavailable_error())?;
-    let path = unique_screenshot_path(directory, name);
+    let path = unique_file_path(directory, name);
     fs::write(&path, bytes).map_err(|_| {
         AppError::new(
             "screenshot_write_failed",
@@ -1357,6 +1394,112 @@ fn capture_screenshot_into(
     ensure_png(&bytes)?;
 
     save_screenshot_bytes(directory, &file_name, &bytes)
+}
+
+// ---------------------------------------------------------------------------
+// 录制：把本会话的画面录成 MP4 保存在本机
+// ---------------------------------------------------------------------------
+
+/// 最近一次会话的录制文件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct Recording {
+    /// 文件名（不含目录）。
+    file_name: String,
+    /// 本机完整路径，供界面展示与「在文件夹中显示」。
+    path: String,
+    /// 是否仍在录制：只有镜像进程还在运行时才为 true。
+    ///
+    /// 录像由镜像进程本身写盘，进程一退出文件就定型。因此「磁盘上有一个 mp4」与
+    /// 「此刻正在录」是两件事，界面必须把它们区分开。
+    active: bool,
+}
+
+fn recording_dir_unavailable_error() -> AppError {
+    AppError::new(
+        "recording_dir_unavailable",
+        "无法确定录像的保存位置。",
+        "请检查本机文件权限，或重新安装 MirrorDock。",
+    )
+}
+
+fn recording_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .video_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map(|directory| directory.join("MirrorDock"))
+        .map_err(|_| recording_dir_unavailable_error())
+}
+
+/// 为本次会话准备录制文件路径；`enabled` 为 false 时返回 `None`。
+///
+/// 文件名由前端按本机时间生成（后端不猜时区），随后按不可信输入严格校验；**目录由
+/// 后端决定**——前端只能给名字，给不了路径。
+fn prepare_recording_path(
+    app: &AppHandle,
+    enabled: bool,
+    file_name: Option<&str>,
+) -> Result<Option<PathBuf>, AppError> {
+    if !enabled {
+        return Ok(None);
+    }
+    let name = validate_media_name(file_name.unwrap_or("MirrorDock-recording.mp4"), "mp4")?;
+    let directory = recording_dir(app)?;
+    fs::create_dir_all(&directory).map_err(|_| recording_dir_unavailable_error())?;
+    Ok(Some(unique_file_path(&directory, &name)))
+}
+
+fn current_recording_with(store: &SessionStore) -> Result<Option<Recording>, AppError> {
+    let state = store.lock()?;
+    let Some(path) = state.record_path.clone() else {
+        return Ok(None);
+    };
+    let file_name = Path::new(&path)
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    Ok(Some(Recording {
+        file_name,
+        path,
+        active: state.process.is_some(),
+    }))
+}
+
+/// 删除一个录像文件，对应界面上的「撤销」。
+///
+/// **正在录制的文件会被拒绝删除**：删掉它既会让用户以为已经清理干净、实际却还在写，
+/// 也可能破坏正在进行中的文件。这里如实报错并指出下一步，而不是静默失败。
+fn remove_recording_file(
+    directory: &Path,
+    name: &str,
+    store: &SessionStore,
+) -> Result<(), AppError> {
+    let path = directory.join(name);
+    {
+        let state = store.lock()?;
+        if state.process.is_some()
+            && state.record_path.as_deref() == Some(path.to_string_lossy().as_ref())
+        {
+            return Err(AppError::new(
+                "recording_in_progress",
+                "这段录像仍在录制中，无法删除。",
+                "请先结束镜像会话，录像结束后即可删除。",
+            ));
+        }
+    }
+    if !path.is_file() {
+        return Err(AppError::new(
+            "recording_missing",
+            "这个录像文件已经不在了。",
+            "它可能已被移动或删除，请刷新后重试。",
+        ));
+    }
+    fs::remove_file(&path).map_err(|_| {
+        AppError::new(
+            "recording_delete_failed",
+            "无法删除这个录像文件。",
+            "请在本机的文件管理器中手动删除它。",
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1692,13 +1835,12 @@ fn start_mirroring(
     sessions: State<SessionStore>,
     serial: String,
     options: Option<SessionOptions>,
+    record_file_name: Option<String>,
 ) -> Result<(), AppError> {
-    start_mirroring_with(
-        &runtimes,
-        &sessions,
-        serial.clone(),
-        options.unwrap_or_default(),
-    )?;
+    let options = options.unwrap_or_default();
+    // 先准备录制路径：目录不可写或文件名非法时，在占用会话槽位之前就失败。
+    let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
+    start_mirroring_with(&runtimes, &sessions, serial.clone(), options, record_path)?;
 
     // 只有成功启动才记入最近设备；读取人类可读的名称失败时退回序列号。
     let serial = serial.trim().to_owned();
@@ -1722,6 +1864,7 @@ fn start_mirroring_with(
     sessions: &SessionStore,
     serial: String,
     options: SessionOptions,
+    record_path: Option<PathBuf>,
 ) -> Result<(), AppError> {
     options.arguments()?;
 
@@ -1729,7 +1872,7 @@ fn start_mirroring_with(
 
     reserve_session(sessions, MirrorSession::connecting(serial.clone()))?;
 
-    launch_into_reserved_session(runtimes, sessions, serial, options)
+    launch_into_reserved_session(runtimes, sessions, serial, options, record_path)
 }
 
 /// 在**已被本次请求占用**的会话槽位（`Connecting`）上真正拉起镜像进程。
@@ -1742,6 +1885,7 @@ fn launch_into_reserved_session(
     sessions: &SessionStore,
     serial: String,
     options: SessionOptions,
+    record_path: Option<PathBuf>,
 ) -> Result<(), AppError> {
     if !runtimes.mirror.is_available() {
         return Err(fail_session(
@@ -1780,7 +1924,7 @@ fn launch_into_reserved_session(
         return Err(error);
     }
 
-    let process = match runtimes.mirror.start(&serial, &options) {
+    let process = match runtimes.mirror.start(&serial, &options, record_path.as_deref()) {
         Ok(process) => process,
         Err(_) => {
             return Err(fail_session(
@@ -1795,7 +1939,13 @@ fn launch_into_reserved_session(
         }
     };
 
-    let epoch = attach_process(sessions, process, serial.clone(), options)?;
+    let epoch = attach_process(
+        sessions,
+        process,
+        serial.clone(),
+        options,
+        record_path.map(|path| path.to_string_lossy().into_owned()),
+    )?;
     spawn_session_monitor(sessions.clone(), epoch, serial);
     Ok(())
 }
@@ -1870,6 +2020,7 @@ fn apply_session_options_with(
     runtimes: &AppRuntimes,
     sessions: &SessionStore,
     options: SessionOptions,
+    record_path: Option<PathBuf>,
 ) -> Result<SessionUpdate, AppError> {
     // 先校验参数，再触碰正在运行的会话：一个非法请求绝不能打断一次正常的镜像。
     options.arguments()?;
@@ -1899,7 +2050,9 @@ fn apply_session_options_with(
         ));
     }
 
-    if let Err(error) = launch_into_reserved_session(runtimes, sessions, serial, options) {
+    if let Err(error) =
+        launch_into_reserved_session(runtimes, sessions, serial, options, record_path)
+    {
         let error = with_restart_context(&error);
         annotate_session_error(sessions, &error);
         return Err(error);
@@ -1946,11 +2099,33 @@ fn mirror_session(sessions: State<SessionStore>) -> Result<MirrorSession, AppErr
 /// 打断一次正常的镜像。
 #[tauri::command]
 fn update_session_options(
+    app: AppHandle,
     runtimes: State<AppRuntimes>,
     sessions: State<SessionStore>,
     options: SessionOptions,
+    record_file_name: Option<String>,
 ) -> Result<SessionUpdate, AppError> {
-    apply_session_options_with(&runtimes, &sessions, options)
+    // 同样是「先校验、再触碰运行中的会话」：路径不可用时不打断正在进行的镜像。
+    let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
+    apply_session_options_with(&runtimes, &sessions, options, record_path)
+}
+
+/// 读取最近一次会话的录制信息（若有）。`active` 表示此刻进程是否仍在写这个文件。
+#[tauri::command]
+fn current_recording(sessions: State<SessionStore>) -> Result<Option<Recording>, AppError> {
+    current_recording_with(&sessions)
+}
+
+/// 删除一个录像文件，对应界面上的「撤销」。
+#[tauri::command]
+fn delete_recording(
+    app: AppHandle,
+    sessions: State<SessionStore>,
+    file_name: String,
+) -> Result<(), AppError> {
+    let directory = recording_dir(&app)?;
+    let file_name = validate_media_name(&file_name, "mp4")?;
+    remove_recording_file(&directory, &file_name, &sessions)
 }
 
 #[tauri::command]
@@ -2133,6 +2308,8 @@ pub fn run() {
             forget_recent_device,
             capture_screenshot,
             delete_screenshot,
+            current_recording,
+            delete_recording,
             pair_wireless_device,
             connect_wireless_device,
             list_trusted_wireless_devices,
@@ -2348,6 +2525,8 @@ mod tests {
         killed: Arc<Mutex<bool>>,
         /// 每次 `start` 实际收到的启动参数，用于验证「会话中应用设置」确实按新参数重启。
         starts: Arc<Mutex<Vec<SessionOptions>>>,
+        /// 每次 `start` 收到的录制路径，用于验证录制确实被传给了镜像进程。
+        records: Arc<Mutex<Vec<Option<String>>>>,
         /// 为真时 `start` 直接失败，用于验证重启失败不会塌缩会话状态。
         fail_start: bool,
     }
@@ -2360,6 +2539,7 @@ mod tests {
                 exit: None,
                 killed: Arc::new(Mutex::new(false)),
                 starts: Arc::new(Mutex::new(Vec::new())),
+                records: Arc::new(Mutex::new(Vec::new())),
                 fail_start: false,
             }
         }
@@ -2371,6 +2551,7 @@ mod tests {
                 exit: Some(success),
                 killed: Arc::new(Mutex::new(false)),
                 starts: Arc::new(Mutex::new(Vec::new())),
+                records: Arc::new(Mutex::new(Vec::new())),
                 fail_start: false,
             }
         }
@@ -2381,6 +2562,7 @@ mod tests {
                 exit: None,
                 killed: Arc::new(Mutex::new(false)),
                 starts: Arc::new(Mutex::new(Vec::new())),
+                records: Arc::new(Mutex::new(Vec::new())),
                 fail_start: false,
             }
         }
@@ -2403,8 +2585,13 @@ mod tests {
             &self,
             _serial: &str,
             options: &SessionOptions,
+            record_path: Option<&Path>,
         ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
             self.starts.lock().unwrap().push(options.clone());
+            self.records
+                .lock()
+                .unwrap()
+                .push(record_path.map(|path| path.to_string_lossy().into_owned()));
             if self.fail_start {
                 return Err(std::io::Error::other("mirror start failed"));
             }
@@ -2575,6 +2762,7 @@ mod tests {
                 fullscreen: true,
                 always_on_top: true,
                 keep_awake: true,
+                record: false,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
@@ -2631,7 +2819,7 @@ mod tests {
         let store = SessionStore::default();
 
         let error =
-            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default())
+            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
                 .unwrap_err();
 
         assert_eq!(error.code, "device_unauthorized");
@@ -2653,7 +2841,7 @@ mod tests {
         let store = SessionStore::default();
 
         let error =
-            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default())
+            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
                 .unwrap_err();
 
         assert_eq!(error.code, "device_offline");
@@ -2670,13 +2858,14 @@ mod tests {
             &store,
             "phone".into(),
             SessionOptions::default(),
+            None,
         )
         .unwrap_err();
         assert_eq!(error.code, "adb_unavailable");
 
         let empty = runtimes(FakeAdb::with_devices(Vec::new()), FakeMirror::running());
         let error =
-            start_mirroring_with(&empty, &store, "phone".into(), SessionOptions::default())
+            start_mirroring_with(&empty, &store, "phone".into(), SessionOptions::default(), None)
                 .unwrap_err();
         assert_eq!(error.code, "device_not_connected");
     }
@@ -2690,7 +2879,7 @@ mod tests {
         let store = SessionStore::default();
 
         let error =
-            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default())
+            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
                 .unwrap_err();
 
         assert_eq!(error.code, "mirror_runtime_missing");
@@ -2705,7 +2894,7 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
 
         let session = snapshot(&store);
         assert_eq!(session.phase, SessionPhase::Streaming);
@@ -2727,7 +2916,7 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
         stop_mirroring_with(&store).unwrap();
 
         assert!(*killed.lock().unwrap());
@@ -2758,7 +2947,7 @@ mod tests {
             mirror,
         );
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
         StartedSession {
             runtimes,
             store,
@@ -2779,6 +2968,7 @@ mod tests {
                 fullscreen: true,
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
 
@@ -2809,6 +2999,7 @@ mod tests {
             &session.runtimes,
             &session.store,
             SessionOptions::default(),
+            None,
         )
         .unwrap();
 
@@ -2836,6 +3027,7 @@ mod tests {
                 rotation: 45,
                 ..Default::default()
             },
+            None,
         )
         .unwrap_err();
 
@@ -2857,7 +3049,7 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        let error = apply_session_options_with(&runtimes, &store, SessionOptions::default())
+        let error = apply_session_options_with(&runtimes, &store, SessionOptions::default(), None)
             .unwrap_err();
         assert_eq!(error.code, "session_not_running");
         assert!(
@@ -2869,7 +3061,7 @@ mod tests {
         // 「已配对但还没开始镜像」同样不是进行中的会话。
         mark_session(&store, MirrorSession::paired("192.168.1.20:37123".into()));
         assert_eq!(
-            apply_session_options_with(&runtimes, &store, SessionOptions::default())
+            apply_session_options_with(&runtimes, &store, SessionOptions::default(), None)
                 .unwrap_err()
                 .code,
             "session_not_running"
@@ -2894,6 +3086,7 @@ mod tests {
                 fullscreen: true,
                 ..Default::default()
             },
+            None,
         )
         .unwrap_err();
 
@@ -2920,7 +3113,7 @@ mod tests {
         let mirror = FakeMirror::running();
         let runtimes = runtimes(adb, mirror);
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
 
         // 重启过程中手机掉线：必须落到设备状态，而不是笼统的“重启失败”。
         *live.lock().unwrap() = vec![device("phone", DeviceState::Offline)];
@@ -2931,6 +3124,7 @@ mod tests {
                 quality: Quality::Smooth,
                 ..Default::default()
             },
+            None,
         )
         .unwrap_err();
 
@@ -2948,6 +3142,7 @@ mod tests {
                 quality: Quality::Sharp,
                 ..Default::default()
             },
+            None,
         )
         .unwrap_err();
         assert_eq!(error.code, "session_not_running");
@@ -2987,6 +3182,7 @@ mod tests {
                 always_on_top: true,
                 ..Default::default()
             },
+            None,
         )
         .unwrap();
         assert_eq!(session.starts.lock().unwrap().len(), 2);
@@ -3004,7 +3200,7 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
 
         assert_eq!(wait_until_idle_or_failed(&store).phase, SessionPhase::Idle);
     }
@@ -3017,7 +3213,7 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
 
         let session = wait_until_idle_or_failed(&store);
         assert_eq!(session.phase, SessionPhase::Failed);
@@ -3677,7 +3873,7 @@ mod tests {
         }
         assert!(validate_screenshot_name("MirrorDock-20260928-171825.png").is_ok());
 
-        let too_long = format!("{}.png", "a".repeat(MAX_SCREENSHOT_NAME_LEN));
+        let too_long = format!("{}.png", "a".repeat(MAX_MEDIA_NAME_LEN));
         assert!(validate_screenshot_name(&too_long).is_err());
     }
 
@@ -3745,6 +3941,185 @@ mod tests {
                 .any(|call| call.starts_with("screenshot")),
             "设备未授权时不得去读屏幕内容"
         );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // -- 录制：默认关闭、路径交给镜像进程、可撤销 --
+
+    #[test]
+    fn a_recording_is_never_prepared_unless_the_session_asked_for_one() {
+        assert!(
+            !SessionOptions::default().record,
+            "录制会产生一份屏幕副本，必须由用户显式开启"
+        );
+
+        let mirror = FakeMirror::running();
+        let records = Arc::clone(&mirror.records);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            mirror,
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            records.lock().unwrap().clone(),
+            vec![None],
+            "没开录制时不得给镜像进程传任何录制路径"
+        );
+        assert!(current_recording_with(&store).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_requested_recording_path_is_handed_to_the_mirror_process() {
+        let directory = scratch_dir("recording-start");
+        let mirror = FakeMirror::running();
+        let records = Arc::clone(&mirror.records);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            mirror,
+        );
+        let store = SessionStore::default();
+        let path = directory.join("MirrorDock-20260928-171825.mp4");
+
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions {
+                record: true,
+                ..Default::default()
+            },
+            Some(path.clone()),
+        )
+        .unwrap();
+
+        let recorded = records.lock().unwrap().clone();
+        assert_eq!(
+            recorded[0].as_deref(),
+            Some(path.to_string_lossy().as_ref()),
+            "录制路径必须原样交给镜像进程，不能由前端拼本机路径"
+        );
+
+        let recording = current_recording_with(&store).unwrap().unwrap();
+        assert_eq!(recording.file_name, "MirrorDock-20260928-171825.mp4");
+        assert!(recording.active, "进程还在跑，录像就还在写");
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_recording_file_name_can_never_escape_the_recording_directory() {
+        for name in [
+            "../escape.mp4",
+            "sub/dir.mp4",
+            "sub\\dir.mp4",
+            ".hidden.mp4",
+            "clip.mkv",
+            "clip",
+            "",
+        ] {
+            assert!(
+                validate_media_name(name, "mp4").is_err(),
+                "文件名 {name:?} 必须被拒绝"
+            );
+        }
+        assert!(validate_media_name("MirrorDock-20260928-171825.mp4", "mp4").is_ok());
+        // 同一个校验函数也不得放行别的扩展名。
+        assert!(validate_media_name("clip.mp4", "png").is_err());
+    }
+
+    #[test]
+    fn a_recording_still_being_written_cannot_be_deleted() {
+        let directory = scratch_dir("recording-live");
+        fs::create_dir_all(&directory).unwrap();
+        let live = directory.join("MirrorDock-20260928-171825.mp4");
+        fs::write(&live, b"partial").unwrap();
+
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions {
+                record: true,
+                ..Default::default()
+            },
+            Some(live.clone()),
+        )
+        .unwrap();
+
+        let error =
+            remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store).unwrap_err();
+        assert_eq!(error.code, "recording_in_progress");
+        assert!(live.exists(), "正在写的录像文件不得被删掉");
+
+        // 结束会话后即可删除；再删一次必须如实说「文件已经不在了」。
+        stop_mirroring_with(&store).unwrap();
+        remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store).unwrap();
+        assert!(!live.exists());
+        assert_eq!(
+            remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store)
+                .unwrap_err()
+                .code,
+            "recording_missing"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn turning_recording_on_restarts_the_session_with_a_new_recording_file() {
+        let directory = scratch_dir("recording-restart");
+        let mirror = FakeMirror::running();
+        let records = Arc::clone(&mirror.records);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            mirror,
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
+
+        let path = directory.join("MirrorDock-20260928-180000.mp4");
+        let update = apply_session_options_with(
+            &runtimes,
+            &store,
+            SessionOptions {
+                record: true,
+                ..Default::default()
+            },
+            Some(path.clone()),
+        )
+        .unwrap();
+
+        assert!(update.applied, "打开录制是一次真实的会话变更，必须重启生效");
+        let recorded = records.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 2, "应当恰好启动两次：原会话 + 开启录制后重启");
+        assert_eq!(recorded[0], None);
+        assert_eq!(
+            recorded[1].as_deref(),
+            Some(path.to_string_lossy().as_ref())
+        );
+        assert!(current_recording_with(&store).unwrap().unwrap().active);
 
         let _ = fs::remove_dir_all(&directory);
     }
