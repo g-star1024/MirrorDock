@@ -367,6 +367,16 @@ struct SessionOptions {
     /// 有的用户不希望手机上复制的内容自动出现在电脑剪贴板里。剪贴板文本内容
     /// 由 scrcpy 进程内部处理，不经过 MirrorDock，也不入日志。
     clipboard_autosync: bool,
+    /// 是否把手机播放的系统声音转发到电脑（对应 scrcpy 默认行为；关闭时传
+    /// `--no-audio`）。
+    ///
+    /// **默认开启**：听得到手机声音是「在电脑上用手机」体验的一部分。两个限制是
+    /// 系统行为，须如实告知而非绕过：（1）系统音频捕获要求 Android 11+，更老的
+    /// 设备上 scrcpy 会**自动禁用音频**继续镜像（MirrorDock 不假装能转发）；
+    /// （2）应用可以通过捕获策略退出（通话、部分受保护应用无声）。另外这里只
+    /// 转发系统播放声音（scrcpy `--audio-source` 默认 `output`），**不提供麦克风
+    /// 采集**——麦克风是更敏感的隐私面，MVP 不开放。
+    audio: bool,
 }
 
 impl Default for SessionOptions {
@@ -379,6 +389,7 @@ impl Default for SessionOptions {
             keep_awake: true,
             record: false,
             clipboard_autosync: true,
+            audio: true,
         }
     }
 }
@@ -408,6 +419,9 @@ impl SessionOptions {
         }
         if !self.clipboard_autosync {
             args.push("--no-clipboard-autosync".into());
+        }
+        if !self.audio {
+            args.push("--no-audio".into());
         }
         if self.fullscreen {
             args.push("--fullscreen".into());
@@ -3168,6 +3182,7 @@ mod tests {
                 keep_awake: true,
                 record: false,
                 clipboard_autosync: true,
+                audio: true,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
@@ -4217,6 +4232,25 @@ mod tests {
         // 字段缺省时同样视为开启（隐私开关默认关闭 = 同步默认开启）。
         let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
         assert!(parsed.clipboard_autosync);
+    }
+
+    #[test]
+    fn audio_forwarding_is_on_by_default_and_only_sends_the_disable_flag_when_turned_off() {
+        // 默认不传任何音频参数：转发系统声音是 scrcpy 的默认行为（`--audio-source`
+        // 默认 `output`），MirrorDock 不画蛇添足；麦克风采集不在选项之内。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(!args.iter().any(|argument| argument.contains("audio")));
+
+        // 关闭后显式传 `--no-audio`：让 scrcpy 的行为由用户可感知的开关决定。
+        let off = SessionOptions {
+            audio: false,
+            ..Default::default()
+        };
+        assert!(off.arguments().unwrap().contains(&"--no-audio".into()));
+
+        // 字段缺省时同样视为开启。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
+        assert!(parsed.audio);
     }
 
     // -- 截图：可见、可撤销、失败必须能被发现 --

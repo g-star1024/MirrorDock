@@ -63,7 +63,7 @@ type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
@@ -72,13 +72,13 @@ type Recording = { file_name: string; path: string; active: boolean };
 type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true };
 function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
     if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") {
-      // 旧版本没有 keep_awake / record / clipboard_autosync 字段：前两者按各自默认值
-      // 取向回填（唤醒开、录制关），剪贴板同步沿用 scrcpy 默认（开）。
+      // 旧版本没有 keep_awake / record / clipboard_autosync / audio 字段：按各自
+      // 默认值取向回填（唤醒开、录制关、剪贴板同步开、声音转发开）。
       return {
         quality: value.quality,
         rotation: value.rotation,
@@ -87,6 +87,7 @@ function readOptions(): SessionOptions {
         keep_awake: typeof value.keep_awake === "boolean" ? value.keep_awake : true,
         record: typeof value.record === "boolean" ? value.record : false,
         clipboard_autosync: typeof value.clipboard_autosync === "boolean" ? value.clipboard_autosync : true,
+        audio: typeof value.audio === "boolean" ? value.audio : true,
       };
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
@@ -613,6 +614,17 @@ function App() {
       });
     return () => { disposed = true; };
   }, [readySerial]);
+  // 探测确认这台手机不支持系统音频转发（Android < 11）时，把「转发手机声音」
+  // 如实关掉并禁用：scrcpy 在这类设备上会自动禁用音频，界面必须与之一致，
+  // 而不是留一个开了也不生效的开关。
+  const audioUnsupported = capabilities?.audio_forwarding_supported === false;
+  useEffect(() => {
+    if (audioUnsupported && options.audio) {
+      updateOptions({ ...options, audio: false });
+    }
+    // 只在探测结论变化时介入；options 变化由开关本身处理。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioUnsupported]);
   const statusMessage = session ? sessionStatus(session) : null;
   const statusRole = session && ["unauthorized", "offline", "failed"].includes(session.phase) ? "alert" : "status";
 
@@ -666,6 +678,7 @@ function App() {
           <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
           <label><input type="checkbox" checked={options.record} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）</label>
           <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板（关闭后手机与电脑的复制内容不再自动互通）</label>
+          <label><input type="checkbox" checked={options.audio} disabled={audioUnsupported} onChange={e => updateOptions({...options, audio: e.target.checked})}/> 转发手机播放的声音（Android 11+）{audioUnsupported ? "——这台手机不支持系统音频转发，已自动关闭" : ""}</label>
           {sessionActive && (
             <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
               {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
@@ -674,6 +687,7 @@ function App() {
           <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
           {sessionActive && <p>这些设置由镜像窗口在启动时确定，无法在运行中热更新。点击“应用并重启镜像窗口”后，画面会短暂中断并自动恢复。</p>}
           <p>无线卡顿时可选择“流畅”。受保护内容可能显示黑屏；旋转只改变电脑上的显示方向。</p>
+          <p>声音转发开启时，声音只在电脑播放、手机本地静音。通话与部分应用的音频受系统捕获策略限制可能无法转发；Android 11 设备需在解锁状态下开始镜像才能转发声音；MirrorDock 只转发系统播放声音，不使用麦克风。</p>
           {applyNotice && <p className="apply-notice" role="status">{applyNotice}</p>}
         </fieldset>
 
