@@ -11,6 +11,12 @@ use tauri::{AppHandle, Manager, State};
 /// 会话状态机轮询运行中进程的间隔。
 const MONITOR_INTERVAL: Duration = Duration::from_millis(200);
 
+/// 优雅结束镜像进程时等待 scrcpy 收尾（写出录像 moov 索引）的上限。
+const PROCESS_GRACEFUL_TIMEOUT: Duration = Duration::from_millis(3000);
+
+/// 兜底强杀之后等待进程真正退出的上限。SIGKILL 之后的等待只为回收，通常毫秒级。
+const PROCESS_REAP_TIMEOUT: Duration = Duration::from_millis(1000);
+
 /// MVP 只承诺 Android 8.0（API 26）及以上的画面与控制。
 const MIN_SDK_FOR_MIRRORING: u32 = 26;
 
@@ -297,6 +303,14 @@ trait MirrorProcess: Send {
     /// `Some(success)` 表示进程已退出，`None` 表示仍在运行。
     fn try_wait(&mut self) -> Option<bool>;
     fn kill(&mut self) -> Result<(), std::io::Error>;
+    /// 结束会话的统一入口。默认强杀；系统实现覆写为「先优雅退出、超时再强杀」。
+    ///
+    /// 之所以不能直接强杀：录制中的 MP4 依赖 scrcpy 退出前写出 moov 索引，强杀
+    /// 会留下一个体积正常却无法播放的文件（真机实验已证实）。测试替身沿用默认
+    /// 实现以保持用例快速、确定。
+    fn stop(&mut self) -> Result<(), std::io::Error> {
+        self.kill()
+    }
 }
 
 trait MirrorRuntime: Send + Sync {
@@ -580,6 +594,50 @@ impl MirrorProcess for SystemMirrorProcess {
 
     fn kill(&mut self) -> Result<(), std::io::Error> {
         self.child.kill()
+    }
+
+    fn stop(&mut self) -> Result<(), std::io::Error> {
+        // 已经退出就什么都不做：避免向已回收的 pid 发信号。
+        if self.try_wait().is_some() {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            // SAFETY: kill 只向本子进程的 pid 发送 SIGTERM，不触碰其它进程。
+            let sent = unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+            if sent != 0 {
+                // 发送失败最常见的原因是进程恰好自行退出；能 reap 就视为已结束。
+                if self.try_wait().is_some() {
+                    return Ok(());
+                }
+                return Err(std::io::Error::last_os_error());
+            }
+            let deadline = std::time::Instant::now() + PROCESS_GRACEFUL_TIMEOUT;
+            while std::time::Instant::now() < deadline {
+                if self.try_wait().is_some() {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            // 超时兜底强杀：宁可这次录像可能损坏，也不能让镜像窗口挂死。
+            self.kill()?;
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows 没有 SIGTERM 对应物：TerminateProcess 立即结束进程，
+            // 录制中的 MP4 可能缺 moov 索引。该平台差异如实记录，待 Windows
+            // 真机验证后决定是否引入平台特定的优雅退出手段。
+            self.kill()?;
+        }
+        // 强杀路径也等进程退出被回收，避免留下僵尸进程。
+        let deadline = std::time::Instant::now() + PROCESS_REAP_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            if self.try_wait().is_some() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
     }
 }
 
@@ -2341,7 +2399,8 @@ fn apply_session_options_with(
         return Err(session_not_running_error());
     };
 
-    if previous.kill().is_err() {
+    // 优雅结束旧窗口：录制中的 MP4 需要 scrcpy 写出索引后才能播放。
+    if previous.stop().is_err() {
         return Err(fail_session(
             sessions,
             Some(serial),
@@ -2375,7 +2434,8 @@ fn stop_mirroring(sessions: State<SessionStore>) -> Result<(), AppError> {
 
 fn stop_mirroring_with(store: &SessionStore) -> Result<(), AppError> {
     match take_running_process(store)? {
-        Some(mut process) => process.kill().map_err(|_| {
+        // 优雅结束：给 scrcpy 时间收尾（录制文件写索引），超时才强杀。
+        Some(mut process) => process.stop().map_err(|_| {
             AppError::new(
                 "mirror_stop_failed",
                 "无法结束镜像窗口。",
@@ -2625,11 +2685,11 @@ fn fetch_file_from_device(
     fetch_file_from_device_into(&runtimes, &directory, serial, file_name)
 }
 
-/// 应用退出时回收子进程，避免残留 scrcpy 进程。
+/// 应用退出时回收子进程，避免残留 scrcpy 进程。优雅结束让录制文件有机会收尾。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
         if let Ok(Some(mut process)) = take_running_process(&store) {
-            let _ = process.kill();
+            let _ = process.stop();
         }
     }
 }
@@ -3345,6 +3405,57 @@ mod tests {
             stop_mirroring_with(&store).unwrap_err().code,
             "session_not_running"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_graceful_stop_lets_a_recording_finalize_instead_of_killing() {
+        // 用一个真实的子进程验证系统实现的 stop：SIGTERM 后进程退出，而不是被强杀。
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut process = SystemMirrorProcess { child };
+
+        let started = std::time::Instant::now();
+        process.stop().unwrap();
+
+        assert!(
+            started.elapsed() < PROCESS_GRACEFUL_TIMEOUT,
+            "SIGTERM 路径应当迅速退出，而不是等满超时"
+        );
+        // 被信号终止的进程 status.success() 为 false，这里只断言「已退出且被回收」。
+        assert!(process.try_wait().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_ignores_sigterm_is_still_killed_before_the_timeout_budget_runs_out() {
+        // 兜底路径：忽略 SIGTERM 的进程在宽限期后被强杀，stop 最终返回成功。
+        // （sh 对 trap 的行为因实现而异，python 的 SIG_IGN 语义可靠。）
+        use std::io::BufRead;
+        let mut child = Command::new("python3")
+            .arg("-c")
+            .arg("import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(30)")
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // 等处理器的注册完成：SIGTERM 若在注册前送达，python 会被默认处置杀死，
+        // 测的就不再是兜底路径。
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        assert!(ready.contains("ready"), "子进程未就绪：{ready}");
+        let mut process = SystemMirrorProcess { child };
+
+        let started = std::time::Instant::now();
+        process.stop().unwrap();
+
+        assert!(
+            started.elapsed() >= PROCESS_GRACEFUL_TIMEOUT,
+            "忽略 SIGTERM 的进程应当等满宽限期再被强杀"
+        );
+        assert!(
+            started.elapsed() < PROCESS_GRACEFUL_TIMEOUT + PROCESS_REAP_TIMEOUT,
+            "强杀之后应当很快回收，不应长时间挂起"
+        );
+        assert!(process.try_wait().is_some());
     }
 
     // -- 会话中应用设置（镜像窗口形态由启动参数决定，只能靠「结束 + 重开」生效） --

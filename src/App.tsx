@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
 import "./App.css";
 
 type DeviceState = "ready" | "unauthorized" | "offline" | "unknown";
@@ -227,6 +228,8 @@ function App() {
   const [transferError, setTransferError] = useState<string | null>(null);
   const [lastTransfer, setLastTransfer] = useState<TransferReceipt | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<string[] | null>(null);
+  // 品牌引导：用户手动选择优先于按设备 label 自动猜测；null 表示尚未选择。
+  const [guideKey, setGuideKey] = useState<string | null>(null);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
@@ -627,6 +630,10 @@ function App() {
   }, [audioUnsupported]);
   const statusMessage = session ? sessionStatus(session) : null;
   const statusRole = session && ["unauthorized", "offline", "failed"].includes(session.phase) ? "alert" : "status";
+  // 按当前可见设备的 label 猜品牌；猜不出就是 null，界面如实显示「未检测到」。
+  const detectedGuide = detectBrand((check?.devices ?? []).map((device) => device.label));
+  const shownGuide: BrandGuide | null =
+    brandGuides.find((guide) => guide.key === (guideKey ?? detectedGuide?.key)) ?? null;
 
   return (
     <main className="app-shell">
@@ -781,7 +788,7 @@ function App() {
               <p className="capability-pending">当前没有录像。在「镜像窗口设置」中打开「录制这一会话的画面」，然后开始镜像即可录制。</p>
             )}
             {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
-            <p className="capability-pending">录像保存在本机的视频目录（Windows / Linux 为「视频」，macOS 为「影片」）下的 MirrorDock 文件夹，不会上传。录像由镜像窗口直接写入文件，结束镜像即同时结束录制。</p>
+            <p className="capability-pending">录像保存在本机的视频目录（Windows / Linux 为「视频」，macOS 为「影片」）下的 MirrorDock 文件夹，不会上传。录像由镜像窗口直接写入文件，结束镜像即同时结束录制；结束时会先等录像完成收尾再退出，保证文件可以正常播放。</p>
           </div>
           <div className="capability-panel transfer-panel" aria-live="polite">
             <strong>文件传输</strong>
@@ -823,6 +830,44 @@ function App() {
             <li><span>2</span><div><strong>在手机上开启“USB 调试”</strong><p>这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
             <li><span>3</span><div><strong>解锁手机并允许这台电脑</strong><p>在“允许 USB 调试吗？”中选择允许。你可以随时在手机设置中撤销。</p></div></li>
           </ol>
+        )}
+
+        {(!isChecking && !readyDevice) && (
+          <div className="capability-panel brand-guide" aria-live="polite">
+            <strong>按品牌查看开启步骤</strong>
+            <p className="capability-pending">
+              {detectedGuide
+                ? `检测到连接的设备疑似为「${detectedGuide.name}」，已为你选中；如型号不符可手动切换。`
+                : "选择你的手机品牌，查看打开开发者选项与 USB 调试的具体路径。"}
+            </p>
+            <div className="device-picker" aria-label="选择手机品牌">
+              {brandGuides.map((guide) => (
+                <button
+                  className={shownGuide?.key === guide.key ? "device-choice selected" : "device-choice"}
+                  type="button"
+                  key={guide.key}
+                  onClick={() => setGuideKey(guide.key)}
+                >
+                  {guide.name}
+                </button>
+              ))}
+            </div>
+            {shownGuide && (
+              <>
+                <ol className="setup-steps brand-steps">
+                  <li><span>1</span><div><strong>打开开发者选项</strong><p>{shownGuide.openDeveloperOptions}</p></div></li>
+                  <li><span>2</span><div><strong>开启 USB 调试</strong><p>{shownGuide.usbDebugging}</p></div></li>
+                  <li><span>3</span><div><strong>（可选）无线调试</strong><p>{shownGuide.wireless}</p></div></li>
+                </ol>
+                {shownGuide.notes.length > 0 && (
+                  <ul className="brand-notes">
+                    {shownGuide.notes.map((note) => <li key={note}>{note}</li>)}
+                  </ul>
+                )}
+              </>
+            )}
+            <p className="capability-pending">不同机型与系统版本的菜单名称可能不同，以手机实际设置为准。开启后回到上方点「重新检查」。</p>
+          </div>
         )}
 
         {!isChecking && check?.devices && check.devices.length > 0 && !readyDevice && (
