@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 type DeviceState = "ready" | "unauthorized" | "offline" | "unknown";
@@ -63,6 +64,8 @@ type DeviceLockReport = {
 type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
+// 截图结果。后端只回文件名、路径与字节数，不回传任何像素数据。
+type Screenshot = { file_name: string; path: string; bytes: number };
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true };
 function readOptions(): SessionOptions {
   try {
@@ -79,6 +82,21 @@ function readOptions(): SessionOptions {
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
   return defaultOptions;
+}
+
+// 截图文件名按**本机时间**生成（后端不猜时区），随后由后端按 ASCII 白名单严格校验。
+// 只使用数字与短横线，任何路径分隔符都不会出现在这里。
+function screenshotFileName(now: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `MirrorDock-${date}-${time}.png`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} 字节`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function lockSummary(report: DeviceLockReport) {
@@ -179,6 +197,9 @@ function App() {
   const [lockReport, setLockReport] = useState<DeviceLockReport | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
   const [lockBusy, setLockBusy] = useState(false);
+  const [screenshot, setScreenshot] = useState<Screenshot | null>(null);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
+  const [screenshotBusy, setScreenshotBusy] = useState(false);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
@@ -337,6 +358,51 @@ function App() {
       setLockError(errorMessage(error, "无法点亮手机屏幕。"));
     } finally {
       setLockBusy(false);
+    }
+  }
+
+  // 截图：把手机当前画面保存到这台电脑的「图片 / MirrorDock」。
+  // 受保护页面（支付、密码输入等）由 Android 自行屏蔽，截出来是黑屏——这是系统行为，
+  // 不是故障，MirrorDock 也不会尝试绕过它。
+  async function captureScreen(serial: string) {
+    setScreenshotBusy(true);
+    setScreenshotError(null);
+    try {
+      const saved = await invoke<Screenshot>("capture_screenshot", {
+        serial,
+        fileName: screenshotFileName(new Date()),
+      });
+      setScreenshot(saved);
+    } catch (error) {
+      setScreenshot(null);
+      setScreenshotError(errorMessage(error, "无法保存截图。"));
+    } finally {
+      setScreenshotBusy(false);
+    }
+  }
+
+  // 撤销：删除刚刚保存的那张截图。只删这一个文件，不动其它内容。
+  async function undoCapture() {
+    if (!screenshot) return;
+    setScreenshotBusy(true);
+    setScreenshotError(null);
+    try {
+      await invoke("delete_screenshot", { fileName: screenshot.file_name });
+      setScreenshot(null);
+    } catch (error) {
+      setScreenshotError(errorMessage(error, "无法删除这张截图。"));
+    } finally {
+      setScreenshotBusy(false);
+    }
+  }
+
+  async function revealCapture() {
+    if (!screenshot) return;
+    setScreenshotError(null);
+    try {
+      await revealItemInDir(screenshot.path);
+    } catch (error) {
+      setScreenshotError(errorMessage(error, "无法打开截图所在的文件夹。"));
     }
   }
 
@@ -531,6 +597,25 @@ function App() {
               {lockBusy ? "正在唤醒…" : "唤醒屏幕"}
             </button>
             <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁。设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
+          </div>
+          <div className="capability-panel screenshot-panel" aria-live="polite">
+            <strong>截图</strong>
+            <p className="capability-pending">把手机当前画面保存到这台电脑的「图片 / MirrorDock」文件夹。截图只保存在本机，不会上传。</p>
+            <button className="secondary-button" type="button" disabled={screenshotBusy} onClick={() => void captureScreen(readyDevice.serial)}>
+              {screenshotBusy ? "正在处理…" : "截取当前画面"}
+            </button>
+            {screenshot && (
+              <div className="screenshot-result">
+                <p className="capability-summary">{screenshot.file_name} · {formatBytes(screenshot.bytes)}</p>
+                <p className="screenshot-path">{screenshot.path}</p>
+                <span>
+                  <button className="text-button" type="button" onClick={() => void revealCapture()}>在文件夹中显示</button>
+                  <button className="text-button danger" type="button" disabled={screenshotBusy} onClick={() => void undoCapture()}>删除这张截图</button>
+                </span>
+              </div>
+            )}
+            {screenshotError && <p className="capability-pending" role="alert">{screenshotError}</p>}
+            <p className="capability-pending">受保护页面（如支付、密码输入）由 Android 自行屏蔽，截出来会是黑屏，这不是故障。</p>
           </div>
           </>
         ) : (

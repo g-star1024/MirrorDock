@@ -94,6 +94,11 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .capability-notices li.notice-info { border-left-color: #2e9a5c; background: #f2faf4; }
 .capability-notices strong { display: block; font-size: 14px; }
 .capability-notices p { margin: 3px 0 0; color: #68736a; font-size: 13px; line-height: 1.5; }
+/* 截图结果：文件名与大小一行给结论，完整路径单独一行便于核对与复制。 */
+.screenshot-result { display: grid; gap: 6px; padding: 12px 13px; border-left: 3px solid #2e9a5c; border-radius: 8px; background: #f2faf4; }
+.screenshot-path { margin: 0; color: #536156; font-size: 12px; overflow-wrap: anywhere; }
+.screenshot-result span { display: flex; gap: 14px; }
+.screenshot-panel .secondary-button { justify-self: start; }
 .privacy-note { margin-top: 22px; padding: 19px 22px; border-radius: 16px; color: #425344; background: #e8f0e7; }
 .privacy-note p { margin: 6px 0 0; font-size: 14px; line-height: 1.55; }
 

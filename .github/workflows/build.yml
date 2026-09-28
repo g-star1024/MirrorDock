@@ -1,9 +1,15 @@
 name: build
 
-# 触发策略：推送到 main 即构建；也可在 Actions 页手动触发。
+# 触发策略（分层，避免互相取消与浪费额度）：
+#   - 推送到 main（含普通提交）→ 只跑「验证」门禁（约 3 分钟），保证每次提交都有回归保护。
+#   - 推送标签 v* → 验证 + 四平台打包（发版时才需要）。
+#   - 也可在 Actions 页手动触发（默认同样跑完整打包）。
+# 打包是最昂贵的一环，且不在每次提交时都需要；把两者分开后，日常提交不会再因
+# concurrency.cancel-in-progress 取消正在进行的打包。
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -17,6 +23,8 @@ jobs:
   verify:
     name: 验证（Rust 单测 + 前端构建）
     runs-on: ubuntu-22.04
+    # 显式超时：历史上出现过 runner label 失效导致作业长期排队、拖垮整个运行的情况。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +65,10 @@ jobs:
   package:
     name: 打包 ${{ matrix.label }}
     needs: verify
+    # 只在发版标签或手动触发时打包；日常推送到 main 不产出安装包。
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

@@ -71,6 +71,8 @@ struct AdbCheck {
 ///   trusted_list_unavailable / trusted_list_unreadable / trusted_list_write_failed
 ///   lock_probe_failed / wake_failed
 ///   recent_list_unavailable / recent_list_unreadable / recent_list_write_failed
+///   screenshot_name_invalid / screenshot_dir_unavailable / screenshot_not_image
+///   screenshot_failed / screenshot_write_failed / screenshot_missing / screenshot_delete_failed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AppError {
     code: &'static str,
@@ -258,6 +260,11 @@ trait AdbRuntime: Send + Sync {
     fn window_policy(&self, serial: &str) -> Result<String, std::io::Error>;
     /// 读取 `dumpsys power` 原始输出，用于判断屏幕是否点亮。
     fn power_state(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 读取设备当前屏幕的 PNG 快照（原始字节）。
+    ///
+    /// 返回值是**屏幕内容**，属于最敏感的数据类别：只允许写入用户可见的本地文件，
+    /// 任何情况下都不得写入日志、错误消息或遥测。
+    fn screenshot_png(&self, serial: &str) -> Result<Vec<u8>, std::io::Error>;
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error>;
     fn connect(&self, endpoint: &str) -> Result<(), std::io::Error>;
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error>;
@@ -423,6 +430,19 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn power_state(&self, serial: &str) -> Result<String, std::io::Error> {
         Self::capture(&["-s", serial, "shell", "dumpsys", "power"])
+    }
+
+    fn screenshot_png(&self, serial: &str) -> Result<Vec<u8>, std::io::Error> {
+        // 用 `exec-out` 而不是 `shell`：后者会把 stdout 当作文本流，在 Windows 上
+        // 可能把 \n 改写成 \r\n，从而破坏 PNG 二进制。
+        // 固定参数直接调用：serial 作为单个 argv 传入，不做任何 shell 拼接或插值。
+        let output = Command::new("adb")
+            .args(["-s", serial, "exec-out", "screencap", "-p"])
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other("adb returned a failing status"));
+        }
+        Ok(output.stdout)
     }
 
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error> {
@@ -1160,6 +1180,186 @@ fn remember_recent_device(app: &AppHandle, serial: &str, label: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// 截图：把手机当前画面保存为本机文件（可查看、可撤销）
+// ---------------------------------------------------------------------------
+
+/// PNG 文件头。用它确认拿到的确实是图片，而不是被文本模式改写的字节流。
+const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+
+/// 文件名长度上限。文件名由前端按本地时间生成，必须当作不可信输入。
+const MAX_SCREENSHOT_NAME_LEN: usize = 128;
+
+/// 同名文件自动加序号时最多尝试的次数，避免异常情况下无界循环。
+const MAX_SCREENSHOT_NAME_ATTEMPTS: u32 = 100;
+
+/// 一张已保存的截图。
+///
+/// 只返回文件名、路径与字节数：**不返回任何像素数据**。屏幕内容不进日志、不进错误消息、
+/// 不进任何遥测；它只落在用户可见的本地文件里。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct Screenshot {
+    /// 保存后的文件名（不含目录）。与请求名可能不同：同名时自动加序号。
+    file_name: String,
+    /// 本机完整路径，供界面展示与「在文件夹中显示」。
+    path: String,
+    /// 文件字节数，用于向用户确认「确实存下来了」。
+    bytes: usize,
+}
+
+fn screenshot_name_invalid_error() -> AppError {
+    AppError::new(
+        "screenshot_name_invalid",
+        "截图文件名不可用。",
+        "请使用字母、数字、短横线和下划线组成的 .png 文件名。",
+    )
+}
+
+fn screenshot_dir_unavailable_error() -> AppError {
+    AppError::new(
+        "screenshot_dir_unavailable",
+        "无法确定截图的保存位置。",
+        "请检查本机文件权限，或重新安装 MirrorDock。",
+    )
+}
+
+/// 校验前端给出的文件名。
+///
+/// 这是本机写入路径的一部分，必须按不可信输入处理：只放行 ASCII 白名单，因此
+/// `/`、`\`、`..`、控制字符以及隐藏文件前缀都无法通过，也就不存在路径穿越。
+fn validate_screenshot_name(name: &str) -> Result<String, AppError> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_SCREENSHOT_NAME_LEN {
+        return Err(screenshot_name_invalid_error());
+    }
+    let allowed = name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !allowed || name.starts_with('.') {
+        return Err(screenshot_name_invalid_error());
+    }
+    if !name.to_ascii_lowercase().ends_with(".png") {
+        return Err(screenshot_name_invalid_error());
+    }
+    Ok(name.to_owned())
+}
+
+/// 确认 adb 返回的字节流真的是 PNG。
+///
+/// 只看退出码并不够：字节流被文本模式改写、或中间层插入诊断信息，都会出现
+/// 「命令成功但内容不是图片」。宁可如实报错，也不写出一个打不开的文件。
+fn ensure_png(bytes: &[u8]) -> Result<(), AppError> {
+    if bytes.len() > PNG_MAGIC.len() && bytes.starts_with(&PNG_MAGIC) {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "screenshot_not_image",
+            "手机返回的内容不是有效的图片。",
+            "请重试一次；若反复失败，请改用 USB 数据线连接后再试。",
+        ))
+    }
+}
+
+fn screenshot_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .picture_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map(|directory| directory.join("MirrorDock"))
+        .map_err(|_| screenshot_dir_unavailable_error())
+}
+
+/// 在目标目录里为 `name` 找一个尚未被占用的文件名。
+///
+/// 前端按秒生成文件名，连续截图会撞名；撞名时顺延加序号，而不是覆盖用户已有的截图。
+fn unique_screenshot_path(directory: &Path, name: &str) -> PathBuf {
+    let first = directory.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let stem = name.strip_suffix(".png").unwrap_or(name);
+    for index in 1..=MAX_SCREENSHOT_NAME_ATTEMPTS {
+        let candidate = directory.join(format!("{stem}-{index}.png"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
+/// 把截图字节写进目标目录，返回用户可见的结果。
+fn save_screenshot_bytes(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Screenshot, AppError> {
+    fs::create_dir_all(directory).map_err(|_| screenshot_dir_unavailable_error())?;
+    let path = unique_screenshot_path(directory, name);
+    fs::write(&path, bytes).map_err(|_| {
+        AppError::new(
+            "screenshot_write_failed",
+            "无法把截图保存到本机。",
+            "请检查保存目录是否可写、磁盘是否已满，然后重试。",
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_owned());
+    Ok(Screenshot {
+        file_name,
+        path: path.to_string_lossy().into_owned(),
+        bytes: bytes.len(),
+    })
+}
+
+/// 删除一张由本应用保存的截图。
+///
+/// 文件名先经同一套白名单校验，因此只可能落在截图目录内部；这是「截图可撤销」的落点。
+fn remove_screenshot_file(directory: &Path, name: &str) -> Result<(), AppError> {
+    let path = directory.join(name);
+    if !path.is_file() {
+        return Err(AppError::new(
+            "screenshot_missing",
+            "这张截图已经不在了。",
+            "它可能已被移动或删除，请刷新后重试。",
+        ));
+    }
+    fs::remove_file(&path).map_err(|_| {
+        AppError::new(
+            "screenshot_delete_failed",
+            "无法删除这张截图。",
+            "请在本机的文件管理器中手动删除它。",
+        )
+    })
+}
+
+/// 截图编排：校验 → 确认设备就绪 → 取画面 → 确认真的是图片 → 落盘。
+fn capture_screenshot_into(
+    runtimes: &AppRuntimes,
+    directory: &Path,
+    serial: String,
+    file_name: String,
+) -> Result<Screenshot, AppError> {
+    let file_name = validate_screenshot_name(&file_name)?;
+    let serial = validate_serial(&serial)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    let bytes = runtimes.adb.screenshot_png(&serial).map_err(|error| {
+        adb_command_error(
+            error,
+            "screenshot_failed",
+            "无法从手机读取当前画面。",
+            "请确认连接仍然有效；若手机正在重启或刚断开，请稍后重试。",
+        )
+    })?;
+    ensure_png(&bytes)?;
+
+    save_screenshot_bytes(directory, &file_name, &bytes)
+}
+
+// ---------------------------------------------------------------------------
 // scrcpy 运行时定位与解析
 // ---------------------------------------------------------------------------
 
@@ -1882,6 +2082,29 @@ fn forget_recent_device(app: AppHandle, serial: String) -> Result<Vec<RecentDevi
     forget_recent_device_at(&recent_devices_path(&app)?, &serial)
 }
 
+/// 把手机当前画面保存为本机的一张 PNG。
+///
+/// 文件名由前端按**本地时间**生成（后端不猜时区），随后按不可信输入严格校验。
+/// 截图内容是屏幕像素：只写入用户可见的本地文件，不写日志、不进错误消息。
+#[tauri::command]
+fn capture_screenshot(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    file_name: String,
+) -> Result<Screenshot, AppError> {
+    let directory = screenshot_dir(&app)?;
+    capture_screenshot_into(&runtimes, &directory, serial, file_name)
+}
+
+/// 删除一张由本应用保存的截图，对应界面上的「撤销」。
+#[tauri::command]
+fn delete_screenshot(app: AppHandle, file_name: String) -> Result<(), AppError> {
+    let directory = screenshot_dir(&app)?;
+    let file_name = validate_screenshot_name(&file_name)?;
+    remove_screenshot_file(&directory, &file_name)
+}
+
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
@@ -1908,6 +2131,8 @@ pub fn run() {
             device_lock_report,
             list_recent_devices,
             forget_recent_device,
+            capture_screenshot,
+            delete_screenshot,
             pair_wireless_device,
             connect_wireless_device,
             list_trusted_wireless_devices,
@@ -1944,6 +2169,8 @@ mod tests {
         window_policy_dump: Option<String>,
         /// `dumpsys power` 的原始输出；`None` 表示读取失败。
         power_dump: Option<String>,
+        /// `screencap -p` 返回的字节流；`None` 表示读取失败。
+        screenshot: Option<Vec<u8>>,
         calls: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1984,6 +2211,24 @@ mod tests {
                 devices,
                 window_policy_dump: Some(window_policy.to_owned()),
                 power_dump: Some(power.to_owned()),
+                ..Self::default()
+            }
+        }
+
+        /// 一台能正常返回 PNG 快照的设备。
+        fn with_screenshot(devices: Vec<AdbDevice>, screenshot: Vec<u8>) -> Self {
+            Self {
+                devices,
+                screenshot: Some(screenshot),
+                ..Self::default()
+            }
+        }
+
+        /// 一台返回了非图片字节流的设备（模拟 `exec-out` 被文本模式改写）。
+        fn returning_corrupt_screenshot(devices: Vec<AdbDevice>) -> Self {
+            Self {
+                devices,
+                screenshot: Some(b"adb: not an image".to_vec()),
                 ..Self::default()
             }
         }
@@ -2043,6 +2288,17 @@ mod tests {
             match &self.power_dump {
                 Some(dump) => Ok(dump.clone()),
                 None => Err(std::io::Error::other("power state unavailable")),
+            }
+        }
+
+        fn screenshot_png(&self, serial: &str) -> Result<Vec<u8>, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("screenshot {serial}"));
+            match &self.screenshot {
+                Some(bytes) => Ok(bytes.clone()),
+                None => Err(std::io::Error::other("screenshot unavailable")),
             }
         }
 
@@ -3338,5 +3594,158 @@ mod tests {
         // 字段缺省时走 serde 默认值，同样是开启。
         let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":90}"#).unwrap();
         assert!(parsed.keep_awake);
+    }
+
+    // -- 截图：可见、可撤销、失败必须能被发现 --
+
+    /// 一个只有文件头的最小 PNG：足以通过「这确实是图片」的判定。
+    const TINY_PNG: &[u8] = &[
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, b'I', b'H', b'D',
+        b'R',
+    ];
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("mirrordock-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        directory
+    }
+
+    fn screenshot_runtimes(adb: FakeAdb) -> AppRuntimes {
+        runtimes(adb, FakeMirror::running())
+    }
+
+    #[test]
+    fn a_captured_screen_is_written_to_disk_and_reported_back() {
+        let directory = scratch_dir("screenshot-save");
+        let runtimes = screenshot_runtimes(FakeAdb::with_screenshot(
+            vec![device("phone", DeviceState::Ready)],
+            TINY_PNG.to_vec(),
+        ));
+
+        let saved = capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
+            .unwrap();
+
+        assert_eq!(saved.file_name, "shot.png");
+        assert_eq!(saved.bytes, TINY_PNG.len());
+        assert_eq!(
+            fs::read(directory.join("shot.png")).unwrap(),
+            TINY_PNG,
+            "写出的字节必须与设备返回的完全一致"
+        );
+        assert!(saved.path.ends_with("shot.png"));
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_payload_that_is_not_an_image_is_never_written_as_a_screenshot() {
+        let directory = scratch_dir("screenshot-corrupt");
+        let runtimes = screenshot_runtimes(FakeAdb::returning_corrupt_screenshot(vec![device(
+            "phone",
+            DeviceState::Ready,
+        )]));
+
+        let error =
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
+                .unwrap_err();
+
+        assert_eq!(error.code, "screenshot_not_image");
+        assert!(
+            !directory.join("shot.png").exists(),
+            "命令成功但内容不是图片时，绝不能留下一个打不开的文件"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_screenshot_file_name_can_never_escape_the_screenshot_directory() {
+        for name in [
+            "../escape.png",
+            "sub/dir.png",
+            "sub\\dir.png",
+            ".hidden.png",
+            "shot.jpg",
+            "",
+            "   ",
+        ] {
+            assert!(
+                validate_screenshot_name(name).is_err(),
+                "文件名 {name:?} 必须被拒绝"
+            );
+        }
+        assert!(validate_screenshot_name("MirrorDock-20260928-171825.png").is_ok());
+
+        let too_long = format!("{}.png", "a".repeat(MAX_SCREENSHOT_NAME_LEN));
+        assert!(validate_screenshot_name(&too_long).is_err());
+    }
+
+    #[test]
+    fn two_screenshots_in_the_same_second_do_not_overwrite_each_other() {
+        let directory = scratch_dir("screenshot-collision");
+        let runtimes = screenshot_runtimes(FakeAdb::with_screenshot(
+            vec![device("phone", DeviceState::Ready)],
+            TINY_PNG.to_vec(),
+        ));
+
+        let first =
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
+                .unwrap();
+        let second =
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
+                .unwrap();
+
+        assert_eq!(first.file_name, "shot.png");
+        assert_eq!(second.file_name, "shot-1.png");
+        assert!(directory.join("shot.png").exists());
+        assert!(directory.join("shot-1.png").exists());
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_screenshot_can_be_undone_and_missing_files_are_reported_honestly() {
+        let directory = scratch_dir("screenshot-delete");
+        let runtimes = screenshot_runtimes(FakeAdb::with_screenshot(
+            vec![device("phone", DeviceState::Ready)],
+            TINY_PNG.to_vec(),
+        ));
+        capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into()).unwrap();
+
+        remove_screenshot_file(&directory, "shot.png").unwrap();
+        assert!(!directory.join("shot.png").exists());
+
+        let error = remove_screenshot_file(&directory, "shot.png").unwrap_err();
+        assert_eq!(error.code, "screenshot_missing");
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn an_unauthorized_device_is_refused_before_any_screen_is_read() {
+        let directory = scratch_dir("screenshot-unauthorized");
+        let adb = FakeAdb::with_screenshot(
+            vec![device("phone", DeviceState::Unauthorized)],
+            TINY_PNG.to_vec(),
+        );
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let error =
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
+                .unwrap_err();
+
+        assert_eq!(error.code, "device_unauthorized");
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.starts_with("screenshot")),
+            "设备未授权时不得去读屏幕内容"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
     }
 }
