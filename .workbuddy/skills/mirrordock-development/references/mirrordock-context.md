@@ -1,13 +1,13 @@
 # MirrorDock 项目上下文速查
 
-> 本文件是 `mirrordock-development` 技能的参考材料。权威来源始终是仓库内的 `AGENTS.md`、`Android桌面镜像工具产品规划.md`、`DEVELOPMENT_TASKS.md`、`agents/TEAM_AGENTS.md`；本文件仅作快速定位，若与仓库文档冲突，以仓库文档为准。
+> 本文件是 `mirrordock-development` 技能的参考材料。权威来源始终是 `AGENTS.md`、`Android桌面镜像工具产品规划.md`、`DEVELOPMENT_TASKS.md`、`agents/TEAM_AGENTS.md`；本文件仅作快速定位，若与仓库文档冲突，以仓库文档为准。注意：产品规划文档于 2026-09-28 移出仓库，现位于 `<仓库上级目录>/MirrorDock-内部文档/Android桌面镜像工具产品规划.md`。
 
 ## 1. 仓库结构与职责
 
 | 路径 | 职责 |
 | --- | --- |
 | `AGENTS.md` | 工程铁律（启动闸门、产品与安全契约、质量与发布、团队与技能） |
-| `Android桌面镜像工具产品规划.md` | 产品决策、MVP 范围、核心体验与边界、阶段验收表、当前 Backlog |
+| `../MirrorDock-内部文档/Android桌面镜像工具产品规划.md` | 产品决策、MVP 范围、核心体验与边界、阶段验收表、当前 Backlog（**已移出仓库**，不入库、不随发行物分发） |
 | `DEVELOPMENT_TASKS.md` | 任务清单与验收状态；每次改动须同步更新 |
 | `agents/TEAM_AGENTS.md` | 6 个角色边界、跨角色集成规则、阻断权限 |
 | `docs/POC_ACCEPTANCE.md` | POC 真机验收表（USB / Wi-Fi / 性能稳定性） |
@@ -33,6 +33,7 @@
 | 命令 | 说明 |
 | --- | --- |
 | `check_adb_devices` | 探测 ADB 设备与授权/离线状态，返回结构化结果 |
+| `probe_device_capabilities` | 只读探测设备能力（系统版本 → 镜像/音频支持）与受限能力说明；不配对、不连接、不改会话状态 |
 | `start_mirroring` | 对已授权序列号启动 scrcpy（固定参数直接调用） |
 | `stop_mirroring` | 结束当前会话并终止镜像进程；无会话时返回 `session_not_running` |
 | `mirror_session` | 读取当前会话状态（前端轮询用） |
@@ -56,8 +57,9 @@
 对前端稳定，修改修复文案时不要改动错误码：
 
 ```
-device_not_selected / device_unauthorized / device_offline / device_not_connected
-adb_missing / adb_unavailable
+device_not_selected / device_serial_invalid / device_unauthorized
+device_offline / device_not_connected
+adb_missing / adb_unavailable / probe_failed
 mirror_runtime_missing / mirror_start_failed / mirror_exited / mirror_stop_failed
 session_unavailable / session_busy / session_not_running
 invalid_rotation / endpoint_invalid / pairing_code_invalid / pairing_failed
@@ -65,9 +67,15 @@ connect_failed / connect_not_ready
 trusted_list_unavailable / trusted_list_unreadable / trusted_list_write_failed
 ```
 
+### 设备能力判定（`DeviceCapabilities`）
+
+- 依据 `ro.build.version.sdk`：`>=26` 支持画面与控制、`>=30` 支持系统音频转发；读不到时 `mirroring_supported` / `audio_forwarding_supported` 保持 `null`（**未知**），不得默认成"支持"。
+- `notices` 固定包含受保护内容黑屏、应用屏蔽电脑输入、OEM 开发者选项差异三条；版本相关的第四条按分档给出。每条都必须能回答"原因 / 影响 / 应对"。
+- 设备属性（`getprop` 输出）是不可信输入：只保留白名单键，值剔除控制字符并截断到 64 字符。
+
 ### 可替换的运行时接口
 
-- `AdbRuntime`：`list_devices` / `pair` / `connect` / `disconnect`
+- `AdbRuntime`：`list_devices` / `device_properties` / `pair` / `connect` / `disconnect`
 - `MirrorRuntime`：`is_available` / `start` → `Box<dyn MirrorProcess>`
 - `MirrorProcess`：`try_wait` / `kill`
 
@@ -101,6 +109,9 @@ scripts/measure-session.sh <serial>   # 真机会话测量 → test-runs/
 ## 5. 当前实况与阻塞项（截至 2026-09-28）
 
 已真机验证：Android 13 / Xiaomi Redmi M2104K10AC 同局域网无线配对 + 连接 + 实际镜像成功；动态画面峰值约 35 FPS（macOS x86_64，Metal，1072×2400）。
+
+已本地验证（无需真机，但不等于真机验收成立）：
+- 会话状态机七态与结构化错误码、启动参数白名单、能力探测与受限能力说明由 `cargo test` 覆盖（30 项）；能力探测在真机上的 `getprop` 实际返回与各 OEM 属性差异仍属未验证面。
 
 **尚未验证（属外部阻塞，不得伪造验收）**：
 

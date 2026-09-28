@@ -1,0 +1,132 @@
+name: build
+
+# 触发策略：推送到 main 即构建；也可在 Actions 页手动触发。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: 验证（Rust 单测 + 前端构建）
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 版本需与 pnpm-lock.yaml 的 lockfileVersion 对应（当前为 9.0）。
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装 Linux 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust 单元测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: 前端生产构建
+        run: pnpm build
+
+  package:
+    name: 打包 ${{ matrix.label }}
+    needs: verify
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - label: linux-x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - label: macos-arm64
+            platform: macos-latest
+            target: aarch64-apple-darwin
+          - label: macos-x64
+            platform: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装 Linux 构建依赖
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 产物默认未签名：macOS 首次打开会提示来自未识别开发者，Windows 会触发
+      # SmartScreen。正式分发需要另行配置签名密钥（见仓库 README 与产品规划的
+      # 发行条款）。本流水线也不捆绑 scrcpy 运行时——那属于 A1-08 的范围，
+      # 当前产物在运行时需要本机已具备 scrcpy（或设置 MIRRORDOCK_SCRCPY_PATH）。
+      - name: 构建安装包
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MirrorDock-${{ matrix.label }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage

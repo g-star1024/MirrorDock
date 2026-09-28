@@ -9,7 +9,7 @@ description: MirrorDock（Android 桌面镜像工具）全部工程工作的入�
 
 ## 启动闸门（每次必做，不可跳过）
 
-1. 读取仓库 `AGENTS.md`、`Android桌面镜像工具产品规划.md` 的相关章节、`DEVELOPMENT_TASKS.md`、`agents/TEAM_AGENTS.md`，以及当前实现与测试代码。
+1. 读取仓库 `AGENTS.md`、产品规划文档（**已移出仓库**，位于 `<仓库上级目录>/MirrorDock-内部文档/Android桌面镜像工具产品规划.md`）的相关章节、`DEVELOPMENT_TASKS.md`、`agents/TEAM_AGENTS.md`，以及当前实现与测试代码。
 2. **动手前先声明**：受影响的桌面平台（Windows / macOS / Linux）、Android 版本范围、连接方式（USB / Wi-Fi / 无）、涉及的权限与数据、本次将产出的验收证据。
 3. 按下表加载**最窄匹配**的技能（不要一次性全载）。
 

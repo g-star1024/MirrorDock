@@ -23,14 +23,58 @@ type SessionPhase = "idle" | "unauthorized" | "offline" | "paired" | "connecting
 // 进程正在运行不等于首帧已到达；未接入端到端探针前后端只会返回 unknown。
 type FirstFrame = "unknown" | "reached";
 type MirrorSession = { phase: SessionPhase; serial: string | null; first_frame: FirstFrame; error: AppError | null };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0 };
+// 能力探测的结论用 null 表示"未知"，不得默认成"支持"或"不支持"。
+type NoticeLevel = "info" | "limitation";
+type CapabilityNotice = { code: string; level: NoticeLevel; title: string; detail: string };
+type DeviceCapabilities = {
+  serial: string;
+  label: string;
+  android_release: string | null;
+  sdk: number | null;
+  mirroring_supported: boolean | null;
+  audio_forwarding_supported: boolean | null;
+  notices: CapabilityNotice[];
+};
+// 锁屏与屏幕状态。后端读不到时会返回 unknown，前端必须原样展示“未知”而不是猜。
+type KeyguardState = "locked" | "unlocked" | "unknown";
+type ScreenState = "awake" | "asleep" | "unknown";
+type DeviceLockReport = {
+  keyguard: KeyguardState;
+  secure_lock: boolean | null;
+  screen: ScreenState;
+  explanation: string;
+  recovery: string;
+};
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true };
 function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
-    if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") return value;
+    if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") {
+      // 旧版本没有 keep_awake 字段，缺省视为开启。
+      return {
+        quality: value.quality,
+        rotation: value.rotation,
+        fullscreen: value.fullscreen,
+        always_on_top: value.always_on_top,
+        keep_awake: typeof value.keep_awake === "boolean" ? value.keep_awake : true,
+      };
+    }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
   return defaultOptions;
+}
+
+function lockSummary(report: DeviceLockReport) {
+  const keyguard =
+    report.keyguard === "locked"
+      ? report.secure_lock === true
+        ? "已锁屏（需要解锁凭据）"
+        : "锁屏中"
+      : report.keyguard === "unlocked"
+        ? "已解锁"
+        : "锁屏状态未知";
+  const screen = report.screen === "awake" ? "屏幕已点亮" : report.screen === "asleep" ? "屏幕已关闭" : "屏幕状态未知";
+  return `${keyguard} · ${screen}`;
 }
 function errorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null && "message" in error && "recovery" in error) {
@@ -42,6 +86,22 @@ function errorMessage(error: unknown, fallback: string) {
 
 function sessionErrorText(session: MirrorSession, fallback: string) {
   return session.error ? `${session.error.message} ${session.error.recovery}` : fallback;
+}
+
+function supportText(value: boolean | null, yes: string, no: string, unknown: string) {
+  return value === true ? yes : value === false ? no : unknown;
+}
+
+function capabilitySummary(capabilities: DeviceCapabilities) {
+  const system = capabilities.android_release
+    ? `Android ${capabilities.android_release}`
+    : "系统版本未知";
+  return [
+    capabilities.label,
+    system,
+    supportText(capabilities.mirroring_supported, "可以镜像", "可能无法镜像", "镜像支持情况未知"),
+    supportText(capabilities.audio_forwarding_supported, "可转发声音", "不能转发声音", "声音能力未知"),
+  ].join(" · ");
 }
 
 function sessionStatus(session: MirrorSession): string | null {
@@ -95,6 +155,11 @@ function App() {
   const [wirelessBusy, setWirelessBusy] = useState(false);
   const [trustedDevices, setTrustedDevices] = useState<TrustedWirelessDevice[]>([]);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const [lockReport, setLockReport] = useState<DeviceLockReport | null>(null);
+  const [lockError, setLockError] = useState<string | null>(null);
+  const [lockBusy, setLockBusy] = useState(false);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const sessionActive = session?.phase === "connecting" || session?.phase === "streaming";
@@ -176,6 +241,29 @@ function App() {
     }
   }
 
+  async function refreshLockReport(serial: string) {
+    try {
+      setLockReport(await invoke<DeviceLockReport>("device_lock_report", { serial }));
+      setLockError(null);
+    } catch (error) {
+      setLockError(errorMessage(error, "无法读取手机当前的锁屏状态。"));
+    }
+  }
+
+  // 只点亮屏幕：不解锁、不输入任何凭据。安全锁屏仍需你本人在手机上解锁。
+  async function wakeDevice(serial: string) {
+    setLockBusy(true);
+    setLockError(null);
+    try {
+      await invoke("wake_device", { serial });
+      await refreshLockReport(serial);
+    } catch (error) {
+      setLockError(errorMessage(error, "无法点亮手机屏幕。"));
+    } finally {
+      setLockBusy(false);
+    }
+  }
+
   async function pairAndConnect() {
     setWirelessBusy(true);
     setWirelessMessage(null);
@@ -225,6 +313,34 @@ function App() {
   const readyDevices = check?.devices.filter((device) => device.state === "ready") ?? [];
   const readyDevice = readyDevices.find((device) => device.serial === selectedSerial) ?? readyDevices[0];
   const scrcpyReady = check?.scrcpy_available ?? false;
+  const readySerial = readyDevice?.serial ?? null;
+  // 选中设备变化时重新探测能力。探测只读取设备信息，不启动镜像。
+  // 选中设备变化时重新探测能力与锁屏状态。两者都只读取设备信息，不启动镜像。
+  useEffect(() => {
+    if (!readySerial) {
+      setCapabilities(null);
+      setCapabilitiesError(null);
+      setLockReport(null);
+      setLockError(null);
+      return;
+    }
+    let disposed = false;
+    setCapabilities(null);
+    setCapabilitiesError(null);
+    setLockReport(null);
+    setLockError(null);
+    invoke<DeviceCapabilities>("probe_device_capabilities", { serial: readySerial })
+      .then((value) => { if (!disposed) setCapabilities(value); })
+      .catch((error) => {
+        if (!disposed) setCapabilitiesError(errorMessage(error, "无法读取这台手机的能力信息。"));
+      });
+    invoke<DeviceLockReport>("device_lock_report", { serial: readySerial })
+      .then((value) => { if (!disposed) setLockReport(value); })
+      .catch((error) => {
+        if (!disposed) setLockError(errorMessage(error, "无法读取手机当前的锁屏状态。"));
+      });
+    return () => { disposed = true; };
+  }, [readySerial]);
   const statusMessage = session ? sessionStatus(session) : null;
   const statusRole = session && ["unauthorized", "offline", "failed"].includes(session.phase) ? "alert" : "status";
 
@@ -275,6 +391,7 @@ function App() {
           </select></label>
           <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
           <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
+          <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
           <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
           <p>无线卡顿时可选择“流畅”。受保护内容可能显示黑屏；旋转只改变电脑上的显示方向。</p>
         </fieldset>
@@ -293,6 +410,44 @@ function App() {
             <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || sessionActive} onClick={() => void startMirroring(readyDevice.serial)}>
               {sessionActive ? "会话进行中" : isLaunching ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
             </button>
+          </div>
+          <div className="capability-panel" aria-live="polite">
+            <strong>这台手机的能力</strong>
+            {capabilities ? (
+              <>
+                <p className="capability-summary">{capabilitySummary(capabilities)}</p>
+                <ul className="capability-notices">
+                  {capabilities.notices.map((notice) => (
+                    <li key={notice.code} className={`notice-${notice.level}`}>
+                      <strong>{notice.title}</strong>
+                      <p>{notice.detail}</p>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : capabilitiesError ? (
+              <p className="capability-pending" role="alert">{capabilitiesError}</p>
+            ) : (
+              <p className="capability-pending">正在读取这台手机的能力信息…</p>
+            )}
+          </div>
+          <div className="capability-panel" aria-live="polite">
+            <strong>手机当前的锁屏状态</strong>
+            {lockReport ? (
+              <>
+                <p className="capability-summary">{lockSummary(lockReport)}</p>
+                <p className="capability-pending">{lockReport.explanation}</p>
+                <p className="capability-pending">{lockReport.recovery}</p>
+              </>
+            ) : lockError ? (
+              <p className="capability-pending" role="alert">{lockError}</p>
+            ) : (
+              <p className="capability-pending">正在读取手机当前的锁屏状态…</p>
+            )}
+            <button className="secondary-button" type="button" disabled={lockBusy} onClick={() => void wakeDevice(readyDevice.serial)}>
+              {lockBusy ? "正在唤醒…" : "唤醒屏幕"}
+            </button>
+            <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁。设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
           </div>
           </>
         ) : (

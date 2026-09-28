@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,24 @@ use tauri::{AppHandle, Manager, State};
 
 /// 会话状态机轮询运行中进程的间隔。
 const MONITOR_INTERVAL: Duration = Duration::from_millis(200);
+
+/// MVP 只承诺 Android 8.0（API 26）及以上的画面与控制。
+const MIN_SDK_FOR_MIRRORING: u32 = 26;
+
+/// 系统音频转发需要 Android 11（API 30）及以上。
+const MIN_SDK_FOR_AUDIO: u32 = 30;
+
+/// 设备属性值的最大保留长度。
+///
+/// 设备返回的属性属于不可信输入：超长内容一律截断，避免异常设备把超长文本
+/// 带进界面或诊断信息。
+const MAX_PROPERTY_LEN: usize = 64;
+
+/// 解析设备属性时最多读取的行数，用于给敌意输入设定上界。
+const MAX_PROPERTY_LINES: usize = 4096;
+
+/// 序列号或无线端点允许的最大长度。
+const MAX_SERIAL_LEN: usize = 128;
 
 // ---------------------------------------------------------------------------
 // 设备与结构化错误
@@ -42,8 +61,9 @@ struct AdbCheck {
 ///
 /// 错误码是对前端的稳定契约，不要在修复文案变化时改动它。
 /// 已使用的错误码：
-///   device_not_selected / device_unauthorized / device_offline / device_not_connected
-///   adb_missing / adb_unavailable
+///   device_not_selected / device_serial_invalid / device_unauthorized
+///   device_offline / device_not_connected
+///   adb_missing / adb_unavailable / probe_failed
 ///   mirror_runtime_missing / mirror_start_failed / mirror_exited / mirror_stop_failed
 ///   session_unavailable / session_busy / session_not_running
 ///   invalid_rotation / endpoint_invalid / pairing_code_invalid / pairing_failed
@@ -226,6 +246,16 @@ fn resolve_process_exit(serial: &str, success: bool) -> MirrorSession {
 
 trait AdbRuntime: Send + Sync {
     fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error>;
+    /// 读取设备的系统属性原始输出，用于在启动会话前解释这台手机的能力边界。
+    fn device_properties(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 点亮设备屏幕（`KEYCODE_WAKEUP`）。
+    ///
+    /// 只唤醒屏幕：不输入任何凭据、不解锁、不解除钥匙锁。锁屏本身不在可绕过范围内。
+    fn wake_screen(&self, serial: &str) -> Result<(), std::io::Error>;
+    /// 读取 `dumpsys window policy` 原始输出，用于判断钥匙锁状态。
+    fn window_policy(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 读取 `dumpsys power` 原始输出，用于判断屏幕是否点亮。
+    fn power_state(&self, serial: &str) -> Result<String, std::io::Error>;
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error>;
     fn connect(&self, endpoint: &str) -> Result<(), std::io::Error>;
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error>;
@@ -270,13 +300,35 @@ enum Quality {
     Sharp,
 }
 
-#[derive(Debug, Default, Deserialize)]
+fn keep_awake_by_default() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct SessionOptions {
     quality: Quality,
     fullscreen: bool,
     always_on_top: bool,
     rotation: u16,
+    /// 会话期间让设备保持唤醒（对应 scrcpy `--stay-awake`）。
+    ///
+    /// 这是「手机用着用着就自己锁上、镜像变成锁屏界面」的直接对策：让设备在镜像
+    /// 期间不休眠。scrcpy 退出时会恢复设备原有的休眠与电量策略。默认开启。
+    #[serde(default = "keep_awake_by_default")]
+    keep_awake: bool,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            quality: Quality::default(),
+            fullscreen: false,
+            always_on_top: false,
+            rotation: 0,
+            keep_awake: true,
+        }
+    }
 }
 
 impl SessionOptions {
@@ -299,6 +351,9 @@ impl SessionOptions {
             "--video-codec=h264".into(),
             format!("--display-orientation={}", self.rotation),
         ];
+        if self.keep_awake {
+            args.push("--stay-awake".into());
+        }
         if self.fullscreen {
             args.push("--fullscreen".into());
         }
@@ -321,6 +376,16 @@ impl SystemAdbRuntime {
             Err(std::io::Error::other("adb returned a failing status"))
         }
     }
+
+    /// 读取 `adb` 的 stdout。同样使用固定参数直接调用，不做任何 shell 拼接或插值。
+    fn capture(args: &[&str]) -> Result<String, std::io::Error> {
+        let output = Command::new("adb").args(args).output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(std::io::Error::other("adb returned a failing status"))
+        }
+    }
 }
 
 impl AdbRuntime for SystemAdbRuntime {
@@ -331,6 +396,31 @@ impl AdbRuntime for SystemAdbRuntime {
         } else {
             Err(std::io::Error::other("adb returned a failing status"))
         }
+    }
+
+    fn device_properties(&self, serial: &str) -> Result<String, std::io::Error> {
+        // 固定参数直接调用：serial 作为单个 argv 传入，不做任何 shell 拼接或插值。
+        let output = Command::new("adb")
+            .args(["-s", serial, "shell", "getprop"])
+            .output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(std::io::Error::other("adb returned a failing status"))
+        }
+    }
+
+    fn wake_screen(&self, serial: &str) -> Result<(), std::io::Error> {
+        // 只发送唤醒键。这里刻意不发送任何解锁相关的输入。
+        Self::run(&["-s", serial, "shell", "input", "keyevent", "KEYCODE_WAKEUP"])
+    }
+
+    fn window_policy(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "dumpsys", "window", "policy"])
+    }
+
+    fn power_state(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "dumpsys", "power"])
     }
 
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error> {
@@ -520,6 +610,34 @@ fn device_lookup(runtimes: &AppRuntimes, serial: &str) -> DeviceLookup {
     }
 }
 
+/// 把设备可用性翻译成面向用户的错误。会话启动与能力探测共用同一套判断，
+/// 保证同一台设备在任何入口都得到一致的、可恢复的状态说明。
+fn device_readiness_error(lookup: DeviceLookup) -> Option<AppError> {
+    match lookup {
+        DeviceLookup::Ready => None,
+        DeviceLookup::Unauthorized => Some(AppError::new(
+            "device_unauthorized",
+            "手机尚未允许这台电脑进行调试。",
+            "请解锁手机，在“允许 USB 调试吗？”提示中选择允许，然后重新检查。",
+        )),
+        DeviceLookup::Offline => Some(AppError::new(
+            "device_offline",
+            "手机当前处于离线状态。",
+            "请重新插拔数据线或重新连接无线调试，保持手机解锁后重试。",
+        )),
+        DeviceLookup::NotConnected => Some(AppError::new(
+            "device_not_connected",
+            "找不到这台手机。",
+            "请确认数据线或无线连接仍然有效，然后重新检查。",
+        )),
+        DeviceLookup::AdbUnavailable => Some(AppError::new(
+            "adb_unavailable",
+            "Android 调试服务暂时不可用。",
+            "请拔下数据线后重新连接，或重新启动手机上的无线调试。",
+        )),
+    }
+}
+
 /// 轮询运行中的进程；进程退出后把结果写回会话状态。
 fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
     std::thread::spawn(move || loop {
@@ -578,6 +696,38 @@ fn clear_paired_if_matches(store: &SessionStore, endpoint: &str) {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct TrustedWirelessDevice {
     endpoint: String,
+}
+
+/// 校验序列号或无线端点。
+///
+/// 该值只会作为**单个 argv** 传给 `adb`/`scrcpy`，不做任何 shell 拼接；但为了
+/// 避免取值被下游程序当成选项解释，这里仍然拒绝空值、以 `-` 开头的值、超长值
+/// 以及包含空白或控制字符的值。
+fn validate_serial(serial: &str) -> Result<String, AppError> {
+    let serial = serial.trim();
+    if serial.is_empty() {
+        return Err(AppError::new(
+            "device_not_selected",
+            "未选择可用设备。",
+            "请重新检查连接后选择手机。",
+        ));
+    }
+
+    let valid = serial.len() <= MAX_SERIAL_LEN
+        && !serial.starts_with('-')
+        && serial
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '_' | '-'));
+
+    if valid {
+        Ok(serial.to_owned())
+    } else {
+        Err(AppError::new(
+            "device_serial_invalid",
+            "设备标识无法识别。",
+            "请在设备列表中重新选择这台手机；如果仍然失败，请重新插拔数据线或重连无线调试。",
+        ))
+    }
 }
 
 fn validate_endpoint(endpoint: &str) -> Result<String, AppError> {
@@ -677,6 +827,293 @@ fn save_trusted_devices(path: &Path, devices: &[TrustedWirelessDevice]) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// 锁屏与屏幕状态诊断
+//
+// 产品边界（AGENTS.md 铁律）：不绕过锁屏、DRM/FLAG_SECURE、受保护页面、MDM 与用户同意。
+// 因此这里只做三件事——**读取**当前状态、**点亮**屏幕、如实**说明**为什么需要用户
+// 本人解锁。没有任何一条路径会尝试在无凭据的情况下越过锁屏。
+//
+// 真机实测（Android 13 / Redmi M2104K10AC，见 test-runs/）：设备设置安全锁屏时
+// `wm dismiss-keyguard` 不会解除锁屏（`showing` 保持 true），`KEYCODE_WAKEUP` 可以把
+// 设备从 Asleep 唤醒到 Awake。即：**唤醒可行，绕过不可行**——后者由 Android 自身拒绝。
+// ---------------------------------------------------------------------------
+
+/// 钥匙锁（Keyguard）状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum KeyguardState {
+    /// 钥匙锁正在显示，需要用户本人解锁。
+    Locked,
+    /// 钥匙锁未显示；设备处于已解锁状态。
+    Unlocked,
+    /// 无法确认。**不得**在没有证据时上报为已解锁。
+    Unknown,
+}
+
+/// 屏幕点亮状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ScreenState {
+    Awake,
+    Asleep,
+    Unknown,
+}
+
+/// 锁屏与屏幕诊断结果。既有精确状态，也有面向非技术用户的说明与下一步动作。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct DeviceLockReport {
+    keyguard: KeyguardState,
+    /// `Some(true)` 表示设备设置了安全锁屏（PIN / 图案 / 密码 / 生物识别）。
+    secure_lock: Option<bool>,
+    screen: ScreenState,
+    /// 当前状况说明。
+    explanation: String,
+    /// 可执行的下一步。
+    recovery: String,
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// 提取 `dumpsys window policy` 中 `KeyguardServiceDelegate` 段落内的键值对。
+///
+/// 只认该段落内部缩进更深的行，避免误取输出里其他段落中同名的键。
+fn keyguard_fields(dump: &str) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    let mut header_indent: Option<usize> = None;
+    for line in dump.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        match header_indent {
+            None => {
+                if trimmed == "KeyguardServiceDelegate" {
+                    header_indent = Some(indent);
+                }
+            }
+            Some(header) => {
+                if indent <= header {
+                    break;
+                }
+                if let Some((key, value)) = trimmed.split_once('=') {
+                    fields.insert(key.trim().to_owned(), value.trim().to_owned());
+                }
+            }
+        }
+    }
+    fields
+}
+
+fn parse_keyguard_state(dump: &str) -> (KeyguardState, Option<bool>) {
+    let fields = keyguard_fields(dump);
+    let secure_lock = fields.get("secure").and_then(|value| parse_bool(value));
+    let keyguard = match fields.get("showing").and_then(|value| parse_bool(value)) {
+        Some(true) => KeyguardState::Locked,
+        Some(false) => KeyguardState::Unlocked,
+        None => KeyguardState::Unknown,
+    };
+    (keyguard, secure_lock)
+}
+
+fn parse_screen_state(dump: &str) -> ScreenState {
+    for line in dump.lines() {
+        if let Some(value) = line.trim().strip_prefix("mWakefulness=") {
+            return match value.trim() {
+                "Awake" => ScreenState::Awake,
+                "Asleep" | "Dozing" => ScreenState::Asleep,
+                _ => ScreenState::Unknown,
+            };
+        }
+    }
+    ScreenState::Unknown
+}
+
+fn describe_lock_state(
+    keyguard: KeyguardState,
+    secure_lock: Option<bool>,
+    screen: ScreenState,
+) -> (String, String) {
+    match keyguard {
+        KeyguardState::Locked => {
+            let explanation = if secure_lock == Some(true) {
+                "手机已进入安全锁屏。MirrorDock 会显示锁屏画面，但不会、也无法在你没有输入凭据的情况下越过它——这是 Android 的系统限制，与是否授权调试无关。"
+            } else {
+                "手机停留在锁屏画面。请在手机上手动解锁后继续。"
+            };
+            (
+                explanation.to_owned(),
+                "请在手机上解锁，或直接在镜像窗口中输入你自己的解锁凭据（凭据不会被记录）。开启「会话期间保持唤醒」可以避免镜像过程中再次锁屏。"
+                    .to_owned(),
+            )
+        }
+        KeyguardState::Unlocked => {
+            if screen == ScreenState::Asleep {
+                (
+                    "手机已解锁，仅屏幕处于关闭状态；设备并未锁定，可以远程点亮后继续操作。"
+                        .to_owned(),
+                    "点击「唤醒屏幕」，手机亮起后即可直接在镜像窗口中操作。".to_owned(),
+                )
+            } else {
+                (
+                    "手机已解锁且屏幕点亮，可以直接在镜像窗口中操作。".to_owned(),
+                    "无需额外操作。".to_owned(),
+                )
+            }
+        }
+        KeyguardState::Unknown => (
+            "无法确认手机当前的锁屏状态。".to_owned(),
+            "请查看手机屏幕确认状态；若镜像画面正常即可直接操作。".to_owned(),
+        ),
+    }
+}
+
+fn lock_report_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<DeviceLockReport, AppError> {
+    let serial = validate_serial(&serial)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    let policy = runtimes.adb.window_policy(&serial).map_err(|error| {
+        adb_command_error(
+            error,
+            "lock_probe_failed",
+            "无法读取手机的锁屏状态。",
+            "请确认数据线或无线连接仍然有效，然后重试。",
+        )
+    })?;
+    let (keyguard, secure_lock) = parse_keyguard_state(&policy);
+
+    // 屏幕状态只是辅助信息：读不到就保持 Unknown，不影响锁屏结论。
+    let screen = runtimes
+        .adb
+        .power_state(&serial)
+        .map(|dump| parse_screen_state(&dump))
+        .unwrap_or(ScreenState::Unknown);
+
+    let (explanation, recovery) = describe_lock_state(keyguard, secure_lock, screen);
+    Ok(DeviceLockReport {
+        keyguard,
+        secure_lock,
+        screen,
+        explanation,
+        recovery,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 最近设备（本地列表，按最近使用排序）
+// ---------------------------------------------------------------------------
+
+const MAX_RECENT_DEVICES: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RecentDevice {
+    serial: String,
+    label: String,
+    /// 最近一次成功启动镜像的 Unix 时间戳（秒）。
+    last_used_at: u64,
+}
+
+/// 把一台设备置顶到最近设备列表：按 serial 去重、新的在前、超出上限截断。
+fn record_recent_device(devices: &mut Vec<RecentDevice>, device: RecentDevice) {
+    devices.retain(|existing| existing.serial != device.serial);
+    devices.insert(0, device);
+    devices.truncate(MAX_RECENT_DEVICES);
+}
+
+fn recent_devices_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("recent-devices.json"))
+        .map_err(|_| {
+            AppError::new(
+                "recent_list_unavailable",
+                "无法访问本机的最近设备记录。",
+                "请检查本机文件权限，或重新安装 MirrorDock。",
+            )
+        })
+}
+
+fn load_recent_devices(path: &Path) -> Result<Vec<RecentDevice>, AppError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let unreadable = || {
+        AppError::new(
+            "recent_list_unreadable",
+            "最近设备记录无法读取。",
+            "请重新选择设备开始镜像；这条记录会被重建。",
+        )
+    };
+    let bytes = fs::read(path).map_err(|_| unreadable())?;
+    serde_json::from_slice(&bytes).map_err(|_| unreadable())
+}
+
+fn save_recent_devices(path: &Path, devices: &[RecentDevice]) -> Result<(), AppError> {
+    let directory = path.parent().ok_or_else(|| {
+        AppError::new(
+            "recent_list_write_failed",
+            "无法创建最近设备记录。",
+            "请检查本机文件权限。",
+        )
+    })?;
+    fs::create_dir_all(directory).map_err(|_| {
+        AppError::new(
+            "recent_list_write_failed",
+            "无法创建最近设备记录目录。",
+            "请检查本机文件权限。",
+        )
+    })?;
+    let serialized = serde_json::to_vec_pretty(devices).map_err(|_| {
+        AppError::new(
+            "recent_list_write_failed",
+            "无法整理最近设备记录。",
+            "请重试。",
+        )
+    })?;
+    fs::write(path, serialized).map_err(|_| {
+        AppError::new(
+            "recent_list_write_failed",
+            "无法保存最近设备记录。",
+            "请检查本机文件权限。",
+        )
+    })
+}
+
+/// 记录一台成功启动过镜像的设备。这是本地便利功能：读写失败不得影响镜像主流程。
+fn remember_recent_device(app: &AppHandle, serial: &str, label: &str) {
+    let Ok(path) = recent_devices_path(app) else {
+        return;
+    };
+    let Ok(mut devices) = load_recent_devices(&path) else {
+        return;
+    };
+    record_recent_device(
+        &mut devices,
+        RecentDevice {
+            serial: serial.to_owned(),
+            label: label.to_owned(),
+            last_used_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0),
+        },
+    );
+    let _ = save_recent_devices(&path, &devices);
+}
+
+// ---------------------------------------------------------------------------
 // scrcpy 运行时定位与解析
 // ---------------------------------------------------------------------------
 
@@ -741,6 +1178,229 @@ fn endpoint_is_ready(devices: &[AdbDevice], endpoint: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// 设备能力探测
+//
+// 目的：在启动会话**之前**就把"这台手机能做什么、不能做什么"讲清楚。
+// 受保护内容黑屏、系统音频不可捕获、OEM 差异都是正确的平台行为，必须向
+// 非技术用户解释，而不是等到失败后再猜。
+// ---------------------------------------------------------------------------
+
+/// 需要从设备读取的属性白名单。不在此列表中的属性既不进内存，也不进界面。
+const WANTED_PROPERTIES: [&str; 5] = [
+    "ro.build.version.release",
+    "ro.build.version.sdk",
+    "ro.product.manufacturer",
+    "ro.product.brand",
+    "ro.product.model",
+];
+
+/// 受限能力说明的等级。`Info` 表示"能力可用"，`Limitation` 表示"存在边界"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum NoticeLevel {
+    Info,
+    Limitation,
+}
+
+/// 一条面向用户的受限能力说明：标题 + 原因/影响/应对。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CapabilityNotice {
+    /// 稳定标识，前端据此决定图标与分组；修改文案时不要改动它。
+    code: &'static str,
+    level: NoticeLevel,
+    title: String,
+    detail: String,
+}
+
+impl CapabilityNotice {
+    fn limitation(code: &'static str, title: &str, detail: String) -> Self {
+        Self {
+            code,
+            level: NoticeLevel::Limitation,
+            title: title.to_owned(),
+            detail,
+        }
+    }
+
+    fn info(code: &'static str, title: &str, detail: String) -> Self {
+        Self {
+            code,
+            level: NoticeLevel::Info,
+            title: title.to_owned(),
+            detail,
+        }
+    }
+}
+
+/// 设备在启动会话前被探测到的能力。
+///
+/// `mirroring_supported` 与 `audio_forwarding_supported` 使用 `Option<bool>`：
+/// 读不到系统版本时保持 `None`（未知），**不得**默认成"支持"或"不支持"。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct DeviceCapabilities {
+    serial: String,
+    label: String,
+    android_release: Option<String>,
+    sdk: Option<u32>,
+    mirroring_supported: Option<bool>,
+    audio_forwarding_supported: Option<bool>,
+    notices: Vec<CapabilityNotice>,
+}
+
+/// 清洗来自设备的属性文本：去首尾空白、剔除控制字符、限制长度。
+fn sanitize_property(value: &str) -> Option<String> {
+    let cleaned: String = value
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_PROPERTY_LEN)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_owned())
+    }
+}
+
+/// 解析 `adb shell getprop` 的输出。每行形如 `[key]: [value]`。
+fn parse_device_properties(output: &str) -> BTreeMap<&'static str, String> {
+    let mut properties = BTreeMap::new();
+    for line in output.lines().take(MAX_PROPERTY_LINES) {
+        let Some(rest) = line.strip_prefix('[') else {
+            continue;
+        };
+        let Some((key, rest)) = rest.split_once("]: [") else {
+            continue;
+        };
+        let Some(value) = rest.strip_suffix(']') else {
+            continue;
+        };
+        let Some(wanted) = WANTED_PROPERTIES.iter().find(|wanted| **wanted == key) else {
+            continue;
+        };
+        if let Some(cleaned) = sanitize_property(value) {
+            properties.entry(*wanted).or_insert(cleaned);
+        }
+    }
+    properties
+}
+
+/// 由设备属性推导能力判定与受限说明。
+fn capabilities_from_properties(
+    serial: String,
+    properties: &BTreeMap<&'static str, String>,
+) -> DeviceCapabilities {
+    let sdk = properties
+        .get("ro.build.version.sdk")
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|sdk| (1..=1000).contains(sdk));
+
+    let android_release = properties.get("ro.build.version.release").cloned();
+    let label = match (
+        properties.get("ro.product.manufacturer"),
+        properties.get("ro.product.model"),
+    ) {
+        (Some(manufacturer), Some(model)) => format!("{manufacturer} {model}"),
+        (None, Some(model)) => model.clone(),
+        (Some(manufacturer), None) => manufacturer.clone(),
+        (None, None) => properties
+            .get("ro.product.brand")
+            .cloned()
+            .unwrap_or_else(|| "Android 设备".to_owned()),
+    };
+
+    DeviceCapabilities {
+        serial,
+        label,
+        android_release,
+        sdk,
+        mirroring_supported: sdk.map(|sdk| sdk >= MIN_SDK_FOR_MIRRORING),
+        audio_forwarding_supported: sdk.map(|sdk| sdk >= MIN_SDK_FOR_AUDIO),
+        notices: capability_notices(sdk),
+    }
+}
+
+/// 生成受限能力说明。结论只依赖系统版本，不依赖设备提供的其它字段。
+fn capability_notices(sdk: Option<u32>) -> Vec<CapabilityNotice> {
+    let mut notices = Vec::new();
+
+    match sdk {
+        Some(sdk) if sdk < MIN_SDK_FOR_MIRRORING => notices.push(CapabilityNotice::limitation(
+            "android_too_old",
+            "系统版本可能过低",
+            format!(
+                "这台手机的系统等级为 API {sdk}，低于 MirrorDock 支持的 Android 8（API 26）。镜像可能无法启动或运行不稳定。"
+            ),
+        )),
+        Some(sdk) if sdk < MIN_SDK_FOR_AUDIO => notices.push(CapabilityNotice::limitation(
+            "audio_forwarding_unavailable",
+            "不支持把手机声音传到电脑",
+            "Android 11 以下无法转发系统音频。画面与鼠标键盘控制不受影响，只是电脑上不会有手机的声音。".to_owned(),
+        )),
+        Some(_) => notices.push(CapabilityNotice::info(
+            "audio_forwarding_available",
+            "可以把手机声音传到电脑",
+            "这台手机运行 Android 11 及以上，系统声音会一起在电脑上播放；被应用单独禁止捕获的声音除外。"
+                .to_owned(),
+        )),
+        None => notices.push(CapabilityNotice::limitation(
+            "android_version_unknown",
+            "无法确认系统版本",
+            "这台手机没有返回系统版本信息，声音等能力无法提前判断。可以直接尝试开始镜像，若缺少声音再检查手机的开发者选项。"
+                .to_owned(),
+        )),
+    }
+
+    notices.push(CapabilityNotice::limitation(
+        "protected_content",
+        "部分页面会显示黑屏",
+        "银行、支付和部分视频应用会主动禁止被镜像。这是 Android 的安全策略，MirrorDock 不会也无法绕过。"
+            .to_owned(),
+    ));
+    notices.push(CapabilityNotice::limitation(
+        "input_restricted_by_apps",
+        "部分应用会屏蔽电脑的点击",
+        "少数应用会忽略由电脑发来的点击与按键。这属于应用自身的安全限制，改用手机会恢复正常。"
+            .to_owned(),
+    ));
+    notices.push(CapabilityNotice::limitation(
+        "oem_differences",
+        "不同品牌的开发者选项位置不同",
+        "各品牌的开发者选项名称与入口略有差异。如果找不到“无线调试”，请先开启“USB 调试”，或用数据线完成第一次连接。"
+            .to_owned(),
+    ));
+
+    notices
+}
+
+/// 探测指定设备的能力。只读取系统属性，不启动镜像、不改变会话状态。
+fn probe_device_capabilities_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<DeviceCapabilities, AppError> {
+    let serial = validate_serial(&serial)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    let output = runtimes.adb.device_properties(&serial).map_err(|error| {
+        adb_command_error(
+            error,
+            "probe_failed",
+            "无法读取这台手机的能力信息。",
+            "请重新检查连接后重试；如果仍然失败，可以直接尝试开始镜像。",
+        )
+    })?;
+
+    Ok(capabilities_from_properties(
+        serial,
+        &parse_device_properties(&output),
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Tauri 命令
 // ---------------------------------------------------------------------------
 
@@ -772,13 +1432,43 @@ fn check_adb_devices(runtimes: State<AppRuntimes>) -> AdbCheck {
 }
 
 #[tauri::command]
+fn probe_device_capabilities(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+) -> Result<DeviceCapabilities, AppError> {
+    probe_device_capabilities_with(&runtimes, serial)
+}
+
+#[tauri::command]
 fn start_mirroring(
+    app: AppHandle,
     runtimes: State<AppRuntimes>,
     sessions: State<SessionStore>,
     serial: String,
     options: Option<SessionOptions>,
 ) -> Result<(), AppError> {
-    start_mirroring_with(&runtimes, &sessions, serial, options.unwrap_or_default())
+    start_mirroring_with(
+        &runtimes,
+        &sessions,
+        serial.clone(),
+        options.unwrap_or_default(),
+    )?;
+
+    // 只有成功启动才记入最近设备；读取人类可读的名称失败时退回序列号。
+    let serial = serial.trim().to_owned();
+    let label = runtimes
+        .adb
+        .list_devices()
+        .ok()
+        .and_then(|devices| {
+            devices
+                .into_iter()
+                .find(|device| device.serial == serial)
+                .map(|device| device.label)
+        })
+        .unwrap_or_else(|| serial.clone());
+    remember_recent_device(&app, &serial, &label);
+    Ok(())
 }
 
 fn start_mirroring_with(
@@ -789,14 +1479,7 @@ fn start_mirroring_with(
 ) -> Result<(), AppError> {
     options.arguments()?;
 
-    let serial = serial.trim().to_owned();
-    if serial.is_empty() {
-        return Err(AppError::new(
-            "device_not_selected",
-            "未选择可用设备。",
-            "请重新检查连接后选择手机。",
-        ));
-    }
+    let serial = validate_serial(&serial)?;
 
     reserve_session(sessions, MirrorSession::connecting(serial.clone()))?;
 
@@ -812,51 +1495,29 @@ fn start_mirroring_with(
         ));
     }
 
-    match device_lookup(runtimes, &serial) {
-        DeviceLookup::Ready => {}
-        DeviceLookup::Unauthorized => {
-            let error = AppError::new(
-                "device_unauthorized",
-                "手机尚未允许这台电脑进行调试。",
-                "请解锁手机，在“允许 USB 调试吗？”提示中选择允许，然后重新检查。",
-            );
-            mark_session(
-                sessions,
-                MirrorSession::unauthorized(serial.clone(), error.clone()),
-            );
-            return Err(error);
+    let lookup = device_lookup(runtimes, &serial);
+    if let Some(error) = device_readiness_error(lookup) {
+        match lookup {
+            DeviceLookup::Unauthorized => {
+                mark_session(
+                    sessions,
+                    MirrorSession::unauthorized(serial.clone(), error.clone()),
+                );
+            }
+            DeviceLookup::Offline => {
+                mark_session(
+                    sessions,
+                    MirrorSession::offline(serial.clone(), error.clone()),
+                );
+            }
+            _ => {
+                mark_session(
+                    sessions,
+                    MirrorSession::failed(Some(serial.clone()), error.clone()),
+                );
+            }
         }
-        DeviceLookup::Offline => {
-            let error = AppError::new(
-                "device_offline",
-                "手机当前处于离线状态。",
-                "请重新插拔数据线或重新连接无线调试，保持手机解锁后重试。",
-            );
-            mark_session(sessions, MirrorSession::offline(serial.clone(), error.clone()));
-            return Err(error);
-        }
-        DeviceLookup::NotConnected => {
-            return Err(fail_session(
-                sessions,
-                Some(serial),
-                AppError::new(
-                    "device_not_connected",
-                    "找不到这台手机。",
-                    "请确认数据线或无线连接仍然有效，然后重新检查。",
-                ),
-            ));
-        }
-        DeviceLookup::AdbUnavailable => {
-            return Err(fail_session(
-                sessions,
-                Some(serial),
-                AppError::new(
-                    "adb_unavailable",
-                    "Android 调试服务暂时不可用。",
-                    "请拔下数据线后重新连接，或重新启动手机上的无线调试。",
-                ),
-            ));
-        }
+        return Err(error);
     }
 
     let process = match runtimes.mirror.start(&serial, &options) {
@@ -995,6 +1656,35 @@ fn forget_trusted_wireless_device(
     Ok(())
 }
 
+#[tauri::command]
+fn wake_device(runtimes: State<AppRuntimes>, serial: String) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    runtimes.adb.wake_screen(&serial).map_err(|error| {
+        adb_command_error(
+            error,
+            "wake_failed",
+            "无法点亮手机屏幕。",
+            "请确认数据线或无线连接仍然有效；也可以直接按一下手机的电源键。",
+        )
+    })
+}
+
+#[tauri::command]
+fn device_lock_report(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+) -> Result<DeviceLockReport, AppError> {
+    lock_report_with(&runtimes, serial)
+}
+
+#[tauri::command]
+fn list_recent_devices(app: AppHandle) -> Result<Vec<RecentDevice>, AppError> {
+    load_recent_devices(&recent_devices_path(&app)?)
+}
+
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
@@ -1012,9 +1702,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             check_adb_devices,
+            probe_device_capabilities,
             start_mirroring,
             stop_mirroring,
             mirror_session,
+            wake_device,
+            device_lock_report,
+            list_recent_devices,
             pair_wireless_device,
             connect_wireless_device,
             list_trusted_wireless_devices,
@@ -1043,13 +1737,40 @@ mod tests {
     struct FakeAdb {
         devices: Vec<AdbDevice>,
         unavailable: bool,
-        calls: Mutex<Vec<String>>,
+        /// `adb shell getprop` 的原始输出；`None` 表示读取失败。
+        properties: Option<String>,
+        /// `dumpsys window policy` 的原始输出；`None` 表示读取失败。
+        window_policy_dump: Option<String>,
+        /// `dumpsys power` 的原始输出；`None` 表示读取失败。
+        power_dump: Option<String>,
+        calls: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeAdb {
         fn with_devices(devices: Vec<AdbDevice>) -> Self {
             Self {
                 devices,
+                ..Self::default()
+            }
+        }
+
+        fn with_capabilities(devices: Vec<AdbDevice>, properties: &str) -> Self {
+            Self {
+                devices,
+                properties: Some(properties.to_owned()),
+                ..Self::default()
+            }
+        }
+
+        fn with_lock_state(
+            devices: Vec<AdbDevice>,
+            window_policy: &str,
+            power: &str,
+        ) -> Self {
+            Self {
+                devices,
+                window_policy_dump: Some(window_policy.to_owned()),
+                power_dump: Some(power.to_owned()),
                 ..Self::default()
             }
         }
@@ -1068,6 +1789,44 @@ mod tests {
                 Err(std::io::Error::from(std::io::ErrorKind::NotFound))
             } else {
                 Ok(self.devices.clone())
+            }
+        }
+
+        fn device_properties(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("properties {serial}"));
+            match &self.properties {
+                Some(properties) => Ok(properties.clone()),
+                None => Err(std::io::Error::other("properties unavailable")),
+            }
+        }
+
+        fn wake_screen(&self, serial: &str) -> Result<(), std::io::Error> {
+            self.calls.lock().unwrap().push(format!("wake {serial}"));
+            Ok(())
+        }
+
+        fn window_policy(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("window_policy {serial}"));
+            match &self.window_policy_dump {
+                Some(dump) => Ok(dump.clone()),
+                None => Err(std::io::Error::other("window policy unavailable")),
+            }
+        }
+
+        fn power_state(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("power_state {serial}"));
+            match &self.power_dump {
+                Some(dump) => Ok(dump.clone()),
+                None => Err(std::io::Error::other("power state unavailable")),
             }
         }
 
@@ -1309,11 +2068,13 @@ mod tests {
                 rotation: 90,
                 fullscreen: true,
                 always_on_top: true,
+                keep_awake: true,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
             assert!(args.contains(&format!("--video-bit-rate={bitrate}")));
             assert!(args.contains(&"--video-codec=h264".into()));
+            assert!(args.contains(&"--stay-awake".into()));
             assert!(args.contains(&"--fullscreen".into()));
             assert!(args.contains(&"--always-on-top".into()));
             assert!(args.contains(&"--display-orientation=90".into()));
@@ -1553,5 +2314,468 @@ mod tests {
         tags.dedup();
         assert_eq!(tags, ["connecting", "failed", "idle", "offline", "paired", "streaming", "unauthorized"]);
         assert_eq!(tags.len(), total);
+    }
+
+    // -- 设备能力探测（使用假运行时，无需真机） --
+
+    const PROPERTY_DUMP: &str = "\
+[ro.build.version.release]: [13]
+[ro.build.version.sdk]: [33]
+[ro.product.manufacturer]: [Xiaomi]
+[ro.product.brand]: [Redmi]
+[ro.product.model]: [M2104K10AC]
+[ro.build.characteristics]: [default]
+";
+
+    #[test]
+    fn parses_capabilities_from_a_property_dump() {
+        let capabilities =
+            capabilities_from_properties("phone".into(), &parse_device_properties(PROPERTY_DUMP));
+
+        assert_eq!(capabilities.serial, "phone");
+        assert_eq!(capabilities.label, "Xiaomi M2104K10AC");
+        assert_eq!(capabilities.android_release.as_deref(), Some("13"));
+        assert_eq!(capabilities.sdk, Some(33));
+        assert_eq!(capabilities.mirroring_supported, Some(true));
+        assert_eq!(capabilities.audio_forwarding_supported, Some(true));
+    }
+
+    #[test]
+    fn capability_support_follows_the_reported_android_version() {
+        let probe = |sdk: &str| {
+            capabilities_from_properties(
+                "phone".into(),
+                &parse_device_properties(&format!("[ro.build.version.sdk]: [{sdk}]\n")),
+            )
+        };
+
+        let older = probe("29");
+        assert_eq!(older.mirroring_supported, Some(true));
+        assert_eq!(older.audio_forwarding_supported, Some(false));
+        assert!(older
+            .notices
+            .iter()
+            .any(|notice| notice.code == "audio_forwarding_unavailable"));
+
+        assert_eq!(probe("30").audio_forwarding_supported, Some(true));
+
+        let too_old = probe("23");
+        assert_eq!(too_old.mirroring_supported, Some(false));
+        assert!(too_old
+            .notices
+            .iter()
+            .any(|notice| notice.code == "android_too_old"));
+    }
+
+    #[test]
+    fn unknown_android_version_stays_unknown_instead_of_defaulting_to_supported() {
+        let capabilities = capabilities_from_properties(
+            "phone".into(),
+            &parse_device_properties("[ro.build.version.sdk]: [not-a-number]\n"),
+        );
+
+        assert_eq!(capabilities.sdk, None);
+        assert_eq!(capabilities.mirroring_supported, None);
+        assert_eq!(capabilities.audio_forwarding_supported, None);
+        assert!(capabilities
+            .notices
+            .iter()
+            .any(|notice| notice.code == "android_version_unknown"));
+    }
+
+    #[test]
+    fn device_property_text_is_treated_as_untrusted_input() {
+        let hostile = format!(
+            "[ro.product.model]: [a\u{7}b\rc{}]\n[ro.build.version.sdk]: [33]\n",
+            "x".repeat(500)
+        );
+
+        let properties = parse_device_properties(&hostile);
+        let model = properties
+            .get("ro.product.model")
+            .expect("model property must be parsed");
+        assert!(!model.chars().any(char::is_control));
+        assert!(model.chars().count() <= MAX_PROPERTY_LEN);
+
+        let capabilities = capabilities_from_properties("phone".into(), &properties);
+        assert!(!capabilities.label.chars().any(char::is_control));
+        assert_eq!(capabilities.sdk, Some(33));
+    }
+
+    #[test]
+    fn every_capability_report_explains_the_platform_limits() {
+        for dump in [PROPERTY_DUMP, "garbage\n", "[ro.build.version.sdk]: [23]\n"] {
+            let capabilities =
+                capabilities_from_properties("phone".into(), &parse_device_properties(dump));
+            let codes: Vec<&str> = capabilities
+                .notices
+                .iter()
+                .map(|notice| notice.code)
+                .collect();
+
+            for required in [
+                "protected_content",
+                "input_restricted_by_apps",
+                "oem_differences",
+            ] {
+                assert!(codes.contains(&required), "缺少受限能力说明：{required}");
+            }
+            assert!(capabilities
+                .notices
+                .iter()
+                .all(|notice| !notice.title.is_empty() && !notice.detail.is_empty()));
+        }
+    }
+
+    #[test]
+    fn probing_reuses_the_same_device_state_errors_as_starting_a_session() {
+        let cases: [(AppRuntimes, &str); 5] = [
+            (
+                runtimes(
+                    FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]),
+                    FakeMirror::running(),
+                ),
+                "device_unauthorized",
+            ),
+            (
+                runtimes(
+                    FakeAdb::with_devices(vec![device("phone", DeviceState::Offline)]),
+                    FakeMirror::running(),
+                ),
+                "device_offline",
+            ),
+            (runtimes(FakeAdb::unavailable(), FakeMirror::running()), "adb_unavailable"),
+            (
+                runtimes(FakeAdb::with_devices(Vec::new()), FakeMirror::running()),
+                "device_not_connected",
+            ),
+            (
+                runtimes(
+                    FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+                    FakeMirror::running(),
+                ),
+                "probe_failed",
+            ),
+        ];
+
+        for (runtimes, expected) in cases {
+            assert_eq!(
+                probe_device_capabilities_with(&runtimes, "phone".into())
+                    .unwrap_err()
+                    .code,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn probing_a_ready_device_is_read_only() {
+        let adb =
+            FakeAdb::with_capabilities(vec![device("phone", DeviceState::Ready)], PROPERTY_DUMP);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = runtimes(adb, FakeMirror::running());
+
+        let capabilities = probe_device_capabilities_with(&runtimes, "phone".into()).unwrap();
+
+        assert_eq!(capabilities.sdk, Some(33));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], "properties phone");
+        assert!(
+            calls.iter().all(|call| call.starts_with("properties")),
+            "能力探测不得配对、连接或断开设备：{calls:?}"
+        );
+    }
+
+    #[test]
+    fn device_identifiers_are_never_retained_by_the_probe() {
+        let dump = "\
+[ro.serialno]: [SN1234567890]
+[ril.serialnumber]: [SN1234567890]
+[gsm.sim.operator.alpha]: [Carrier]
+[net.hostname]: [phone]
+[ro.build.version.sdk]: [33]
+";
+
+        let properties = parse_device_properties(dump);
+        assert_eq!(properties.len(), 1);
+        assert_eq!(
+            properties.get("ro.build.version.sdk").map(String::as_str),
+            Some("33")
+        );
+
+        let capabilities = capabilities_from_properties("phone".into(), &properties);
+        let rendered = serde_json::to_string(&capabilities).unwrap();
+        assert!(!rendered.contains("SN1234567890"));
+        assert!(!rendered.contains("Carrier"));
+        assert!(!rendered.contains("hostname"));
+    }
+
+    #[test]
+    fn serial_validation_rejects_option_like_and_hostile_input() {
+        assert_eq!(
+            validate_serial("   ").unwrap_err().code,
+            "device_not_selected"
+        );
+        assert_eq!(
+            validate_serial("--help").unwrap_err().code,
+            "device_serial_invalid"
+        );
+        assert_eq!(
+            validate_serial("phone; rm -rf /").unwrap_err().code,
+            "device_serial_invalid"
+        );
+        assert_eq!(
+            validate_serial("phone\n--serial").unwrap_err().code,
+            "device_serial_invalid"
+        );
+        assert_eq!(
+            validate_serial(&"a".repeat(MAX_SERIAL_LEN + 1))
+                .unwrap_err()
+                .code,
+            "device_serial_invalid"
+        );
+        assert_eq!(validate_serial(" R5CT1 ").unwrap(), "R5CT1");
+        assert_eq!(
+            validate_serial("192.168.1.20:41839").unwrap(),
+            "192.168.1.20:41839"
+        );
+    }
+
+    // -- 锁屏诊断（样本取自真机 test-runs/keyguard-transition-*.txt）--
+
+    /// Android 13 / Redmi M2104K10AC 实测的 `dumpsys window policy` 片段。
+    const SECURE_KEYGUARD_POLICY: &str = "\
+  WindowManagerPolicy
+    KeyguardServiceDelegate
+      showing=true
+      showingAndNotOccluded=true
+      inputRestricted=false
+      occluded=false
+      secure=true
+      dreaming=false
+      systemIsReady=true
+      deviceHasKeyguard=true
+      enabled=true
+";
+
+    #[test]
+    fn a_secure_keyguard_is_reported_as_locked_with_secure_lock_enabled() {
+        let (keyguard, secure) = parse_keyguard_state(SECURE_KEYGUARD_POLICY);
+        assert_eq!(keyguard, KeyguardState::Locked);
+        assert_eq!(secure, Some(true));
+    }
+
+    #[test]
+    fn a_swipe_only_keyguard_is_locked_but_not_secure() {
+        let dump = SECURE_KEYGUARD_POLICY.replace("secure=true", "secure=false");
+        let (keyguard, secure) = parse_keyguard_state(&dump);
+        assert_eq!(keyguard, KeyguardState::Locked);
+        assert_eq!(secure, Some(false));
+    }
+
+    #[test]
+    fn a_dump_without_the_keyguard_block_stays_unknown_instead_of_unlocked() {
+        let (keyguard, secure) =
+            parse_keyguard_state("  WindowManagerPolicy\n    mSafeMode=false\n");
+        assert_eq!(
+            keyguard,
+            KeyguardState::Unknown,
+            "读不到 keyguard 段落时不得默认成已解锁"
+        );
+        assert_eq!(secure, None);
+    }
+
+    #[test]
+    fn a_dismissed_keyguard_reads_as_unlocked() {
+        let dump = SECURE_KEYGUARD_POLICY.replace("showing=true", "showing=false");
+        assert_eq!(parse_keyguard_state(&dump).0, KeyguardState::Unlocked);
+    }
+
+    #[test]
+    fn screen_state_follows_wakefulness_and_never_guesses() {
+        assert_eq!(
+            parse_screen_state("  mWakefulness=Asleep\n"),
+            ScreenState::Asleep
+        );
+        assert_eq!(
+            parse_screen_state("  mWakefulness=Awake\n"),
+            ScreenState::Awake
+        );
+        assert_eq!(
+            parse_screen_state("  mWakefulness=Dozing\n"),
+            ScreenState::Asleep
+        );
+        assert_eq!(parse_screen_state("  nothing here\n"), ScreenState::Unknown);
+    }
+
+    #[test]
+    fn a_locked_device_is_never_promised_password_free_control() {
+        for secure in [Some(true), Some(false), None] {
+            let (explanation, recovery) =
+                describe_lock_state(KeyguardState::Locked, secure, ScreenState::Awake);
+            assert!(
+                explanation.contains("锁屏"),
+                "锁屏状态必须被明确说出：{explanation}"
+            );
+            assert!(
+                recovery.contains("手机上解锁") || recovery.contains("解锁凭据"),
+                "必须把解锁动作交还给用户：{recovery}"
+            );
+        }
+    }
+
+    #[test]
+    fn waking_is_offered_only_for_an_unlocked_but_asleep_device() {
+        let (_, recovery) =
+            describe_lock_state(KeyguardState::Unlocked, Some(true), ScreenState::Asleep);
+        assert!(recovery.contains("唤醒屏幕"));
+
+        let (explanation, _) =
+            describe_lock_state(KeyguardState::Unknown, None, ScreenState::Unknown);
+        assert!(explanation.contains("无法确认"));
+    }
+
+    #[test]
+    fn lock_report_reuses_the_same_device_state_errors_as_starting_a_session() {
+        let runtimes = runtimes(
+            FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Unauthorized)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Asleep\n",
+            ),
+            FakeMirror::running(),
+        );
+
+        assert_eq!(
+            lock_report_with(&runtimes, "phone".into()).unwrap_err().code,
+            "device_unauthorized"
+        );
+        assert_eq!(
+            lock_report_with(&runtimes, "   ".into()).unwrap_err().code,
+            "device_not_selected"
+        );
+    }
+
+    #[test]
+    fn lock_report_is_read_only_and_answers_from_the_device_dump() {
+        let probe = FakeAdb::with_lock_state(
+            vec![device("phone", DeviceState::Ready)],
+            SECURE_KEYGUARD_POLICY,
+            "  mWakefulness=Asleep\n",
+        );
+        let calls = Arc::clone(&probe.calls);
+        let runtimes = runtimes(probe, FakeMirror::running());
+
+        let report = lock_report_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(report.keyguard, KeyguardState::Locked);
+        assert_eq!(report.secure_lock, Some(true));
+        assert_eq!(report.screen, ScreenState::Asleep);
+        assert!(!report.explanation.is_empty() && !report.recovery.is_empty());
+
+        let calls = calls.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.starts_with("window_policy") || call.starts_with("power_state")),
+            "锁屏诊断不得触发任何写操作：{calls:?}"
+        );
+    }
+
+    #[test]
+    fn waking_only_sends_the_wake_key_and_never_an_unlock_sequence() {
+        let probe = FakeAdb::with_lock_state(
+            vec![device("phone", DeviceState::Ready)],
+            SECURE_KEYGUARD_POLICY,
+            "  mWakefulness=Asleep\n",
+        );
+        let calls = Arc::clone(&probe.calls);
+        let runtimes = runtimes(probe, FakeMirror::running());
+
+        let serial = validate_serial("phone").unwrap();
+        runtimes.adb.wake_screen(&serial).unwrap();
+
+        assert_eq!(calls.lock().unwrap().as_slice(), ["wake phone"]);
+    }
+
+    // -- 最近设备 --
+
+    #[test]
+    fn recent_devices_dedupe_and_keep_the_most_recent_first() {
+        let mut devices = Vec::new();
+        record_recent_device(
+            &mut devices,
+            RecentDevice {
+                serial: "a".into(),
+                label: "A".into(),
+                last_used_at: 1,
+            },
+        );
+        record_recent_device(
+            &mut devices,
+            RecentDevice {
+                serial: "b".into(),
+                label: "B".into(),
+                last_used_at: 2,
+            },
+        );
+        record_recent_device(
+            &mut devices,
+            RecentDevice {
+                serial: "a".into(),
+                label: "A2".into(),
+                last_used_at: 3,
+            },
+        );
+
+        assert_eq!(
+            devices
+                .iter()
+                .map(|device| device.serial.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(devices[0].label, "A2");
+        assert_eq!(devices[0].last_used_at, 3);
+    }
+
+    #[test]
+    fn recent_devices_are_capped_at_the_declared_limit() {
+        let mut devices = Vec::new();
+        for index in 0..(MAX_RECENT_DEVICES + 5) {
+            record_recent_device(
+                &mut devices,
+                RecentDevice {
+                    serial: format!("device-{index}"),
+                    label: format!("设备 {index}"),
+                    last_used_at: index as u64,
+                },
+            );
+        }
+
+        assert_eq!(devices.len(), MAX_RECENT_DEVICES);
+        assert_eq!(
+            devices[0].serial,
+            format!("device-{}", MAX_RECENT_DEVICES + 4)
+        );
+    }
+
+    #[test]
+    fn stay_awake_is_on_by_default_and_can_be_turned_off() {
+        assert!(SessionOptions::default().keep_awake);
+        assert!(SessionOptions::default()
+            .arguments()
+            .unwrap()
+            .contains(&"--stay-awake".into()));
+
+        let off = SessionOptions {
+            keep_awake: false,
+            ..Default::default()
+        };
+        assert!(!off.arguments().unwrap().contains(&"--stay-awake".into()));
+
+        // 字段缺省时走 serde 默认值，同样是开启。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":90}"#).unwrap();
+        assert!(parsed.keep_awake);
     }
 }

@@ -2,7 +2,7 @@
 
 ## Mandatory start gate
 
-- Before every implementation, test, review, package, or release task, read this file and the relevant section of `Android桌面镜像工具产品规划.md`; identify and load applicable project or user-level Skills before acting.
+- Before every implementation, test, review, package, or release task, read this file and the relevant section of `Android桌面镜像工具产品规划.md` (internal document, kept outside this repository at `<repo>/../MirrorDock-内部文档/Android桌面镜像工具产品规划.md`); identify and load applicable project or user-level Skills before acting.
 - Missing development or verification dependencies may be installed promptly at user/project scope. Record name, version, and purpose. Never silently add production cloud services, permissions, daemons, or telemetry to unblock work.
 - Do not use destructive scaffold commands in a non-empty workspace unless their overwrite behavior has been inspected and all existing project artifacts are preserved.
 

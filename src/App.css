@@ -74,6 +74,16 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .status-dot.unauthorized { background: #d58b26; box-shadow: 0 0 0 4px #fff0d8; }
 .status-dot.offline { background: #c55a4b; }
 .status-label { margin-left: auto; color: #617064; font-size: 13px; font-weight: 650; text-align: right; }
+
+.capability-panel { display: grid; gap: 10px; margin-top: 14px; padding: 17px; border: 1px solid #d9e2d6; border-radius: 14px; background: #fafcf9; }
+.capability-summary { margin: 0; color: #415044; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.capability-pending { margin: 0; color: #68736a; font-size: 14px; }
+.capability-notices { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.capability-notices li { padding: 11px 13px; border-left: 3px solid #cdd8cb; border-radius: 8px; background: #fff; }
+.capability-notices li.notice-limitation { border-left-color: #d58b26; background: #fffaf0; }
+.capability-notices li.notice-info { border-left-color: #2e9a5c; background: #f2faf4; }
+.capability-notices strong { display: block; font-size: 14px; }
+.capability-notices p { margin: 3px 0 0; color: #68736a; font-size: 13px; line-height: 1.5; }
 .privacy-note { margin-top: 22px; padding: 19px 22px; border-radius: 16px; color: #425344; background: #e8f0e7; }
 .privacy-note p { margin: 6px 0 0; font-size: 14px; line-height: 1.55; }
 

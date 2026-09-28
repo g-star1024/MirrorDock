@@ -12,7 +12,10 @@
 - [ ] P0-06 实现无线调试配对、同网连接、保存/忘记可信设备与网络切换恢复。**已在 Android 13 真机完成配对、独立端口连接和镜像；重连、忘记与网络切换待测。**
 - [ ] P0-07 建立首帧、FPS、时延估算、掉线与 60 分钟稳定性测试记录。**已采集一组 Wi-Fi FPS/分辨率真实数据；首帧、时延、掉线与 60 分钟数据待测。**
 - [x] ✅ P0-08 将 MirrorDock 开发技能体系接入 WorkBuddy：项目级技能 `mirrordock-development`（含启动闸门、技能路由表、产品红线、完成标准与两份参考材料）建于 `.workbuddy/skills/`；12 个配套专业技能安装至用户级 `~/.workbuddy/skills/`。**证据：安装前完成安全审计（无凭据访问、无混淆代码、无外发数据，风险 🟢 LOW–🟡 MEDIUM）；安装后校验 13 份 SKILL.md frontmatter 均可解析、无 `CODEX_HOME` 残留引用、与既有技能无重名。**
-- [x] ✅ P0-09 建立 Git 版本控制与 GitHub 远端基线：初始化仓库并以 `main` 为默认分支；加固 `.gitignore` 排除构建产物（`src-tauri/target` 2.1G、`node_modules`、`.tools/`、`test-runs/`、`dist/`）与本地工作笔记 `.workbuddy/memory/`；创建远端公开仓库 `g-star1024/MirrorDock` 并完成首次推送。**证据：远端递归文件树 53 个 blob、构建产物泄漏 0；本地 `HEAD` 与 `origin/main` 同为 `8436bb5`、工作区干净；SCP 通道经 SSH 认证（`Hi g-star1024!`）推送成功。**
+- [x] ✅ P0-09 建立 Git 版本控制与 GitHub 远端基线：初始化仓库并以 `main` 为默认分支；加固 `.gitignore` 排除构建产物（`src-tauri/target` 2.1G、`node_modules`、`.tools/`、`test-runs/`、`dist/`）与本地工作笔记 `.workbuddy/memory/`；创建远端公开仓库 `g-star1024/MirrorDock` 并完成首次推送。**证据：推送通道经 SSH 认证（`Hi g-star1024!`）；密钥扫描（`ghp_`/`sk-`/`AKIA`/PRIVATE KEY/硬编码口令赋值）零命中；本地 `HEAD` 与 `origin/main` 一致、工作区干净。后续因把内部产品规划文档移出仓库，已重写历史并强制推送：远端递归文件树由 53 降至 52 个 blob、该文档命中 0，`.gitignore` 已加入该文件名与 `/内部文档/` 防止再次误入库。**注意：旧提交在 GitHub 上短期内仍可按完整 SHA 访问，如需彻底清除需删除并重建仓库或联系 GitHub 支持。**
+
+- [x] ✅ P0-10 为项目添加 Apache-2.0 许可证与版权声明。**证据：仓库根 `LICENSE` 为 Apache-2.0 官方全文（下载自 apache.org，202 行）并附版权声明；`README.md` 增加许可证引用并指向 `LICENSE`；`THIRD_PARTY_NOTICES.md` 继续单独覆盖第三方（scrcpy v4.1, Apache-2.0），与本项目自身许可区分。**
+- [x] ✅ P0-11 建立 GitHub Actions 三平台打包流水线（`push to main` 触发 + 手动触发）：`verify` 作业跑 `cargo test` 与 `pnpm build` 作为门禁；`package` 作业按 `windows-latest` / `ubuntu-22.04` / `macos-latest`(aarch64) / `macos-13`(x86_64) 四目标矩阵调用 `pnpm tauri build` 并上传安装包。**未验证面（外部阻塞）**：工作流尚未真正在 GitHub 上跑过，需要首个 push 后的运行结果确认；产物**默认未签名**（macOS Gatekeeper / Windows SmartScreen 会提示），正式分发需另配签名密钥；**不捆绑 scrcpy 运行时**（属 A1-08 范围），当前产物运行需本机已具备 scrcpy 或设置 `MIRRORDOCK_SCRCPY_PATH`。**
 
 ## 阶段 1：MVP Alpha
 
@@ -20,10 +23,12 @@
 - [x] ✅ A1-01a 会话启动互斥、正常退出恢复空闲、异常退出可重试及前端状态轮询；同设备重复启动/异常退出测试通过。Running 仅表示进程运行，不代表首帧已到达。
 
 - [x] ✅ P0-06a 无线连接保存前验证精确端点处于授权状态，拒绝端口 0，配对尝试结束清除界面配对码；端点状态测试通过。真机重连与网络切换验收仍待完成。
-- [ ] A1-02 多设备工作台、最近设备、本地预设与“忘记设备”。**设备选择、上次选择记录、无线可信设备忘记已实现；本地预设已接入，最近设备列表与完整验收待完成。**
+- [ ] A1-02 多设备工作台、最近设备、本地预设与“忘记设备”。**设备选择、上次选择记录、本地预设、无线可信设备忘记与最近设备列表（`list_recent_devices`，按最近使用排序、按序列号去重、上限 8 台、读写失败不影响镜像主流程）均已实现；30 台设备矩阵与完整验收待完成。**
 - [x] ✅ A1-02a 质量/窗口预设本地保存、读取校验、恢复默认和存储失败提示；前端生产构建通过。
-- [ ] A1-03 会话控制：旋转、全屏、置顶、质量预设、能力探测和受限能力说明。
+- [ ] A1-03 会话控制：旋转、全屏、置顶、质量预设、能力探测和受限能力说明。**启动参数（A1-03a）、能力探测/受限能力说明（A1-03b）与防锁屏/唤醒/锁屏诊断（A1-03c）已完成；会话进行中的实时控制与真机/跨平台验收仍待完成。**
 - [x] ✅ A1-03a 启动参数支持三档画质、0/90/180/270°显示旋转、全屏和置顶，固定 H.264；后端白名单及非法参数测试通过。会话中控制与真机/跨平台验收仍待完成。
+- [x] ✅ A1-03b 设备能力探测与受限能力说明：新增 `probe_device_capabilities` 命令，在启动会话**之前**读取设备系统属性（`adb -s <serial> shell getprop`，固定参数直接调用、无 shell 拼接与插值），据此判定画面/控制支持（API ≥26）与系统音频转发（API ≥30），并生成「原因 + 影响 + 应对」式的受限能力说明（系统版本过低、音频不可转发、版本未知、受保护内容黑屏、应用屏蔽电脑输入、OEM 开发者选项差异）；读不到系统版本时结论保持"未知"，不默认成"支持"。探测为只读操作，不配对、不连接、不改写会话状态。同时把序列号校验抽成 `validate_serial`（拒绝空值、`-` 开头、超长、含空白或控制字符的取值），会话启动与能力探测共用同一套设备状态错误码。**证据：`cargo test --manifest-path src-tauri/Cargo.toml` 31 项全通过（新增 9 项，覆盖属性解析、版本分档、未知态不被默认成支持、不可信属性文本的控制字符剔除与长度截断、探测复用 `device_unauthorized`/`device_offline`/`adb_unavailable`/`device_not_connected`/`probe_failed` 五类错误码、探测只读取属性、序列号校验，以及**设备标识（序列号/运营商/hostname）不被属性白名单保留、也不出现在返回结构里**）；`cargo clippy --all-targets` 零告警；`pnpm build`（tsc + vite）通过。**未验证面（外部阻塞）**：真机上 `getprop` 的实际返回内容、各 OEM 属性差异、以及受限说明在真实机型上的准确性均需真机复核，标记为未验证。**
+- [x] ✅ A1-03c 防锁屏、远程唤醒与锁屏诊断：`SessionOptions.keep_awake`（默认开启，映射 scrcpy `--stay-awake`）从根上避免「镜像过程中手机自动锁屏」；新增 `wake_device` 命令（`adb -s <serial> shell input keyevent KEYCODE_WAKEUP`，固定参数直接调用、无 shell 拼接）**仅点亮屏幕**；新增 `device_lock_report` 命令读取 `dumpsys window policy` 与 `dumpsys power`，输出钥匙锁状态（`locked`/`unlocked`/**`unknown`**）、是否设置安全锁屏、屏幕唤醒状态，并生成「现状说明 + 下一步」面向非技术用户的引导。**读不到 keyguard 段落时结论保持 `unknown`，不默认成已解锁。**前端新增「手机当前的锁屏状态」面板、唤醒按钮与「会话期间保持唤醒」开关。**证据：`cargo test --manifest-path src-tauri/Cargo.toml` 44 项全通过（本项新增 13 项，含真机样本解析、unknown 不得被当成已解锁、锁屏时不得承诺无凭据可操作、唤醒只发送唤醒键、锁屏诊断不得触发写操作、最近设备去重与容量上限）；`pnpm build`（tsc + vite）通过。真机取证（Android 13 / Redmi M2104K10AC）：`secure=true deviceHasKeyguard=true` 时 `wm dismiss-keyguard` **无法**解除锁屏（`showing` 保持 true），`KEYCODE_WAKEUP` 可把设备从 `mWakefulness=Asleep` 唤醒到 `Awake`；取证见 `test-runs/keyguard-probe-*.txt` 与 `test-runs/keyguard-transition-*.txt`。**明确不做**（工程铁律红线）：无凭据越过锁屏、绕过生物识别 / MDM / `FLAG_SECURE`、无人值守控制——前者已被真机证据证实为 Android 系统层面拒绝。**未验证面（外部阻塞）**：真机上通过镜像窗口输入解锁凭据的可用性、各 OEM 的 `dumpsys` 字段差异、`--stay-awake` 在长时会话下的耗电与烧屏影响，均待复核。**
 - [ ] A1-04 截图、MP4 录制、双向剪贴板、文件传输；每项提供可见状态、撤销和失败恢复。
 - [ ] A1-05 音频能力检测与 Android 版本/应用限制说明。
 - [ ] A1-06 厂商品牌知识库与引导：Pixel、Samsung、Xiaomi、OPPO、vivo、OnePlus。

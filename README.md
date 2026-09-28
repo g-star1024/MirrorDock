@@ -32,4 +32,4 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## 工程约束
 
-每次开发前先阅读 [AGENTS.md](AGENTS.md) 与 [产品规划](Android桌面镜像工具产品规划.md)。产品边界、发布要求与团队协作规则以这两份文档为准。
+每次开发前先阅读 [AGENTS.md](AGENTS.md) 与 [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md)。产品边界、发布要求与团队协作规则以 AGENTS.md 为准；内部产品规划文档维护于仓库外、不随本仓库分发，外部贡献者请以 README 与 DEVELOPMENT_TASKS.md 为准。本项目以 [Apache-2.0](LICENSE) 许可发布。

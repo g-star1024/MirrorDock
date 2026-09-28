@@ -9,7 +9,7 @@ Deliver the smallest safe improvement for non-technical users connecting their o
 
 ## Start gate
 
-1. Read repository `AGENTS.md`, relevant `Android桌面镜像工具产品规划.md` sections, and the current implementation/tests.
+1. Read repository `AGENTS.md`, `DEVELOPMENT_TASKS.md`, `agents/TEAM_AGENTS.md`, and the current implementation/tests. The internal product plan is maintained **outside this repository** and is not distributed with it.
 2. Load every narrow matching user-level Skill. Android manifest/IPC uses `android-permissions-security` and relevant Intent security; Play delivery uses `play-policy-insights`; Android test setup uses `testing-setup`; Gradle commands use `gradle-run`; Kotlin concurrency uses `kotlin-concurrency-and-flow`; Compose tests use `compose-ui-testing-patterns`; browser/webview UI E2E uses `playwright`; security reviews use the matching security Skill.
 3. State affected desktop platforms, Android versions, connection mode, permissions/data, and acceptance evidence before editing.
 
