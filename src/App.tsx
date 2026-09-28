@@ -553,9 +553,10 @@ function App() {
           </div>
         )}
 
-        {recentDevices.length > 0 && (
+        {/* 列表清空后仍要显示反馈，否则移除最后一条记录会静默消失，用户不知道操作是否生效。 */}
+        {(recentDevices.length > 0 || recentMessage) && (
           <div className="recent-devices" aria-label="最近使用过的设备">
-            <strong>最近使用过的设备</strong>
+            {recentDevices.length > 0 && <strong>最近使用过的设备</strong>}
             {recentDevices.map((device) => {
               const connected = check?.devices.find((item) => item.serial === device.serial);
               return (
@@ -579,7 +580,7 @@ function App() {
                 </div>
               );
             })}
-            <p className="recent-note">这份记录只保存在这台电脑上，可随时逐条移除。移除记录不会断开连接，也不会撤销手机上的调试授权。</p>
+            {recentDevices.length > 0 && <p className="recent-note">这份记录只保存在这台电脑上，可随时逐条移除。移除记录不会断开连接，也不会撤销手机上的调试授权。</p>}
             {recentMessage && <p className="recent-note" role="status">{recentMessage}</p>}
           </div>
         )}
