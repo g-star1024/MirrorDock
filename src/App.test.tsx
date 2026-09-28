@@ -17,8 +17,11 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 import App, {
   capabilitySummary,
+  editionLabel,
   errorMessage,
+  expiryText,
   formatBytes,
+  isProEdition,
   lockSummary,
   readOptions,
   recordingFileName,
@@ -77,6 +80,8 @@ function baseInvoke(cmd: string): Promise<unknown> {
         explanation: "",
         recovery: "",
       });
+    case "entitlement_status":
+      return Promise.resolve({ edition: "free", key_id: null, expires_at: null });
     default:
       return Promise.resolve({});
   }
@@ -351,5 +356,65 @@ describe("App rendering", () => {
     });
     render(<App />);
     expect(await screen.findByText(/scrcpy/)).toBeInTheDocument();
+  });
+});
+
+describe("entitlement", () => {
+  it("editionLabel_and_helpers_map_states_honestly", () => {
+    expect(editionLabel("free")).toBe("免费版");
+    expect(editionLabel("pro")).toBe("专业版");
+    expect(editionLabel(undefined)).toBe("版本未知");
+    expect(editionLabel("corrupted")).toBe("版本未知");
+    expect(isProEdition("pro")).toBe(true);
+    expect(isProEdition("free")).toBe(false);
+    expect(isProEdition(null)).toBe(false);
+    expect(expiryText(null)).toBe("永久有效");
+    expect(expiryText(0)).toBe("永久有效");
+    expect(expiryText(1_700_000_000)).toContain("有效期至");
+  });
+
+  it("free_edition_shows_activation_ui_and_locks_recording_switch", async () => {
+    render(<App />);
+    expect(await screen.findByText("当前版本：免费版")).toBeInTheDocument();
+    const recordBox = screen.getByRole("checkbox", { name: /录制这一会话的画面/ });
+    expect(recordBox).toBeDisabled();
+    expect(screen.getByText(/专业版功能，在下方「版本与授权」激活后可用/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "激活专业版" })).toBeDisabled();
+  });
+
+  it("activate_clicks_send_license_to_local_backend_only", async () => {
+    render(<App />);
+    const input = await screen.findByPlaceholderText("MD1-XXXXXX-XXXXXX-…");
+    fireEvent.change(input, { target: { value: "MD1-TESTLICENSE" } });
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "entitlement_activate") {
+        return Promise.resolve({ edition: "pro", key_id: "2026-001", expires_at: null });
+      }
+      return baseInvoke(cmd);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "激活专业版" }));
+    expect(await screen.findByText(/MP4 录制现已可用/)).toBeInTheDocument();
+    const activateCall = invokeMock.mock.calls.find(([cmd]) => cmd === "entitlement_activate");
+    expect(activateCall).toBeTruthy();
+    expect(activateCall![1]).toEqual({ licenseKey: "MD1-TESTLICENSE" });
+    // 激活后呈现专业版状态与撤销入口，录制开关恢复可用。
+    expect(await screen.findByText("当前版本：专业版（许可证 2026-001，永久有效）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "撤销本机授权" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: /录制这一会话的画面/ })).toBeEnabled();
+  });
+
+  it("activation_failure_shows_backend_message_without_echoing_key", async () => {
+    render(<App />);
+    const input = await screen.findByPlaceholderText("MD1-XXXXXX-XXXXXX-…");
+    fireEvent.change(input, { target: { value: "MD1-BADKEY" } });
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "entitlement_activate") {
+        return Promise.reject({ code: "license_invalid", message: "许可证签名无效。", recovery: "请确认许可证来自官方渠道。" });
+      }
+      return baseInvoke(cmd);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "激活专业版" }));
+    expect(await screen.findByText(/许可证签名无效。 请确认许可证来自官方渠道。/)).toBeInTheDocument();
+    expect(screen.getByText("当前版本：免费版")).toBeInTheDocument();
   });
 });

@@ -77,10 +77,25 @@
 
 ## 阶段 3：公开 v1
 
-- [ ] R3-01 免费/Pro 授权设计与本地权益状态；不将任何授权密钥写入日志。
-- [ ] R3-02 国内、Google Play、企业侧载各自的隐私、权限、签名、更新与支持材料。
-- [ ] R3-03 安全审计：威胁模型、依赖漏洞、许可证、SBOM、签名、更新和数据流。
-- [ ] R3-04 发布候选、试点、支持值守、发布/回滚决策与公开兼容性矩阵。
+- [ ] R3-01 免费/Pro 授权设计与本地权益状态；不将任何授权密钥写入日志。**已实现（2026-09-28 夜间轮次，自主决策已记录）；待真实激活流程的 GUI 端到端验收。**
+  - **授权模型（自主决策）**：无账户、无激活服务器、离线激活；免费版保留全部核心体验（USB/无线镜像、截图、文件传输、**音频转发**、会话设置、诊断）；Pro 门控仅 MP4 录制。特别说明：音频转发不做门控——`audio` 默认开启，纳入门控会让免费版默认启动直接报错，违背开箱即用。
+  - **许可证格式**：ed25519 签名 JSON 载荷（product/key_id/edition/expires_at），`MD1-` 前缀 + 自实现 base32（长度前缀消歧义、6 字符分组可抄写）；公钥编译进二进制（`LICENSE_VERIFYING_KEY`），私钥由 `examples/license_keygen` 生成、存仓库外内部文档目录，绝不入 Git/CI/日志。
+  - **命令面 23 → 26**：`entitlement_status` / `entitlement_activate`（失败诊断脱敏：原始密钥串声明进机密列表，测试断言不回显）/ `entitlement_deactivate`；权益文件 entitlement.json 存许可证原文、加载时重验签，损坏/篡改/过期一律安全回退免费版。
+  - **门控位置**：`start_mirroring` 与 `update_session_options` 前置 `ensure_edition_allows`（错误码 `pro_required`，触碰设备之前就拒绝）；录制开关在免费版禁用并给出激活指引。
+  - **签发工具**：`examples/license_sign`（env 种子）与 `examples/license_keygen`（/dev/urandom + 签名自检）。
+  - **证据**：Rust 89 → 99（base32 往返、验签往返/篡改拒绝/过期/产品不符、损坏回退、门控矩阵、密钥不回显、**真实种子端到端**（无种子环境自动跳过））；前端 23 → 27（免费/专业两态渲染、激活调用契约、失败不回显密钥）；clippy 零告警；`pnpm build` 通过。
+  - **未验证面**：GUI 下真实激活/撤销的端到端体验、过期许可在到期后门禁的运行时行为（逻辑有测试、无真机轮次）。
+- [ ] R3-02 国内、Google Play、企业侧载各自的隐私、权限、签名、更新与支持材料。**底稿完成（docs/channel/）；法务复核与渠道审核为外部流程。**
+  - `docs/channel/`：README（三渠道材料矩阵与门禁）、privacy-policy-draft（每条承诺对应实现证据）、permissions-data（桌面端与设备端权限逐项表）、channels（国内/Play/企业差异、更新与支持分流）。
+  - 渠道状态如实标记：签名 ❌（外部阻塞）；SBOM/NOTICE ✅（A1-08 产物）。
+- [ ] R3-03 安全审计：威胁模型、依赖漏洞、许可证、SBOM、签名、更新和数据流。**首版完成；两项假设待用户回签（见威胁模型文档）。**
+  - 威胁模型：`docs/mirrordock-threat-model.md`（7 条威胁 TM-001..007、信任边界与 Mermaid 图、重点审查路径；按方法论第 7 步降级执行——假设显式化，未阻塞产出）。
+  - 依赖漏洞：cargo-audit v0.22.2 扫描 **0 漏洞**；2 条警告（RUSTSEC-2024-0370 proc-macro-error unmaintained、RUSTSEC-2024-0429 glib unsound——均为 Linux GTK 传递依赖，记录在案）。
+  - 许可证/SBOM：Apache-2.0（与 scrcpy 同源合规）、SBOM/NOTICE 随产物（A1-08）。
+  - 签名/更新：未签名为已知外部阻塞；自动更新未实现（有意），更新链路威胁建模列为后续项。
+- [ ] R3-04 发布候选、试点、支持值守、发布/回滚决策与公开兼容性矩阵。**流程文档与矩阵底稿完成；RC 流程待下次打标演练。**
+  - `docs/release-runbook.md`：发布前门禁清单（含 cargo audit 空结果留痕要求）、RC→真机验证→正式打标→72h 值守流程、回滚触发与动作。
+  - `docs/compatibility-matrix.md`：桌面四平台与设备矩阵（只写有证据的行）、能力差异（音频/FLAG_SECURE 按系统版本）、已知限制诚实清单。
 
 ## v1 后：Android 伴侣 App
 

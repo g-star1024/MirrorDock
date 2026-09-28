@@ -73,6 +73,18 @@ type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: bo
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
 type Recording = { file_name: string; path: string; active: boolean };
+// 本地权益状态：无账户、无激活服务器，后端验签后回传。edition 只有 free/pro。
+export type EntitlementView = { edition: string; key_id: string | null; expires_at: number | null };
+export function editionLabel(edition: string | undefined | null) {
+  return edition === "pro" ? "专业版" : edition === "free" ? "免费版" : "版本未知";
+}
+export function isProEdition(edition: string | undefined | null) {
+  return edition === "pro";
+}
+export function expiryText(expiresAt: number | null) {
+  if (!expiresAt) return "永久有效";
+  return `有效期至 ${new Date(expiresAt * 1000).toLocaleDateString()}`;
+}
 // 截图结果。后端只回文件名、路径与字节数，不回传任何像素数据。
 type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
@@ -240,6 +252,12 @@ function App() {
   const [diagnosticsMessage, setDiagnosticsMessage] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<string[] | null>(null);
+  // 版本与授权：读取失败时按「版本未知」呈现，不阻断镜像主流程。
+  const [entitlement, setEntitlement] = useState<EntitlementView | null>(null);
+  const [licenseInput, setLicenseInput] = useState("");
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
+  const [licenseError, setLicenseError] = useState<string | null>(null);
   // 品牌引导：用户手动选择优先于按设备 label 自动猜测；null 表示尚未选择。
   const [guideKey, setGuideKey] = useState<string | null>(null);
   const [session, setSession] = useState<MirrorSession | null>(null);
@@ -247,6 +265,8 @@ function App() {
   const [applyingOptions, setApplyingOptions] = useState(false);
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
   const sessionActive = session?.phase === "connecting" || session?.phase === "streaming";
+  // 授权状态读取失败（null）按免费版呈现：录制开关禁用并给出激活指引。
+  const proEdition = isProEdition(entitlement?.edition);
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -313,7 +333,51 @@ function App() {
     void refreshDevices();
     void refreshTrustedDevices();
     void refreshRecentDevices();
+    void refreshEntitlement();
   }, []);
+
+  async function refreshEntitlement() {
+    try {
+      setEntitlement(await invoke<EntitlementView>("entitlement_status"));
+      setLicenseError(null);
+    } catch (error) {
+      setEntitlement(null);
+      setLicenseError(errorMessage(error, "无法读取授权状态，功能按免费版呈现。"));
+    }
+  }
+
+  // 激活离线完成：许可证只发往本地后端验签，密钥原文不会被写入任何日志。
+  async function activateLicense() {
+    setLicenseBusy(true);
+    setLicenseMessage(null);
+    setLicenseError(null);
+    try {
+      const view = await invoke<EntitlementView>("entitlement_activate", { licenseKey: licenseInput.trim() });
+      setEntitlement(view);
+      setLicenseInput("");
+      setLicenseMessage("专业版已激活：MP4 录制现已可用。授权保存在本机。");
+    } catch (error) {
+      setLicenseError(errorMessage(error, "激活失败，请检查许可证后重试。"));
+    } finally {
+      setLicenseBusy(false);
+    }
+  }
+
+  // 撤销只删除本机的授权状态文件，不影响许可证本身（可重新激活同一密钥）。
+  async function deactivateLicense() {
+    setLicenseBusy(true);
+    setLicenseMessage(null);
+    setLicenseError(null);
+    try {
+      const view = await invoke<EntitlementView>("entitlement_deactivate");
+      setEntitlement(view);
+      setLicenseMessage("已撤销本机的专业版授权。录制功能回到免费版状态。");
+    } catch (error) {
+      setLicenseError(errorMessage(error, "撤销授权失败，请重试。"));
+    } finally {
+      setLicenseBusy(false);
+    }
+  }
 
   async function refreshRecentDevices() {
     try {
@@ -729,7 +793,7 @@ function App() {
           <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
           <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
           <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
-          <label><input type="checkbox" checked={options.record} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）</label>
+          <label><input type="checkbox" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）{!proEdition && "——专业版功能，在下方「版本与授权」激活后可用"}</label>
           <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板（关闭后手机与电脑的复制内容不再自动互通）</label>
           <label><input type="checkbox" checked={options.audio} disabled={audioUnsupported} onChange={e => updateOptions({...options, audio: e.target.checked})}/> 转发手机播放的声音（Android 11+）{audioUnsupported ? "——这台手机不支持系统音频转发，已自动关闭" : ""}</label>
           <label>镜像窗口快捷键修饰键 <select value={options.shortcut_mod ?? ""} onChange={e => updateOptions({...options, shortcut_mod: e.target.value || null})}>
@@ -755,6 +819,29 @@ function App() {
           <p>MirrorDock 无法遮盖画面中的敏感内容（如消息预览）——这是镜像引擎的能力边界，我们不假装有此功能。需要隐私时：开启只读模式可避免他人通过这台电脑误操作你的手机；要隐藏内容请先在手机上打开勿扰模式，或直接结束镜像。</p>
           <p>常用镜像窗口快捷键：修饰键 + H 回到主屏幕，+ B 返回，+ S 最近任务，+ N 展开通知栏，+ P 电源键，+ O 关闭手机屏幕（镜像继续），+ 上/下箭头 调节音量，+ F 全屏窗口，+ Q 退出镜像。修饰键可在上方修改。</p>
           {applyNotice && <p className="apply-notice" role="status">{applyNotice}</p>}
+        </fieldset>
+
+        <fieldset className="session-options">
+          <legend>版本与授权</legend>
+          <p>当前版本：{editionLabel(entitlement?.edition)}{proEdition && entitlement?.key_id ? `（许可证 ${entitlement.key_id}，${expiryText(entitlement.expires_at)}）` : ""}</p>
+          {proEdition ? (
+            <>
+              <p>专业版已激活：MP4 录制可用。授权状态保存在本机，激活与使用都不需要联网账号。</p>
+              <button type="button" className="secondary-button" disabled={licenseBusy} onClick={() => void deactivateLicense()}>
+                {licenseBusy ? "正在处理…" : "撤销本机授权"}
+              </button>
+            </>
+          ) : (
+            <>
+              <label>专业版许可证 <input value={licenseInput} onChange={e => setLicenseInput(e.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" /></label>
+              <button type="button" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>
+                {licenseBusy ? "正在激活…" : "激活专业版"}
+              </button>
+              <p>免费版包含全部镜像、截图与文件传输功能；专业版解锁 MP4 录制。激活离线完成，许可证只保存在本机、不会上传，也不会写入日志。</p>
+            </>
+          )}
+          {licenseMessage && <p className="capability-pending" role="status">{licenseMessage}</p>}
+          {licenseError && <p className="diagnostic" role="alert">{licenseError}</p>}
         </fieldset>
 
         {readyDevice ? (

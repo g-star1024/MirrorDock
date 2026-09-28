@@ -2447,6 +2447,8 @@ fn start_mirroring(
     record_file_name: Option<String>,
 ) -> Result<(), AppError> {
     let options = options.unwrap_or_default();
+    // Pro 门控先于一切副作用：免费版请求录制时，在触碰设备之前就给出明确引导。
+    ensure_edition_allows(&app, &options)?;
     // 先准备录制路径：目录不可写或文件名非法时，在占用会话槽位之前就失败。
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = start_mirroring_with(&runtimes, &sessions, serial.clone(), options, record_path);
@@ -2722,6 +2724,8 @@ fn update_session_options(
     record_file_name: Option<String>,
 ) -> Result<SessionUpdate, AppError> {
     // 同样是「先校验、再触碰运行中的会话」：路径不可用时不打断正在进行的镜像。
+    // Pro 门控同样前置：免费版把录制重新打开时直接拒绝，不打断当前会话。
+    ensure_edition_allows(&app, &options)?;
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = apply_session_options_with(&runtimes, &sessions, options, record_path);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
@@ -3024,6 +3028,402 @@ fn export_diagnostics_into(
     })
 }
 
+// ===========================================================================
+// R3-01 免费/Pro 授权（本地权益，无账户、无激活服务器）
+//
+// 设计决策（2026-09-28 夜间轮次，自主决策并记录）：
+// - 免费版保留全部核心连接体验（USB/无线镜像、截图、文件传输、音频转发、
+//   会话设置、诊断）；Pro 门控仅覆盖 MP4 录制——付费点清晰，且不削弱安全与
+//   基础可用性。特别地，音频转发**不**做付费门控：SessionOptions.audio 默认
+//   开启，若纳入门控会让免费版用户的默认启动直接报错，违背「开箱即用」。
+// - 许可证 = ed25519 签名的 JSON 载荷（product/key_id/edition/expires_at），
+//   公钥编译进二进制；私钥存于仓库外的内部文档目录，绝不入 Git、绝不在
+//   日志/错误/诊断中回显（激活命令把原始密钥串声明进诊断脱敏列表）。
+// - 权益状态 = 应用数据目录下的 entitlement.json（存许可证原文，加载时重新
+//   验签；任何损坏/过期/验签失败一律回退免费版，绝不因授权问题阻断镜像基础功能）。
+// ===========================================================================
+
+/// 许可证验证公钥（ed25519）。对应私钥见内部文档目录的签发说明。
+/// 由 examples/license_keygen 生成（/dev/urandom，含签名自检）。
+const LICENSE_VERIFYING_KEY: [u8; 32] = [
+    0x0a, 0x56, 0xf0, 0x4d, 0xbd, 0x86, 0x11, 0xbf, 0xfe, 0xae, 0x49, 0x91, 0xc4, 0x0b, 0xd6, 0x2f,
+    0x4e, 0x99, 0x86, 0x23, 0x4a, 0x8e, 0x81, 0x6e, 0x17, 0x6a, 0xdc, 0x0b, 0xcd, 0xa2, 0x73, 0x17,
+];
+
+pub mod licensing {
+    use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+    use serde::{Deserialize, Serialize};
+
+    pub const LICENSE_PREFIX: &str = "MD1";
+    pub const ENTITLEMENT_FILE: &str = "entitlement.json";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Edition {
+        Free,
+        Pro,
+    }
+
+    impl Edition {
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Edition::Free => "free",
+                Edition::Pro => "pro",
+            }
+        }
+    }
+
+    /// 许可证载荷。字段顺序即序列化顺序，是验签输入的一部分，不可调整。
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct LicensePayload {
+        pub product: String,
+        pub key_id: String,
+        pub edition: String,
+        /// Unix 秒；None 表示永久。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub expires_at: Option<u64>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum LicenseError {
+        Malformed,
+        BadSignature,
+        WrongProduct,
+        Expired,
+    }
+
+    // ---- Base32（RFC 4648，无填充）。自实现以避免引入额外依赖。 ----
+
+    const B32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+    pub fn base32_encode(data: &[u8]) -> String {
+        let mut out = String::with_capacity(data.len().div_ceil(5) * 8);
+        for chunk in data.chunks(5) {
+            let mut buf = [0u8; 5];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            let bits = u64::from_be_bytes([
+                0, buf[0], buf[1], buf[2], buf[3], buf[4], 0, 0,
+            ]) >> 16;
+            let chars = match chunk.len() {
+                5 => 8,
+                4 => 7,
+                3 => 5,
+                2 => 4,
+                _ => 2,
+            };
+            for i in 0..chars {
+                let idx = ((bits >> (35 - i * 5)) & 0x1f) as usize;
+                out.push(B32_ALPHABET[idx] as char);
+            }
+        }
+        out
+    }
+
+    pub fn base32_decode(text: &str) -> Option<Vec<u8>> {
+        let mut bytes = Vec::new();
+        let mut bits: u32 = 0;
+        let mut acc: u32 = 0;
+        for ch in text.chars() {
+            let v = B32_ALPHABET
+                .iter()
+                .position(|&c| c as char == ch.to_ascii_uppercase())? as u32;
+            acc = (acc << 5) | v;
+            bits += 5;
+            if bits >= 8 {
+                bits -= 8;
+                bytes.push(((acc >> bits) & 0xff) as u8);
+            }
+        }
+        Some(bytes)
+    }
+
+    /// 生成许可证字符串：`MD1` + base32(2字节载荷长度 + 载荷 + 64字节签名)，
+    /// 以 6 字符分组、`-` 连接便于人工抄写；解析时忽略大小写与分隔符。
+    pub fn encode_license(payload: &LicensePayload, signing: &ed25519_dalek::SigningKey) -> String {
+        let payload_json =
+            serde_json::to_vec(payload).expect("license payload serializes unconditionally");
+        let sig = signing.sign(&payload_json).to_bytes();
+        assert!(payload_json.len() <= u16::MAX as usize, "payload too long");
+        let mut raw = Vec::with_capacity(2 + payload_json.len() + 64);
+        raw.extend_from_slice(&(payload_json.len() as u16).to_be_bytes());
+        raw.extend_from_slice(&payload_json);
+        raw.extend_from_slice(&sig);
+        let body = base32_encode(&raw);
+        // 前缀后每 6 个字符插一个 '-'（尾部不足 6 个则原样）。
+        let mut grouped = String::with_capacity(body.len() + body.len() / 6);
+        for (i, ch) in body.chars().enumerate() {
+            if i > 0 && i % 6 == 0 {
+                grouped.push('-');
+            }
+            grouped.push(ch);
+        }
+        format!("{LICENSE_PREFIX}-{grouped}")
+    }
+
+    /// 解析并验签。`now` 为 Unix 秒（由调用方注入以便测试过期逻辑）。
+    pub fn verify_license(
+        license: &str,
+        verifying: &VerifyingKey,
+        now: u64,
+    ) -> Result<LicensePayload, LicenseError> {
+        let compact: String = license
+            .chars()
+            .filter(|c| *c != '-' && *c != ' ')
+            .collect::<String>()
+            .to_ascii_uppercase();
+        let body = compact
+            .strip_prefix(LICENSE_PREFIX)
+            .ok_or(LicenseError::Malformed)?;
+        let raw = base32_decode(body).ok_or(LicenseError::Malformed)?;
+        if raw.len() < 2 + 64 {
+            return Err(LicenseError::Malformed);
+        }
+        let payload_len = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+        if raw.len() != 2 + payload_len + 64 {
+            return Err(LicenseError::Malformed);
+        }
+        let payload_json = &raw[2..2 + payload_len];
+        let sig = Signature::from_slice(&raw[2 + payload_len..])
+            .map_err(|_| LicenseError::Malformed)?;
+        verifying
+            .verify(payload_json, &sig)
+            .map_err(|_| LicenseError::BadSignature)?;
+        let payload: LicensePayload =
+            serde_json::from_slice(payload_json).map_err(|_| LicenseError::Malformed)?;
+        if payload.product != "mirrordock" {
+            return Err(LicenseError::WrongProduct);
+        }
+        if payload.expires_at.is_some_and(|at| at <= now) {
+            return Err(LicenseError::Expired);
+        }
+        Ok(payload)
+    }
+
+    /// 当前版本判定：无许可证文件 = 免费版；文件存在则重新验签，
+    /// 任何失败（损坏/篡改/过期/产品不符）都回退免费版且**不报错**。
+    pub fn current_edition(dir: &std::path::Path, now: u64) -> Edition {
+        let verifying = match VerifyingKey::from_bytes(&super::LICENSE_VERIFYING_KEY) {
+            Ok(key) => key,
+            Err(_) => return Edition::Free,
+        };
+        match std::fs::read_to_string(dir.join(ENTITLEMENT_FILE)) {
+            Ok(text) => match serde_json::from_str::<StoredLicense>(&text) {
+                Ok(stored) => match verify_license(&stored.license, &verifying, now) {
+                    Ok(payload) if payload.edition == "pro" => Edition::Pro,
+                    _ => Edition::Free,
+                },
+                Err(_) => Edition::Free,
+            },
+            Err(_) => Edition::Free,
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct StoredLicense {
+        schema: u8,
+        license: String,
+        activated_at: u64,
+    }
+
+    /// 激活：验签通过才落盘。落盘失败是真实错误（不静默），已验签的许可仍在手。
+    pub fn activate_into(
+        dir: &std::path::Path,
+        license: &str,
+        now: u64,
+    ) -> Result<LicensePayload, LicenseError> {
+        let verifying = VerifyingKey::from_bytes(&super::LICENSE_VERIFYING_KEY)
+            .map_err(|_| LicenseError::Malformed)?;
+        let payload = verify_license(license, &verifying, now)?;
+        if payload.edition != "pro" {
+            return Err(LicenseError::WrongProduct);
+        }
+        let stored = StoredLicense {
+            schema: 1,
+            license: license.trim().to_owned(),
+            activated_at: now,
+        };
+        std::fs::create_dir_all(dir)
+            .and_then(|_| {
+                std::fs::write(
+                    dir.join(ENTITLEMENT_FILE),
+                    serde_json::to_vec(&stored).expect("stored serializes"),
+                )
+            })
+            .map_err(|_| LicenseError::Malformed)?;
+        Ok(payload)
+    }
+
+    pub fn deactivate_in(dir: &std::path::Path) -> Result<(), std::io::Error> {
+        match std::fs::remove_file(dir.join(ENTITLEMENT_FILE)) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Pro 功能门控：MP4 录制需要 Pro 版。免费版其余功能（含音频转发）
+    /// 全部放行，保证默认会话开箱即用。
+    pub(crate) fn ensure_pro_features(
+        edition: Edition,
+        options: &super::SessionOptions,
+    ) -> Result<(), super::AppError> {
+        if edition == Edition::Pro || !options.record {
+            return Ok(());
+        }
+        Err(super::AppError::new(
+            "pro_required",
+            "MP4 录制是专业版功能，当前为免费版。",
+            "在「版本与授权」中激活专业版许可证，或关闭录制后重试。",
+        ))
+    }
+}
+
+use licensing::Edition;
+
+fn entitlement_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
+    app.path().app_data_dir().map_err(|_| {
+        AppError::new(
+            "entitlement_io_failed",
+            "无法定位应用数据目录，授权状态不可用。",
+            "请重启应用再试；若仍失败请联系支持人员。",
+        )
+    })
+}
+
+fn entitlement_view(
+    edition: Edition,
+    payload: Option<&licensing::LicensePayload>,
+) -> EntitlementView {
+    EntitlementView {
+        edition: edition.as_str().to_owned(),
+        key_id: payload.map(|p| p.key_id.clone()),
+        expires_at: payload.and_then(|p| p.expires_at),
+    }
+}
+
+#[derive(Serialize)]
+struct EntitlementView {
+    edition: String,
+    key_id: Option<String>,
+    expires_at: Option<u64>,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn embedded_verifying_key() -> Result<ed25519_dalek::VerifyingKey, AppError> {
+    ed25519_dalek::VerifyingKey::from_bytes(&LICENSE_VERIFYING_KEY).map_err(|_| {
+        AppError::new("license_malformed", "许可证公钥异常。", "请联系支持人员。")
+    })
+}
+
+fn stored_license_payload(dir: &std::path::Path) -> Result<Option<licensing::LicensePayload>, AppError> {
+    let text = std::fs::read_to_string(dir.join(licensing::ENTITLEMENT_FILE)).map_err(|_| {
+        AppError::new(
+            "entitlement_io_failed",
+            "授权状态文件不可读。",
+            "重新激活许可证即可修复。",
+        )
+    })?;
+    let stored: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+        AppError::new(
+            "entitlement_io_failed",
+            "授权状态文件损坏。",
+            "重新激活许可证即可修复。",
+        )
+    })?;
+    let license = stored["license"].as_str().unwrap_or_default();
+    let verifying = embedded_verifying_key()?;
+    Ok(licensing::verify_license(license, &verifying, unix_now()).ok())
+}
+
+#[tauri::command]
+fn entitlement_status(app: AppHandle) -> Result<EntitlementView, AppError> {
+    let dir = entitlement_dir(&app)?;
+    let edition = licensing::current_edition(&dir, unix_now());
+    let payload = if edition == Edition::Pro {
+        stored_license_payload(&dir)?
+    } else {
+        None
+    };
+    Ok(entitlement_view(edition, payload.as_ref()))
+}
+
+#[tauri::command]
+fn entitlement_activate(
+    app: AppHandle,
+    log: State<DiagnosticsLog>,
+    license_key: String,
+) -> Result<EntitlementView, AppError> {
+    let result = entitlement_activate_impl(&app, &license_key);
+    // 原始密钥串声明进机密列表：激活失败的诊断记录绝不回显用户输入的密钥。
+    log.record_outcome("license_activate", result.as_ref().err(), &[license_key.as_str()]);
+    result
+}
+
+fn entitlement_activate_impl(
+    app: &AppHandle,
+    license_key: &str,
+) -> Result<EntitlementView, AppError> {
+    let dir = entitlement_dir(app)?;
+    let trimmed = license_key.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new(
+            "license_malformed",
+            "许可证为空。",
+            "请输入完整的许可证，格式形如 MD1-XXXXXX-…。",
+        ));
+    }
+    let now = unix_now();
+    let payload = licensing::activate_into(&dir, trimmed, now).map_err(|err| match err {
+        licensing::LicenseError::Malformed => AppError::new(
+            "license_malformed",
+            "许可证格式无法识别。",
+            "请检查是否复制完整（以 MD1- 开头），不要混入多余空行。",
+        ),
+        licensing::LicenseError::BadSignature => AppError::new(
+            "license_invalid",
+            "许可证签名无效。",
+            "请确认许可证来自官方渠道，必要时联系支持人员核对。",
+        ),
+        licensing::LicenseError::WrongProduct => AppError::new(
+            "license_invalid",
+            "这不是有效的 MirrorDock 专业版许可证。",
+            "请核对许可证是否为 MirrorDock 专业版。",
+        ),
+        licensing::LicenseError::Expired => AppError::new(
+            "license_expired",
+            "许可证已过期。",
+            "请续订专业版后重新激活，或联系支持人员。",
+        ),
+    })?;
+    Ok(entitlement_view(Edition::Pro, Some(&payload)))
+}
+
+#[tauri::command]
+fn entitlement_deactivate(app: AppHandle) -> Result<EntitlementView, AppError> {
+    let dir = entitlement_dir(&app)?;
+    licensing::deactivate_in(&dir).map_err(|_| {
+        AppError::new(
+            "entitlement_io_failed",
+            "撤销授权失败。",
+            "请检查应用数据目录权限后重试。",
+        )
+    })?;
+    Ok(entitlement_view(Edition::Free, None))
+}
+
+/// 启动镜像与会话更新共用的 Pro 门控：录制在免费版下拒绝，
+/// 其余功能（含全部安全相关能力与默认体验）不受授权状态影响。
+fn ensure_edition_allows(app: &AppHandle, options: &SessionOptions) -> Result<(), AppError> {
+    let edition = licensing::current_edition(&entitlement_dir(app)?, unix_now());
+    licensing::ensure_pro_features(edition, options)
+}
+
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。优雅结束让录制文件有机会收尾。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
@@ -3064,7 +3464,10 @@ pub fn run() {
             list_trusted_wireless_devices,
             forget_trusted_wireless_device,
             diagnostics_preview,
-            export_diagnostics
+            export_diagnostics,
+            entitlement_status,
+            entitlement_activate,
+            entitlement_deactivate
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -5628,6 +6031,205 @@ mod tests {
         assert!(written.contains("[已脱敏]"));
         assert_eq!(receipt.bytes, written.len() as u64);
 
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // ---- R3-01 授权（licensing 模块） ----
+
+    /// 测试专用密钥对：与生产种子完全独立，只用于签名行为的单元验证。
+    fn test_signing_key() -> ed25519_dalek::SigningKey {
+        let mut seed = [0u8; 32];
+        for (i, byte) in seed.iter_mut().enumerate() {
+            *byte = (i as u8) * 7 + 3;
+        }
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+    }
+
+    fn test_verifying_key() -> ed25519_dalek::VerifyingKey {
+        test_signing_key().verifying_key()
+    }
+
+    fn test_license(key_id: &str, expires_at: Option<u64>) -> String {
+        let signing = test_signing_key();
+        let payload = licensing::LicensePayload {
+            product: "mirrordock".to_owned(),
+            key_id: key_id.to_owned(),
+            edition: "pro".to_owned(),
+            expires_at,
+        };
+        licensing::encode_license(&payload, &signing)
+    }
+
+    #[test]
+    fn base32_roundtrip_across_lengths() {
+        for len in [0usize, 1, 4, 5, 6, 63, 64, 100] {
+            let data: Vec<u8> = (0..len as u8).map(|b| b.wrapping_mul(31).wrapping_add(5)).collect();
+            let encoded = licensing::base32_encode(&data);
+            let decoded = licensing::base32_decode(&encoded).unwrap();
+            assert_eq!(decoded, data, "base32 往返失败（长度 {len}）");
+        }
+        // 无填充 canonical base32：5 字节 = 8 字符。
+        assert_eq!(licensing::base32_encode(&[0xff; 5]).len(), 8);
+        assert_eq!(licensing::base32_encode(&[0xff; 1]).len(), 2);
+    }
+
+    #[test]
+    fn embedded_verifying_key_matches_rfc8032_conventions() {
+        // RFC 8032 TEST 1 公钥：隔离「密钥字节损坏」与「dalek 用法错误」。
+        let rfc8032_pub: [u8; 32] = [
+            0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64,
+            0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68,
+            0xf7, 0x07, 0x51, 0x1a,
+        ];
+        assert!(ed25519_dalek::VerifyingKey::from_bytes(&rfc8032_pub).is_ok());
+        assert!(ed25519_dalek::VerifyingKey::from_bytes(&LICENSE_VERIFYING_KEY).is_ok());
+    }
+
+    #[test]
+    fn license_roundtrip_and_grouping() {
+        let now = 1_700_000_000u64;
+        let license = test_license("test-001", Some(now + 365 * 86_400));
+        assert!(license.starts_with("MD1-"));
+        assert!(license.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        let payload = licensing::verify_license(&license, &test_verifying_key(), now).unwrap();
+        assert_eq!(payload.key_id, "test-001");
+        assert_eq!(payload.edition, "pro");
+        assert_eq!(payload.product, "mirrordock");
+        // 大小写与空格/分隔符容错。
+        let spaced = license.to_lowercase().replace('-', " ");
+        assert!(licensing::verify_license(&spaced, &test_verifying_key(), now).is_ok());
+    }
+
+    #[test]
+    fn license_rejects_tampered_payload() {
+        let now = 1_700_000_000u64;
+        let mut license = test_license("test-001", Some(now + 365 * 86_400));
+        let bytes: Vec<char> = license.chars().collect();
+        let idx = bytes.iter().position(|c| c.is_ascii_alphabetic()).unwrap();
+        license = bytes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                if i == idx {
+                    if *c == 'A' { 'B' } else { 'A' }
+                } else {
+                    *c
+                }
+            })
+            .collect();
+        let err = licensing::verify_license(&license, &test_verifying_key(), now).unwrap_err();
+        assert!(
+            matches!(err, licensing::LicenseError::BadSignature | licensing::LicenseError::Malformed),
+            "篡改应被拒绝，实际 {err:?}"
+        );
+    }
+
+    #[test]
+    fn license_rejects_expired_and_foreign_product() {
+        let now = 1_700_000_000u64;
+        let expired = test_license("test-001", Some(now - 1));
+        assert_eq!(
+            licensing::verify_license(&expired, &test_verifying_key(), now),
+            Err(licensing::LicenseError::Expired)
+        );
+        let signing = test_signing_key();
+        let foreign = licensing::encode_license(
+            &licensing::LicensePayload {
+                product: "other-app".to_owned(),
+                key_id: "x".to_owned(),
+                edition: "pro".to_owned(),
+                expires_at: None,
+            },
+            &signing,
+        );
+        assert_eq!(
+            licensing::verify_license(&foreign, &test_verifying_key(), now),
+            Err(licensing::LicenseError::WrongProduct)
+        );
+        assert_eq!(
+            licensing::verify_license("XX1-AAAA", &test_verifying_key(), now),
+            Err(licensing::LicenseError::Malformed)
+        );
+    }
+
+    #[test]
+    fn current_edition_falls_back_to_free_on_missing_or_corrupt_store() {
+        let directory = scratch_dir("entitlement-fallback");
+        assert_eq!(licensing::current_edition(&directory, 0), Edition::Free);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join(licensing::ENTITLEMENT_FILE), "not json").unwrap();
+        assert_eq!(licensing::current_edition(&directory, 0), Edition::Free);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn pro_gate_blocks_recording_on_free() {
+        let mut options = SessionOptions::default();
+        // 默认会话（audio 开、录制关）对免费版必须开箱即用。
+        assert!(licensing::ensure_pro_features(Edition::Free, &options).is_ok());
+
+        options.record = true;
+        let err = licensing::ensure_pro_features(Edition::Free, &options).unwrap_err();
+        assert_eq!(err.code, "pro_required");
+
+        options.record = true;
+        options.audio = false;
+        assert!(licensing::ensure_pro_features(Edition::Pro, &options).is_ok());
+    }
+
+    #[test]
+    fn activation_rejects_foreign_signed_license_before_writing_store() {
+        let directory = scratch_dir("entitlement-activate");
+        let now = 1_700_000_000u64;
+        let license = test_license("test-001", Some(now + 365 * 86_400));
+        // activate_into 内部使用编译进二进制的公钥，测试密钥签的许可应验签失败且不落盘。
+        let err = licensing::activate_into(&directory, &license, now).unwrap_err();
+        assert_eq!(err, licensing::LicenseError::BadSignature);
+        assert!(!directory.join(licensing::ENTITLEMENT_FILE).exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn diagnostics_never_contain_license_key() {
+        let log = DiagnosticsLog::default();
+        let raw_key = "MD1-ABCDEF-GHIJKL-MNOPQR-STUVWX-YZ2345-6789AB";
+        let error = AppError::new(
+            "license_invalid",
+            "许可证签名无效。",
+            "请确认许可证来自官方渠道。",
+        );
+        log.record_outcome("license_activate", Some(&error), &[raw_key]);
+        for event in log.snapshot() {
+            assert!(!event.detail.contains(raw_key), "诊断不得回显许可证原文");
+        }
+    }
+
+    /// 真实密钥端到端：仅在本地设置了 MIRRORDOCK_LICENSE_SEED 时运行
+    /// （CI 与无种子环境自动跳过），验证「example 签发 → activate_into → Pro」全链路。
+    #[test]
+    fn real_key_end_to_end_when_seed_present() {
+        let Ok(seed_hex) = std::env::var("MIRRORDOCK_LICENSE_SEED") else {
+            eprintln!("跳过：未设置 MIRRORDOCK_LICENSE_SEED");
+            return;
+        };
+        let mut seed = [0u8; 32];
+        for (i, byte) in seed.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&seed_hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let now = 1_700_000_000u64;
+        let license = licensing::encode_license(
+            &licensing::LicensePayload {
+                product: "mirrordock".to_owned(),
+                key_id: "e2e".to_owned(),
+                edition: "pro".to_owned(),
+                expires_at: Some(now + 86_400),
+            },
+            &signing,
+        );
+        let directory = scratch_dir("entitlement-e2e");
+        licensing::activate_into(&directory, &license, now).unwrap();
+        assert_eq!(licensing::current_edition(&directory, now), Edition::Pro);
         let _ = fs::remove_dir_all(&directory);
     }
 }
