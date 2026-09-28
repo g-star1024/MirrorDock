@@ -126,12 +126,52 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      # 产物默认未签名：macOS 首次打开会提示来自未识别开发者，Windows 会触发
-      # SmartScreen。正式分发需要另行配置签名密钥（见仓库 README 与产品规划的
-      # 发行条款）。本流水线也不捆绑 scrcpy 运行时——那属于 A1-08 的范围，
-      # 当前产物在运行时需要本机已具备 scrcpy（或设置 MIRRORDOCK_SCRCPY_PATH）。
+      # A1-08：随包分发 scrcpy v4.1 官方运行时（Windows / macOS；官方包内
+      # 自带 adb）。URL 与 SHA-256 固定写死，下载后必须校验，不符即终止——
+      # 防止供应链被替换。Linux 无官方包，运行时回退到用户 PATH（见
+      # THIRD_PARTY_NOTICES.md）。
+      - name: 下载并校验 scrcpy 运行时（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-win64-v4.1.zip" -OutFile scrcpy.download
+          $hash = (Get-FileHash scrcpy.download -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "5b12172b3264b2889f4583ee64752ce832e29bc8b1089dca81093459697165db") { throw "scrcpy SHA-256 mismatch: $hash" }
+          Expand-Archive scrcpy.download -DestinationPath tmp-scrcpy
+          New-Item -ItemType Directory -Force src-tauri/resources/scrcpy | Out-Null
+          Move-Item tmp-scrcpy/scrcpy-win64-v4.1/* src-tauri/resources/scrcpy/
+
+      - name: 下载并校验 scrcpy 运行时（macOS）
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then
+            NAME=scrcpy-macos-aarch64-v4.1.tar.gz
+            SHA=20fd47c9014dd5e0fa77091f3cb7adbda8445a360c4584aeaa0150b5b3988ff3
+          else
+            NAME=scrcpy-macos-x86_64-v4.1.tar.gz
+            SHA=ee2a7223bc8dbdc4f482db1134bcf441178dafb833492b71ca4c22090c58ce72
+          fi
+          curl -sL -o scrcpy.download "https://github.com/Genymobile/scrcpy/releases/download/v4.1/$NAME"
+          echo "$SHA  scrcpy.download" | shasum -a 256 -c -
+          mkdir -p src-tauri/resources/scrcpy tmp-scrcpy
+          tar -xzf scrcpy.download -C tmp-scrcpy
+          mv "tmp-scrcpy/${NAME%.tar.gz}"/* src-tauri/resources/scrcpy/
+
       - name: 构建安装包
         run: pnpm tauri build --target ${{ matrix.target }}
+
+      # A1-08：产物哈希清单 + 依赖清单（SBOM）随产物一起发布，
+      # 供下载者核对与审计。
+      - name: 生成构建哈希清单与依赖清单（SBOM）
+        shell: bash
+        run: |
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          HASH_TOOL="$(command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")"
+          find "$BUNDLE" -type f \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.msi" -o -name "*.exe" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) -exec $HASH_TOOL {} \; | tee "SHA256SUMS-${{ matrix.label }}.txt"
+          cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 > "sbom-cargo-${{ matrix.label }}.json"
+          pnpm list --prod --json > "sbom-npm-${{ matrix.label }}.json"
+          cat "SHA256SUMS-${{ matrix.label }}.txt"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -147,3 +187,13 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+
+      - name: 上传哈希与 SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: MirrorDock-${{ matrix.label }}-meta
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            SHA256SUMS-*.txt
+            sbom-*.json

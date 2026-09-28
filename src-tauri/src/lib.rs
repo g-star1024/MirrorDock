@@ -452,7 +452,7 @@ struct SystemAdbRuntime;
 impl SystemAdbRuntime {
     /// 固定参数直接调用 `adb`，不使用 shell，也不做字符串拼接。
     fn run(args: &[&str]) -> Result<(), std::io::Error> {
-        let output = Command::new("adb").args(args).output()?;
+        let output = Command::new(adb_binary()).args(args).output()?;
         if output.status.success() {
             Ok(())
         } else {
@@ -462,7 +462,7 @@ impl SystemAdbRuntime {
 
     /// 读取 `adb` 的 stdout。同样使用固定参数直接调用，不做任何 shell 拼接或插值。
     fn capture(args: &[&str]) -> Result<String, std::io::Error> {
-        let output = Command::new("adb").args(args).output()?;
+        let output = Command::new(adb_binary()).args(args).output()?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
@@ -473,7 +473,7 @@ impl SystemAdbRuntime {
 
 impl AdbRuntime for SystemAdbRuntime {
     fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error> {
-        let output = Command::new("adb").args(["devices", "-l"]).output()?;
+        let output = Command::new(adb_binary()).args(["devices", "-l"]).output()?;
         if output.status.success() {
             Ok(parse_adb_devices(&String::from_utf8_lossy(&output.stdout)))
         } else {
@@ -483,7 +483,7 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn device_properties(&self, serial: &str) -> Result<String, std::io::Error> {
         // 固定参数直接调用：serial 作为单个 argv 传入，不做任何 shell 拼接或插值。
-        let output = Command::new("adb")
+        let output = Command::new(adb_binary())
             .args(["-s", serial, "shell", "getprop"])
             .output()?;
         if output.status.success() {
@@ -510,7 +510,7 @@ impl AdbRuntime for SystemAdbRuntime {
         // 用 `exec-out` 而不是 `shell`：后者会把 stdout 当作文本流，在 Windows 上
         // 可能把 \n 改写成 \r\n，从而破坏 PNG 二进制。
         // 固定参数直接调用：serial 作为单个 argv 传入，不做任何 shell 拼接或插值。
-        let output = Command::new("adb")
+        let output = Command::new(adb_binary())
             .args(["-s", serial, "exec-out", "screencap", "-p"])
             .output()?;
         if !output.status.success() {
@@ -536,7 +536,7 @@ impl AdbRuntime for SystemAdbRuntime {
     ) -> Result<String, std::io::Error> {
         // 本机路径与设备路径都作为单个 argv 传入：不做 shell 拼接或插值，文件名里
         // 带空格也安全。
-        let output = Command::new("adb")
+        let output = Command::new(adb_binary())
             .args(["-s", serial, "push"])
             .arg(local)
             .arg(remote_dir)
@@ -554,7 +554,7 @@ impl AdbRuntime for SystemAdbRuntime {
         remote_path: &str,
         local: &Path,
     ) -> Result<String, std::io::Error> {
-        let output = Command::new("adb")
+        let output = Command::new(adb_binary())
             .args(["-s", serial, "pull"])
             .arg(remote_path)
             .arg(local)
@@ -1867,13 +1867,26 @@ fn remove_recording_file(
 // scrcpy 运行时定位与解析
 // ---------------------------------------------------------------------------
 
-fn select_scrcpy_binary(explicit_path: Option<PathBuf>, development_path: &Path) -> PathBuf {
+fn select_scrcpy_binary(
+    explicit_path: Option<PathBuf>,
+    development_path: &Path,
+    exe_dir: Option<&Path>,
+) -> PathBuf {
     if let Some(path) = explicit_path.filter(|path| path.is_file()) {
         return path;
     }
 
     if cfg!(debug_assertions) && development_path.is_file() {
         return development_path.to_path_buf();
+    }
+
+    // 发行模式优先使用随包分发的 scrcpy（A1-08），找不到再退回 PATH。
+    if let Some(exe_dir) = exe_dir {
+        let binary = if cfg!(windows) { "scrcpy.exe" } else { "scrcpy" };
+        if let Some(found) = bundled_binary(&bundled_runtime_dir_candidates(exe_dir), "scrcpy", binary)
+        {
+            return found;
+        }
     }
 
     PathBuf::from("scrcpy")
@@ -1883,7 +1896,63 @@ fn scrcpy_binary() -> PathBuf {
     let explicit_path = std::env::var_os("MIRRORDOCK_SCRCPY_PATH").map(PathBuf::from);
     let development_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../.tools/scrcpy/macos-x86_64/scrcpy");
-    select_scrcpy_binary(explicit_path, &development_path)
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    select_scrcpy_binary(explicit_path, &development_path, exe_dir.as_deref())
+}
+
+/// Tauri 把 `bundle.resources` 按相对路径结构放进资源目录，位置因平台而异：
+/// Windows / Linux 就在可执行文件旁，macOS 在 `Contents/Resources` 下，
+/// deb 在 `/usr/lib/<identifier>`。这里列出所有候选资源根，按顺序探测。
+fn bundled_runtime_dir_candidates(exe_dir: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![exe_dir.join("resources")];
+    if let Some(parent) = exe_dir.parent() {
+        candidates.push(parent.join("Resources").join("resources"));
+        candidates.push(parent.join("Resources").join("_up_").join("resources"));
+        candidates.push(parent.join("lib").join("com.mirrordock.desktop").join("resources"));
+    }
+    candidates
+}
+
+/// 在候选资源根下查找 `<sub>/<binary>`，返回第一个真实存在的文件。
+fn bundled_binary(resource_roots: &[PathBuf], sub: &str, binary: &str) -> Option<PathBuf> {
+    resource_roots
+        .iter()
+        .map(|root| root.join(sub).join(binary))
+        .find(|path| path.is_file())
+}
+
+fn adb_binary() -> PathBuf {
+    let explicit_path = std::env::var_os("MIRRORDOCK_ADB").map(PathBuf::from);
+    let development_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.tools/scrcpy/adb");
+    if let Some(path) = explicit_path.filter(|path| path.is_file()) {
+        return path;
+    }
+    if cfg!(debug_assertions) && development_path.is_file() {
+        return development_path.to_path_buf();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let roots = bundled_runtime_dir_candidates(exe_dir);
+            // Windows 的 adb.exe 随 scrcpy 官方包分发；macOS / Linux 用 platform-tools。
+            let relative: &[&str] = if cfg!(windows) {
+                &["scrcpy/adb.exe", "platform-tools/adb.exe"]
+            } else {
+                &["platform-tools/adb", "scrcpy/adb"]
+            };
+            for name in relative {
+                if let Some(found) = roots
+                    .iter()
+                    .map(|root| root.join(name))
+                    .find(|path| path.is_file())
+                {
+                    return found;
+                }
+            }
+        }
+    }
+    PathBuf::from("adb")
 }
 
 fn is_scrcpy_available() -> bool {
@@ -3209,8 +3278,58 @@ mod tests {
         let development = Path::new(env!("CARGO_MANIFEST_DIR")).join("missing-scrcpy");
 
         assert_eq!(
-            select_scrcpy_binary(Some(explicit.clone()), &development),
+            select_scrcpy_binary(Some(explicit.clone()), &development, None),
             explicit
+        );
+    }
+
+    #[test]
+    fn a_bundled_runtime_is_preferred_over_path_in_release_mode() {
+        // 模拟发行包布局：<root>/MirrorDock 旁是 <root>/resources/scrcpy/scrcpy。
+        let layout = scratch_dir("bundled-runtime");
+        let res = layout.join("resources").join("scrcpy");
+        fs::create_dir_all(&res).unwrap();
+        fs::write(res.join("scrcpy"), "#!/bin/sh\n").unwrap();
+
+        let found = select_scrcpy_binary(None, Path::new("/nonexistent"), Some(&layout));
+        assert_eq!(
+            found,
+            res.join("scrcpy"),
+            "发行模式必须先找随包运行时，而不是指望用户 PATH 里有 scrcpy"
+        );
+    }
+
+    #[test]
+    fn missing_explicit_and_bundled_runtimes_fall_back_to_path() {
+        let empty = scratch_dir("no-bundled-runtime");
+        fs::create_dir_all(&empty).unwrap();
+        let found = select_scrcpy_binary(None, Path::new("/nonexistent"), Some(&empty));
+        assert_eq!(found, PathBuf::from("scrcpy"), "都找不到时才退回 PATH");
+    }
+
+    #[test]
+    fn bundled_adb_prefers_the_platform_specific_location() {
+        let layout = scratch_dir("bundled-adb");
+        // macOS 布局：platform-tools 放在 Contents/Resources/resources 下。
+        let res = layout
+            .join("MirrorDock.app")
+            .join("Contents")
+            .join("Resources")
+            .join("resources");
+        let tools = res.join("platform-tools");
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("adb"), "#!/bin/sh\n").unwrap();
+
+        let exe_dir = layout.join("MirrorDock.app").join("Contents").join("MacOS");
+        let roots = bundled_runtime_dir_candidates(&exe_dir);
+        let found = roots
+            .iter()
+            .map(|root| root.join("platform-tools/adb"))
+            .find(|path| path.is_file());
+        assert_eq!(
+            found,
+            Some(tools.join("adb")),
+            "macOS 的 adb 应在应用资源目录的 platform-tools 下找到，实际候选：{roots:?}"
         );
     }
 

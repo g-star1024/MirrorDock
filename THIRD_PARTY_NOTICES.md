@@ -2,9 +2,19 @@
 
 ## scrcpy
 
-- **用途：** MirrorDock POC 使用本机已安装的 `scrcpy` 进程启动已授权 Android 设备的镜像窗口。当前采用进程调用，不嵌入、修改或分发其源代码/二进制。
+- **用途：** MirrorDock 使用 `scrcpy` 进程启动已授权 Android 设备的镜像窗口。以固定 `--serial <serial>` 参数直接执行，不使用 shell，不执行设备或网络提供的内容。
 - **上游：** [Genymobile/scrcpy](https://github.com/Genymobile/scrcpy)
-- **开发基线：** v4.1；macOS x86_64 官方静态包 SHA-256 为 `ee2a7223bc8dbdc4f482db1134bcf441178dafb833492b71ca4c22090c58ce72`。下载后必须在解包前校验。
-- **许可证：** Apache License 2.0。
-- **运行时约束：** 开发模式只从经校验的 `.tools/scrcpy` 或显式 `MIRRORDOCK_SCRCPY_PATH` 查找；发行模式不得依赖开发目录。以固定 `--serial <serial>` 参数直接执行，不使用 shell，不执行设备或网络提供的内容。
-- **发布前要求：** 固定并记录分发版本与哈希，将完整 Apache-2.0 许可证、适用 NOTICE 和 SBOM 随每个渠道发行物交付，并在升级后重新验证镜像、输入、音频与许可证义务。
+- **开发基线：** v4.1（固定）。**Windows 与 macOS 安装包随包分发该版本**；Linux 无官方预编译包，Linux 用户使用发行版提供的 scrcpy（应用回退到 PATH 查找）。
+- **许可证：** Apache License 2.0。随包分发的安装包内置 scrcpy 官方包内的 `LICENSE` 原件与 `THIRD_PARTY_NOTICES.md` 说明。
+- **供应链校验（构建流水线强制执行，哈希不符即终止构建）：**
+
+  | 平台 | 官方包 | SHA-256 |
+  | --- | --- | --- |
+  | Windows x64 | `scrcpy-win64-v4.1.zip` | `5b12172b3264b2889f4583ee64752ce832e29bc8b1089dca81093459697165db` |
+  | macOS arm64 | `scrcpy-macos-aarch64-v4.1.tar.gz` | `20fd47c9014dd5e0fa77091f3cb7adbda8445a360c4584aeaa0150b5b3988ff3` |
+  | macOS x86_64 | `scrcpy-macos-x86_64-v4.1.tar.gz` | `ee2a7223bc8dbdc4f482db1134bcf441178dafb833492b71ca4c22090c58ce72` |
+
+  升级 scrcpy 版本时必须同时更新流水线中的 URL 与哈希，并在真机上重新验证镜像、输入、音频与许可证义务。
+- **adb：** Windows / macOS 官方包内附带 `adb`（随上表同一校验链分发）；Android platform-tools 以 Apache-2.0 授权。
+- **运行时查找顺序：** ① 显式 `MIRRORDOCK_SCRCPY_PATH` / `MIRRORDOCK_ADB`；② 开发模式下的 `.tools/scrcpy`；③ 随包资源目录（发行）；④ PATH。
+- **签名状态（如实记录）：** MirrorDock 自身安装包当前未做代码签名（无证书），macOS 首次打开会提示未识别开发者、Windows 会触发 SmartScreen；scrcpy 供应链的完整性由上表哈希校验保证。正式分发前需按渠道补齐签名（A1-08 后续 / 渠道合规材料）。
