@@ -23,6 +23,8 @@ vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
 
 import App, {
   capabilitySummary,
+  defaultShortcuts,
+  isValidShortcut,
   pairingPayload,
   editionLabel,
   errorMessage,
@@ -31,6 +33,7 @@ import App, {
   isProEdition,
   lockSummary,
   readOptions,
+  readShortcuts,
   recordingFileName,
   relativeTime,
   screenshotFileName,
@@ -431,11 +434,38 @@ describe("entitlement", () => {
 
 describe("shortcuts and rotation", () => {
   it("session_shortcuts_cover_screenshot_record_and_rotation", () => {
-    expect(sessionShortcutKeys()).toEqual([
+    expect(sessionShortcutKeys(defaultShortcuts)).toEqual([
       "CommandOrControl+Alt+S",
       "CommandOrControl+Alt+R",
       "CommandOrControl+Alt+D",
     ]);
+  });
+
+  it("isValidShortcut_requires_a_modifier_and_a_key", () => {
+    expect(isValidShortcut("CommandOrControl+Alt+S")).toBe(true);
+    expect(isValidShortcut("Ctrl+Shift+K")).toBe(true);
+    expect(isValidShortcut("S")).toBe(false);
+    expect(isValidShortcut("Ctrl")).toBe(false);
+    expect(isValidShortcut("Ctrl++")).toBe(false);
+  });
+
+  it("readShortcuts_persists_user_combos_and_rejects_invalid_values", () => {
+    localStorage.setItem(
+      "mirrordock.shortcuts",
+      JSON.stringify({ screenshot: "Ctrl+Shift+X", record: "not a combo", rotate: 42 }),
+    );
+    const settings = readShortcuts();
+    expect(settings.screenshot).toBe("Ctrl+Shift+X");
+    expect(settings.record).toBe(defaultShortcuts.record);
+    expect(settings.rotate).toBe(defaultShortcuts.rotate);
+  });
+
+  it("settings_page_edits_and_persists_shortcut_combos", async () => {
+    render(<App />);
+    const input = await screen.findByPlaceholderText("CommandOrControl+Alt+S");
+    fireEvent.change(input, { target: { value: "Ctrl+Shift+K" } });
+    const stored = JSON.parse(localStorage.getItem("mirrordock.shortcuts") ?? "{}");
+    expect(stored.screenshot).toBe("Ctrl+Shift+K");
   });
 
   it("rotation_defaults_to_following_the_device_instead_of_locking", async () => {

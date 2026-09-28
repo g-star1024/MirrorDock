@@ -96,6 +96,18 @@ type PairingStatus = {
 // 开发者中心自动发现（mDNS）：手机无线调试页广播的服务。
 type WirelessServices = { pairing: string[]; connect: string[] };
 
+// 扫码配对（Android 11+ 无线调试「使用二维码配对设备」）：
+// 桌面出码 → 手机扫码 → 手机广播配对服务 → 桌面自动 adb pair / connect。
+type QrPairingOffer = { payload: string; service_name: string; pairing_code: string };
+type QrPairingProgress = { stage: "waiting" | "pairing" | "paired" | "done" | "ended"; detail: string | null };
+export const qrPairingStageCopy: Record<string, string> = {
+  waiting: "等待手机扫码",
+  pairing: "已发现手机，正在配对",
+  paired: "配对成功，正在连接",
+  done: "配对并连接完成",
+  ended: "已取消",
+};
+
 /// 二维码载荷格式：MDP1|主机列表(逗号分隔)|端口|一次性配对码|SPKI SHA-256。
 /// 伴侣 App 与桌面侧共享同一约定（见 companion_pairing.rs 模块注释）。
 export function pairingPayload(offer: Pick<PairingOffer, "hosts" | "port" | "token" | "fingerprint">): string {
@@ -144,8 +156,37 @@ export function readOptions(): SessionOptions {
 
 // 会话进行中可用的系统级快捷键（B-快捷键）。镜像窗口聚焦时只有全局快捷键能
 // 收到按键；CommandOrControl 在 Windows/Linux 是 Ctrl、macOS 是 ⌘。
-export function sessionShortcutKeys(): string[] {
-  return ["CommandOrControl+Alt+S", "CommandOrControl+Alt+R", "CommandOrControl+Alt+D"];
+// 组合可由用户在设置页自定义，默认值与 ToDesk 类工具的习惯一致。
+export type ShortcutSettings = { screenshot: string; record: string; rotate: string };
+export const defaultShortcuts: ShortcutSettings = {
+  screenshot: "CommandOrControl+Alt+S",
+  record: "CommandOrControl+Alt+R",
+  rotate: "CommandOrControl+Alt+D",
+};
+const shortcutModifiers = new Set(["CommandOrControl", "Command", "Cmd", "Control", "Ctrl", "Alt", "Option", "Meta", "Super", "Shift"]);
+// 合法组合 = 至少一个修饰键 + 一个非修饰键（避免单键全局抢占）。大小写不敏感。
+export function isValidShortcut(combo: string): boolean {
+  const parts = combo.trim().split("+").map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return false;
+  const keys = parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1));
+  return keys.some((key) => shortcutModifiers.has(key)) && keys.some((key) => !shortcutModifiers.has(key));
+}
+const SHORTCUT_ACTIONS = ["screenshot", "record", "rotate"] as const;
+export function readShortcuts(): ShortcutSettings {
+  const fallback = { ...defaultShortcuts };
+  try {
+    const value = JSON.parse(localStorage.getItem("mirrordock.shortcuts") ?? "null");
+    if (value && typeof value === "object") {
+      for (const action of SHORTCUT_ACTIONS) {
+        const combo = (value as Record<string, unknown>)[action];
+        if (typeof combo === "string" && isValidShortcut(combo)) fallback[action] = combo.trim();
+      }
+    }
+  } catch { /* 本地设置不可用时用默认组合。 */ }
+  return fallback;
+}
+export function sessionShortcutKeys(settings: ShortcutSettings = readShortcuts()): string[] {
+  return [settings.screenshot, settings.record, settings.rotate];
 }
 
 // 截图与录像的文件名都按**本机时间**生成（后端不猜时区），随后由后端按 ASCII 白名单
@@ -283,6 +324,14 @@ function App() {
   // 开发者中心自动发现（mDNS）：自动填地址，配对码仍由用户从手机屏幕读取。
   const [discovering, setDiscovering] = useState(false);
   const [discoverMessage, setDiscoverMessage] = useState<string | null>(null);
+  // 扫码配对：桌面出码，手机原生「使用二维码配对设备」扫码后自动完成配对连接。
+  const [qrOffer, setQrOffer] = useState<QrPairingOffer | null>(null);
+  const [qrImage, setQrImage] = useState<string | null>(null);
+  const [qrProgress, setQrProgress] = useState<QrPairingProgress | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  // 全局快捷键组合：用户可在设置页修改，本机持久化。
+  const [shortcuts, setShortcuts] = useState<ShortcutSettings>(readShortcuts);
   const [trustedDevices, setTrustedDevices] = useState<TrustedWirelessDevice[]>([]);
   const [recentDevices, setRecentDevices] = useState<RecentDevice[]>([]);
   const [recentMessage, setRecentMessage] = useState<string | null>(null);
@@ -386,39 +435,40 @@ function App() {
   const shortcutsRef = useRef({ options, readySerial: null as string | null, proEdition, sessionActive });
   shortcutsRef.current = { options, readySerial: null, proEdition, sessionActive };
 
-  // 会话进行中的系统级快捷键：S 截图、R 录制开关、D 轮换显示方向。
+  // 会话进行中的系统级快捷键：截图 / 录制开关 / 轮换显示方向，组合可在设置页修改。
   // 仅在真实 Tauri 环境注册；浏览器 / 测试环境没有 __TAURI_INTERNALS__，直接跳过。
   useEffect(() => {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     if (!hasTauri) return;
     if (!sessionActive) return;
     let cancelled = false;
+    const toggleRecord = () => {
+      const current = shortcutsRef.current;
+      if (!current.proEdition) {
+        setApplyNotice("录制是专业版功能，激活后即可使用。");
+        return;
+      }
+      const next = { ...current.options, record: !current.options.record };
+      if (current.sessionActive) void applyOptionsUpdate(next);
+      else updateOptions(next);
+    };
+    const rotate = () => {
+      const current = shortcutsRef.current;
+      const next = { ...current.options, rotation: (current.options.rotation + 90) % 360 };
+      if (current.sessionActive) void applyOptionsUpdate(next);
+      else updateOptions(next);
+    };
+    const actions: [string, () => void][] = [
+      [shortcuts.screenshot, () => { const serial = shortcutsRef.current.readySerial; if (serial) void captureScreen(serial); }],
+      [shortcuts.record, toggleRecord],
+      [shortcuts.rotate, rotate],
+    ];
     void (async () => {
       try {
-        for (const key of sessionShortcutKeys()) {
+        for (const [key, action] of actions) {
           if (cancelled) return;
           await register(key, (event) => {
-            if (event.state !== "Pressed") return;
-            const current = shortcutsRef.current;
-            if (key.endsWith("+S")) {
-              if (current.readySerial) void captureScreen(current.readySerial);
-              return;
-            }
-            if (key.endsWith("+D")) {
-              const next = { ...current.options, rotation: (current.options.rotation + 90) % 360 };
-              if (current.sessionActive) void applyOptionsUpdate(next);
-              else updateOptions(next);
-              return;
-            }
-            if (key.endsWith("+R")) {
-              if (!current.proEdition) {
-                setApplyNotice("录制是专业版功能，已在「设置 → 版本与授权」中说明如何激活。");
-                return;
-              }
-              const next = { ...current.options, record: !current.options.record };
-              if (current.sessionActive) void applyOptionsUpdate(next);
-              else updateOptions(next);
-            }
+            if (event.state === "Pressed") action();
           });
         }
       } catch {
@@ -428,7 +478,7 @@ function App() {
     })();
     return () => { cancelled = true; void unregisterAll().catch(() => { /* 会话已结束时注销失败无需处理 */ }); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionActive]);
+  }, [sessionActive, shortcuts]);
 
   async function refreshDevices() {
     setIsChecking(true);
@@ -522,7 +572,7 @@ function App() {
     setRecentMessage(null);
     try {
       await invoke("connect_wireless_device", { endpoint });
-      setRecentMessage("已发送连接请求，正在更新设备列表。如果手机重新开启过无线调试，端口可能已经变化，需要重新配对。");
+      setRecentMessage("已发送连接请求。若手机重启过无线调试，端口可能已变化，需重新配对。");
       await refreshDevices();
     } catch (error) {
       setRecentMessage(errorMessage(error, "这条记录无法直接连接，请在「无线」页重新配对。"));
@@ -585,9 +635,9 @@ function App() {
       if (found.pairing.length > 0) { setPairEndpoint(found.pairing[0]); filled.push("配对地址"); }
       if (found.connect.length > 0) { setConnectEndpoint(found.connect[0]); filled.push("连接地址"); }
       if (filled.length === 0) {
-        setDiscoverMessage("没有发现可用的无线调试服务。请让手机停留在「使用配对码配对设备」页面（配对地址）或无线调试主页面（连接地址）再试。");
+        setDiscoverMessage("未发现服务。让手机停在「使用配对码配对设备」或无线调试主页面再试。");
       } else {
-        setDiscoverMessage(`已自动填入${filled.join("与")}。6 位配对码请以手机屏幕显示为准，手动填写即可。`);
+        setDiscoverMessage(`已自动填入${filled.join("与")}，配对码以手机屏幕为准。`);
       }
     } catch (error) {
       setDiscoverMessage(errorMessage(error, "自动发现不可用。"));
@@ -840,6 +890,76 @@ function App() {
     }
   }
 
+  // 修改快捷键组合：立即持久化；会话进行中会按新组合重新注册（见注册 effect）。
+  function updateShortcuts(next: ShortcutSettings) {
+    setShortcuts(next);
+    try { localStorage.setItem("mirrordock.shortcuts", JSON.stringify(next)); } catch { /* 保存失败只影响下次启动的默认值。 */ }
+  }
+
+  // 扫码配对：桌面出码，手机「使用二维码配对设备」扫码后由后端自动 pair + connect。
+  async function beginQrPairing() {
+    setQrBusy(true);
+    setQrError(null);
+    setQrProgress(null);
+    setQrImage(null);
+    try {
+      const offer = await invoke<QrPairingOffer>("begin_qr_pairing");
+      setQrOffer(offer);
+      try {
+        setQrImage(await QRCode.toDataURL(offer.payload, { width: 220, margin: 1 }));
+      } catch { /* 渲染环境不支持 canvas 时退化为文字提示。 */ }
+    } catch (error) {
+      setQrError(errorMessage(error, "无法生成配对二维码。"));
+    } finally {
+      setQrBusy(false);
+    }
+  }
+
+  async function stopQrPairing() {
+    if (!qrOffer) return;
+    try {
+      await invoke("end_qr_pairing", { serviceName: qrOffer.service_name });
+    } catch { /* 状态清理失败不影响界面复位。 */ }
+    setQrOffer(null);
+    setQrImage(null);
+    setQrProgress(null);
+  }
+
+  useEffect(() => {
+    if (!qrOffer) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const startedAt = Date.now();
+    async function poll() {
+      if (!qrOffer || disposed) return;
+      try {
+        const progress = await invoke<QrPairingProgress>("qr_pairing_progress", {
+          serviceName: qrOffer.service_name,
+          pairingCode: qrOffer.pairing_code,
+        });
+        if (disposed) return;
+        setQrProgress(progress);
+        if (progress.stage === "done") {
+          void Promise.all([refreshDevices(), refreshTrustedDevices()]);
+          setQrOffer(null);
+          setQrImage(null);
+          return;
+        }
+        if (progress.stage === "ended" || Date.now() - startedAt > 150_000) {
+          void invoke("end_qr_pairing", { serviceName: qrOffer.service_name }).catch(() => undefined);
+          setQrOffer(null);
+          setQrImage(null);
+          setQrError(progress.stage === "ended" ? null : "等待超时：手机没有扫码或网络阻止了 mDNS（公共 Wi-Fi 常见）。请改用配对码配对。");
+          return;
+        }
+      } catch { /* 单次轮询失败不终止等待。 */ }
+      if (!disposed) timer = setTimeout(() => void poll(), 1500);
+    }
+    void poll();
+    return () => { disposed = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrOffer]);
+
   async function pairAndConnect() {
     setWirelessBusy(true);
     setWirelessMessage(null);
@@ -991,7 +1111,7 @@ function App() {
           <section className={`tab-panel ${tab === "home" ? "" : "panel-hidden"}`} aria-label="连接">
             <div className="page-head">
               <h1>在电脑上安心使用手机</h1>
-              <p className="intro">用数据线或同一 Wi-Fi 连接后开始镜像。屏幕内容只出现在这台电脑上，不上传云端。</p>
+              <p className="intro">用数据线或同一 Wi-Fi 连接手机，画面只出现在这台电脑上。</p>
             </div>
 
             <section className="connection-card" aria-live="polite">
@@ -1020,7 +1140,7 @@ function App() {
                   <span className="status-dot ready" aria-hidden="true" />
                   <div>
                     <strong>{readyDevice.label}</strong>
-                    <p>已获得 USB 调试授权。下一步将开启镜像窗口。</p>
+                    <p>已授权，可以开始镜像。</p>
                   </div>
                   <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || sessionActive} onClick={() => void startMirroring(readyDevice.serial)}>
                     {sessionActive ? "会话进行中" : isLaunching ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
@@ -1080,8 +1200,8 @@ function App() {
                   <strong>按品牌查看开启步骤</strong>
                   <p className="capability-pending">
                     {detectedGuide
-                      ? `检测到连接的设备疑似为「${detectedGuide.name}」，已为你选中；如型号不符可手动切换。`
-                      : "选择你的手机品牌，查看打开开发者选项与 USB 调试的具体路径。"}
+                      ? `检测到「${detectedGuide.name}」，已选中；不符可手动切换。`
+                      : "选择手机品牌，查看开启步骤。"}
                   </p>
                   <div className="device-picker" aria-label="选择手机品牌">
                     {brandGuides.map((guide) => (
@@ -1109,7 +1229,7 @@ function App() {
                       )}
                     </>
                   )}
-                  <p className="capability-pending">不同机型与系统版本的菜单名称可能不同，以手机实际设置为准。开启后回到上方点「重新检查」。</p>
+                  <p className="capability-pending">菜单名称因机型而异，以手机实际设置为准。开启后点「重新检查」。</p>
                 </div>
               )}
 
@@ -1152,7 +1272,7 @@ function App() {
                       </div>
                     );
                   })}
-                  {recentDevices.length > 0 && <p className="recent-note">这份记录只保存在这台电脑上，可随时逐条移除。移除记录不会断开连接，也不会撤销手机上的调试授权。</p>}
+                  {recentDevices.length > 0 && <p className="recent-note">记录只保存在本机，移除不影响连接与授权。</p>}
                   {recentMessage && <p className="recent-note" role="status">{recentMessage}</p>}
                 </div>
               )}
@@ -1160,7 +1280,7 @@ function App() {
 
             <aside className="privacy-note">
               <strong>为什么需要授权？</strong>
-              <p>MirrorDock 通过 Android 的 USB 调试机制获得画面和控制权限。该授权只授予你确认过的电脑，且可以在手机的开发者选项中随时撤销。</p>
+              <p>画面与控制经由 Android 官方调试机制，只授予你确认过的电脑，可随时在手机开发者选项中撤销。</p>
             </aside>
           </section>
 
@@ -1174,7 +1294,7 @@ function App() {
               <div className="panel-grid">
                 <div className="capability-panel screenshot-panel" aria-live="polite">
                   <strong>截图</strong>
-                  <p className="capability-pending">把手机当前画面保存到这台电脑的「图片 / MirrorDock」文件夹。截图只保存在本机，不会上传。</p>
+                  <p className="capability-pending">保存到本机「图片 / MirrorDock」。受保护页面（支付、密码）系统会屏蔽为黑屏，不是故障。</p>
                   <button className="secondary-button" type="button" disabled={screenshotBusy} onClick={() => void captureScreen(readyDevice.serial)}>
                     {screenshotBusy ? "正在处理…" : "截取当前画面"}
                   </button>
@@ -1189,7 +1309,6 @@ function App() {
                     </div>
                   )}
                   {screenshotError && <p className="capability-pending" role="alert">{screenshotError}</p>}
-                  <p className="capability-pending">受保护页面（如支付、密码输入）由 Android 自行屏蔽，截出来会是黑屏，这不是故障。</p>
                 </div>
                 <div className="capability-panel recording-panel" aria-live="polite">
                   <strong>录像</strong>
@@ -1206,14 +1325,14 @@ function App() {
                       {recording.active && <p className="screenshot-path">录像正在写入，结束镜像后才会定型；录制中无法删除。</p>}
                     </div>
                   ) : (
-                    <p className="capability-pending">当前没有录像。在「设置」页打开「录制这一会话的画面」，然后开始镜像即可录制。</p>
+                    <p className="capability-pending">当前没有录像。在「设置」打开「录制这一会话的画面」后开始镜像。</p>
                   )}
                   {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
-                  <p className="capability-pending">录像保存在本机的视频目录（Windows / Linux 为「视频」，macOS 为「影片」）下的 MirrorDock 文件夹，不会上传。录像由镜像窗口直接写入文件，结束镜像即同时结束录制；结束时会先等录像完成收尾再退出，保证文件可以正常播放。</p>
+                  <p className="capability-pending">录像保存在本机视频目录的 MirrorDock 文件夹。结束镜像即结束录制，文件可直接播放。</p>
                 </div>
                 <div className="capability-panel transfer-panel" aria-live="polite">
                   <strong>文件传输</strong>
-                  <p className="capability-pending">在电脑与手机之间收发文件。发送由你挑选文件后进入手机的「下载 / MirrorDock」；取回把手机该目录里的文件保存到这台电脑的「下载 / MirrorDock」。文件内容只经过数据线，不会上传。</p>
+                  <p className="capability-pending">发送到手机的「下载 / MirrorDock」，或取回该目录的文件到本机。</p>
                   <span>
                     <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(readyDevice.serial)}>
                       {transferBusy ? "正在处理…" : "选择文件发送到手机"}
@@ -1257,17 +1376,44 @@ function App() {
           <section className={`tab-panel ${tab === "wireless" ? "" : "panel-hidden"}`} aria-label="无线">
             <div className="page-head">
               <h1>无线连接</h1>
-              <p className="intro">同一 Wi-Fi 下连接 Android 11 或更高版本；也可以用伴侣 App 扫码配对。</p>
+              <p className="intro">同一 Wi-Fi 下连接 Android 11+；推荐扫码配对，全程免输入。</p>
             </div>
+            <section className="connection-card" aria-live="polite">
+              <div className="wireless-heading">
+                <div>
+                  <p className="eyebrow">推荐</p>
+                  <h2>扫码配对</h2>
+                  <p>手机在「无线调试」里点「使用二维码配对设备」，扫下面的二维码即可，配对与连接自动完成。</p>
+                </div>
+              </div>
+              {!qrOffer ? (
+                <span>
+                  <button className="primary-button" type="button" disabled={qrBusy} onClick={() => void beginQrPairing()}>
+                    {qrBusy ? "正在生成…" : "生成配对二维码"}
+                  </button>
+                </span>
+              ) : (
+                <div className="screenshot-result">
+                  {qrImage && <img src={qrImage} alt="无线调试配对二维码" width={220} height={220} />}
+                  <p className="capability-summary">
+                    {qrProgress ? qrPairingStageCopy[qrProgress.stage] ?? qrProgress.stage : "等待手机扫码"}
+                    {qrProgress?.detail ? ` · ${qrProgress.detail}` : ""}
+                  </p>
+                  <p className="capability-pending">手机路径：设置 → 开发者选项 → 无线调试 → 使用二维码配对设备。二维码一次有效，可随时取消。</p>
+                  <button className="secondary-button" type="button" onClick={() => void stopQrPairing()}>取消</button>
+                </div>
+              )}
+              {qrError && <p className="capability-pending" role="alert">{qrError}</p>}
+            </section>
             <section className="connection-card" aria-labelledby="wireless-title">
               <div className="wireless-heading">
                 <div>
-                  <p className="eyebrow">开发者中心 · 无线调试</p>
+                  <p className="eyebrow">手动方式</p>
                   <h2 id="wireless-title">配对码配对</h2>
-                  <p>配对码仅用于这一次配对，不会保存。已连接设备的网络地址仅保存在这台电脑上。</p>
+                  <p>扫码不便时，填手机屏幕上的地址和 6 位配对码。配对码不会保存。</p>
                 </div>
                 <button className="secondary-button" type="button" onClick={() => setWirelessExpanded((value) => !value)}>
-                  {wirelessExpanded ? "收起" : "设置无线连接"}
+                  {wirelessExpanded ? "收起" : "手动配对"}
                 </button>
               </div>
 
@@ -1289,7 +1435,7 @@ function App() {
                   <label>连接地址<input value={connectEndpoint} onChange={(event) => setConnectEndpoint(event.target.value)} placeholder="例如 192.168.1.20:41839" autoComplete="off" /></label>
                   <button className="primary-button" type="button" onClick={() => void pairAndConnect()} disabled={wirelessBusy}>{wirelessBusy ? "正在连接…" : "配对并连接"}</button>
                 </div>
-                <p className="capability-pending">Android 不提供「配对二维码」：6 位配对码只显示在手机屏幕上，需要人工读取。自动发现只帮你省去抄写地址；让手机停在配对页面，搜索到的机率最高。</p>
+                <p className="capability-pending">也可以停在「使用配对码配对设备」页面点「自动发现地址」，地址会自动填入，6 位配对码仍需人工读取。</p>
               </div>}
 
               {wirelessMessage && <p className="diagnostic">{wirelessMessage}</p>}
@@ -1310,7 +1456,7 @@ function App() {
                 <div>
                   <p className="eyebrow">伴侣 App（实验）</p>
                   <h2>扫码配对</h2>
-                  <p>在同一 Wi-Fi 下用 MirrorDock 伴侣 App 扫描二维码，与这台电脑建立加密连接。配对码一次有效，二维码只显示在这里，不会被保存或上传。</p>
+                  <p>扫码不便时，用伴侣 App 扫码或手动填写地址和 6 位配对码（一次有效，不保存）。</p>
                 </div>
               </div>
               <span>
@@ -1364,9 +1510,9 @@ function App() {
                 </select></label>
                 <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
                 <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
-                <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
+                <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持手机唤醒</label>
                 <label><input type="checkbox" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）{!proEdition && "——专业版功能，在下方「版本与授权」激活后可用"}</label>
-                <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板（关闭后手机与电脑的复制内容不再自动互通）</label>
+                <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板</label>
                 <label><input type="checkbox" checked={options.audio} disabled={audioUnsupported} onChange={e => updateOptions({...options, audio: e.target.checked})}/> 转发手机播放的声音（Android 11+）{audioUnsupported ? "——这台手机不支持系统音频转发，已自动关闭" : ""}</label>
                 <label>镜像窗口快捷键修饰键 <select value={options.shortcut_mod ?? ""} onChange={e => updateOptions({...options, shortcut_mod: e.target.value || null})}>
                   <option value="">默认（左 Alt / 左 Super）</option>
@@ -1377,21 +1523,32 @@ function App() {
                   <option value="lsuper">左 Super（Win / ⌘）</option>
                   <option value="rsuper">右 Super</option>
                 </select></label>
-                <label><input type="checkbox" checked={options.show_touches} onChange={e => updateOptions({...options, show_touches: e.target.checked})}/> 显示触摸点（演示用）——画面中会显示手机上的实际触摸位置，结束镜像后手机自动恢复原设置</label>
-                <label><input type="checkbox" checked={options.read_only} onChange={e => updateOptions({...options, read_only: e.target.checked})}/> 只读模式（电脑键鼠不控制手机，适合向他人演示）</label>
+                <label><input type="checkbox" checked={options.show_touches} onChange={e => updateOptions({...options, show_touches: e.target.checked})}/> 显示触摸点（演示用）</label>
+                <label><input type="checkbox" checked={options.read_only} onChange={e => updateOptions({...options, read_only: e.target.checked})}/> 只读模式（键鼠不控制手机）</label>
                 {sessionActive && (
                   <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
                     {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
                   </button>
                 )}
                 <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
-                {sessionActive && <p>这些设置由镜像窗口在启动时确定，无法在运行中热更新。点击“应用并重启镜像窗口”后，画面会短暂中断并自动恢复。</p>}
-                <p>显示方向选「自动」时镜像跟随手机旋转：打开横屏游戏，画面会自动转为横屏并调整窗口大小；锁定角度只改变电脑上的显示方向。无线卡顿时可选择“流畅”。受保护内容可能显示黑屏。</p>
-                <p>声音转发开启时，声音只在电脑播放、手机本地静音。通话与部分应用的音频受系统捕获策略限制可能无法转发；Android 11 设备需在解锁状态下开始镜像才能转发声音；MirrorDock 只转发系统播放声音，不使用麦克风。</p>
-                <p>MirrorDock 无法遮盖画面中的敏感内容（如消息预览）——这是镜像引擎的能力边界，我们不假装有此功能。需要隐私时：开启只读模式可避免他人通过这台电脑误操作你的手机；要隐藏内容请先在手机上打开勿扰模式，或直接结束镜像。</p>
-                <p>镜像窗口内建快捷键：修饰键 + H 回到主屏幕，+ B 返回，+ S 最近任务，+ N 展开通知栏，+ P 电源键，+ O 关闭手机屏幕（镜像继续），+ 上/下箭头 调节音量，+ F 全屏窗口，+ Q 退出镜像。修饰键可在上方修改。</p>
-                <p>会话进行中还有全局快捷键（无需切回本窗口）：Ctrl/⌘ + Alt + S 截图，Ctrl/⌘ + Alt + R 开关录制，Ctrl/⌘ + Alt + D 轮换显示方向。</p>
+                {sessionActive && <p>镜像窗口形态在启动时确定，运行中修改需重启窗口，画面会短暂中断。</p>}
+                <p>显示方向选「自动」时跟随手机旋转；声音只在电脑播放、手机静音；只读模式下电脑键鼠不控制手机。受保护内容（支付、密码页）系统会屏蔽为黑屏。</p>
+                <p>镜像窗口内建快捷键（修饰键在上方选择）：+H 主屏幕、+B 返回、+S 最近任务、+N 通知栏、+P 电源、+O 熄屏（镜像继续）、+↑/↓ 音量、+F 全屏、+Q 退出。</p>
+                <p>会话进行中的全局快捷键（无需切回本窗口）可在下方「全局快捷键」中自定义。</p>
                 {applyNotice && <p className="apply-notice" role="status">{applyNotice}</p>}
+              </fieldset>
+
+              <fieldset className="session-options">
+                <legend>全局快捷键</legend>
+                <p>镜像运行中时全局生效（Windows 用 Ctrl，macOS 用 ⌘）。格式：修饰键+按键，如 Ctrl+Alt+S。</p>
+                <label>截图 <input value={shortcuts.screenshot} onChange={e => updateShortcuts({ ...shortcuts, screenshot: e.target.value })} placeholder="CommandOrControl+Alt+S" autoComplete="off" spellCheck={false} /></label>
+                <label>录制开关 <input value={shortcuts.record} onChange={e => updateShortcuts({ ...shortcuts, record: e.target.value })} placeholder="CommandOrControl+Alt+R" autoComplete="off" spellCheck={false} /></label>
+                <label>轮换方向 <input value={shortcuts.rotate} onChange={e => updateShortcuts({ ...shortcuts, rotate: e.target.value })} placeholder="CommandOrControl+Alt+D" autoComplete="off" spellCheck={false} /></label>
+                {(!isValidShortcut(shortcuts.screenshot) || !isValidShortcut(shortcuts.record) || !isValidShortcut(shortcuts.rotate)) && (
+                  <p className="capability-pending" role="alert">格式无效：至少一个修饰键（Ctrl/Alt/⌘ 等）加一个普通键。无效的组合不会生效。</p>
+                )}
+                <button type="button" className="secondary-button" onClick={() => updateShortcuts({ ...defaultShortcuts })}>恢复默认</button>
+                <p className="capability-pending">修改立即保存；镜像运行中会自动改用新组合，无需重启。</p>
               </fieldset>
 
               <fieldset className="session-options">
@@ -1410,7 +1567,7 @@ function App() {
                     <button type="button" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>
                       {licenseBusy ? "正在激活…" : "激活专业版"}
                     </button>
-                    <p>免费版包含全部镜像、截图与文件传输功能；专业版解锁 MP4 录制。激活离线完成，许可证只保存在本机、不会上传，也不会写入日志。</p>
+                    <p>免费版含全部镜像、截图与传输功能；专业版解锁 MP4 录制。离线激活，只保存在本机。</p>
                   </>
                 )}
                 {licenseMessage && <p className="capability-pending" role="status">{licenseMessage}</p>}
@@ -1427,7 +1584,7 @@ function App() {
             </div>
             <section className="connection-card" aria-live="polite">
               <strong>诊断包</strong>
-              <p className="capability-pending">它只包含应用版本、系统类型、镜像引擎是否可用，以及最近的操作结果（已抹去设备序列号、配对码和文件路径）。内容先在这里预览，你确认后才会保存成文件；MirrorDock 不会自动上传任何内容。</p>
+              <p className="capability-pending">仅含版本、系统与最近操作结果（已抹去序列号、配对码与路径）。先预览，确认后才保存；不会自动上传任何内容。</p>
               <span>
                 <button className="secondary-button" type="button" disabled={diagnosticsBusy} onClick={() => void previewDiagnostics()}>
                   {diagnosticsBusy ? "正在处理…" : diagnostics ? "刷新预览" : "预览诊断内容"}
@@ -1455,7 +1612,7 @@ function App() {
             </section>
             <aside className="privacy-note">
               <strong>隐私承诺</strong>
-              <p>MirrorDock 是本地优先工具：镜像、截图、录像与文件传输都只经过你自己的数据线或局域网，不经过任何服务器。诊断包在导出前先预览，且已抹去序列号、配对码与路径。</p>
+              <p>本地优先：数据只经过你的数据线或局域网，不经过任何服务器。</p>
             </aside>
           </section>
         </div>

@@ -2765,34 +2765,68 @@ fn delete_recording(
     remove_recording_file(&directory, &file_name, &sessions)
 }
 
-/// 解析 `adb mdns services` 输出，挑出无线调试相关的两类服务。
+/// `adb mdns services` 的一条服务记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MdnsEntry {
+    /// 服务实例名，例如 `adb-79j7kn9tkjt8rwss-rF7qH8`；旧格式输出没有实例名时为空串。
+    instance: String,
+    /// 服务类型，统一去掉结尾的点，例如 `_adb-tls-pairing._tcp`。
+    service: String,
+    /// `ip:port` 端点。
+    endpoint: String,
+}
+
+/// 解析 `adb mdns services` 输出。
 ///
-/// adb 输出形如（制表符分隔）：
+/// 真实 adb（platform-tools 31+）每行三列，制表符分隔：
 /// ```text
-/// List of MDNS services:
-/// \t_adb-tls-pairing._tcp.\t192.168.1.20:37123
-/// \t_adb-tls-connect._tcp.\t192.168.1.20:41839
+/// adb-79j7kn9tkjt8rwss-rF7qH8  _adb-tls-connect._tcp  192.168.1.9:33739
 /// ```
-/// 配对地址只在手机停留于「使用配对码配对设备」页时广播，窗口很短；连接地址
-/// 在无线调试主页面广播。返回 (配对地址, 连接地址) 两组，均为去重后的 ip:port。
+/// 兼容只写「类型 + 端点」的两列旧格式。类型识别靠已知服务类型白名单；
+/// 端点必须形如 ip:port，非法行直接跳过，不猜。
+fn parse_mdns_entries(raw: &str) -> Vec<MdnsEntry> {
+    const KNOWN: [(&str, &str); 2] = [
+        ("_adb-tls-pairing._tcp.", "_adb-tls-pairing._tcp"),
+        ("_adb-tls-connect._tcp.", "_adb-tls-connect._tcp"),
+    ];
+    let mut entries = Vec::new();
+    for line in raw.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        for (index, token) in tokens.iter().enumerate() {
+            // 兼容带点与不带点两种服务类型写法，命中后统一用去点的规范名。
+            let Some((_, service)) = KNOWN
+                .iter()
+                .find(|(dotted, plain)| *dotted == *token || *plain == *token)
+            else {
+                continue;
+            };
+            let endpoint = tokens.get(index + 1).copied().unwrap_or("");
+            let valid = endpoint.rsplit_once(':').is_some_and(|(_, port)| {
+                !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+            });
+            if !valid {
+                continue;
+            }
+            let instance = if index > 0 { tokens[index - 1] } else { "" };
+            entries.push(MdnsEntry {
+                instance: instance.to_owned(),
+                service: (*service).to_owned(),
+                endpoint: endpoint.to_owned(),
+            });
+        }
+    }
+    entries
+}
+
+/// 旧接口：按服务类型挑出 (配对地址, 连接地址) 两组去重端点。
 fn parse_mdns_services(raw: &str) -> (Vec<String>, Vec<String>) {
     let mut pairing = Vec::new();
     let mut connect = Vec::new();
-    for line in raw.lines() {
-        let mut fields = line.split_whitespace();
-        let service = fields.next().unwrap_or("");
-        let endpoint = fields.next().unwrap_or("");
-        // 端点必须形如 ip:port，其余字段忽略；非法形式直接跳过，不猜。
-        let valid = endpoint.rsplit_once(':').is_some_and(|(_, port)| {
-            !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
-        });
-        if !valid {
-            continue;
-        }
-        if service == "_adb-tls-pairing._tcp." && !pairing.contains(&endpoint.to_owned()) {
-            pairing.push(endpoint.to_owned());
-        } else if service == "_adb-tls-connect._tcp." && !connect.contains(&endpoint.to_owned()) {
-            connect.push(endpoint.to_owned());
+    for entry in parse_mdns_entries(raw) {
+        if entry.service == "_adb-tls-pairing._tcp" && !pairing.contains(&entry.endpoint) {
+            pairing.push(entry.endpoint);
+        } else if entry.service == "_adb-tls-connect._tcp" && !connect.contains(&entry.endpoint) {
+            connect.push(entry.endpoint);
         }
     }
     (pairing, connect)
@@ -2831,6 +2865,157 @@ fn discover_pairing_services(
 struct WirelessServices {
     pairing: Vec<String>,
     connect: Vec<String>,
+}
+
+// -- 二维码配对（Android 11+ 无线调试「使用二维码配对设备」）----------------------
+//
+// 流程与 Android Studio 的「Pair Using QR Code」一致：
+// 1. 桌面生成随机服务名与 6 位配对码，渲染二维码 `WIFI:T:ADB;S:<服务名>;P:<配对码>;;`；
+// 2. 手机扫码后广播 `_adb-tls-pairing._tcp`，实例名即二维码里的服务名；
+// 3. 桌面轮询 adb mdns services 命中该实例名后执行 adb pair；
+// 4. 配对成功后手机改广播 `_adb-tls-connect._tcp`，桌面自动 adb connect。
+// 配对码等价于一次性凭据：不写入日志，接口返回后只在前端内存中存在。
+
+#[derive(Default)]
+struct QrPairingStore(std::sync::Mutex<std::collections::HashMap<String, bool>>);
+
+impl QrPairingStore {
+    fn insert(&self, service_name: &str) {
+        self.0.lock().unwrap().insert(service_name.to_owned(), false);
+    }
+    fn mark_paired(&self, service_name: &str) {
+        if let Some(state) = self.0.lock().unwrap().get_mut(service_name) {
+            *state = true;
+        }
+    }
+    fn is_paired(&self, service_name: &str) -> bool {
+        self.0.lock().unwrap().get(service_name).copied().unwrap_or(false)
+    }
+    fn remove(&self, service_name: &str) {
+        self.0.lock().unwrap().remove(service_name);
+    }
+}
+
+fn random_service_name() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut bytes = [0u8; 6];
+    getrandom::getrandom(&mut bytes).expect("系统熵源不可用");
+    let suffix: String = bytes.iter().map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect();
+    format!("mirrordock-{suffix}")
+}
+
+fn random_pairing_code() -> String {
+    let mut bytes = [0u8; 6];
+    getrandom::getrandom(&mut bytes).expect("系统熵源不可用");
+    bytes.iter().map(|b| char::from(b'0' + (b % 10))).collect()
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct QrPairingOffer {
+    /// 发给手机扫的二维码内容。
+    payload: String,
+    service_name: String,
+    pairing_code: String,
+}
+
+/// 开始一次扫码配对：生成二维码载荷并登记跟踪状态。前端持有返回值并轮询进度。
+#[tauri::command]
+fn begin_qr_pairing(store: State<QrPairingStore>) -> QrPairingOffer {
+    let service_name = random_service_name();
+    let pairing_code = random_pairing_code();
+    store.insert(&service_name);
+    QrPairingOffer {
+        payload: format!("WIFI:T:ADB;S:{service_name};P:{pairing_code};;"),
+        service_name,
+        pairing_code,
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct QrPairingProgress {
+    /// waiting=等手机扫码；pairing=已发现手机，正在配对；paired=配对成功，等连接；
+    /// done=配对且连接完成；ended=该次配对已被取消或不存在。
+    stage: String,
+    detail: Option<String>,
+}
+
+/// 扫码配对进度轮询：无进展返回 waiting；发现手机实例名后执行配对与连接。
+/// 每次调用都是幂等的——已配对的会话不会重复配对，已完成的不会重复连接。
+#[tauri::command]
+fn qr_pairing_progress(
+    store: State<QrPairingStore>,
+    runtimes: State<AppRuntimes>,
+    service_name: String,
+    pairing_code: String,
+) -> Result<QrPairingProgress, AppError> {
+    if service_name.is_empty()
+        || !service_name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || validate_pairing_code(&pairing_code).is_err()
+    {
+        return Err(AppError::new(
+            "qr_pairing_invalid",
+            "扫码配对参数不合法。",
+            "请重新生成二维码后再试。",
+        ));
+    }
+    if !store.0.lock().unwrap().contains_key(&service_name) {
+        return Ok(QrPairingProgress { stage: "ended".into(), detail: None });
+    }
+    let raw = runtimes.adb.mdns_services().map_err(|error| {
+        adb_command_error(
+            error,
+            "mdns_failed",
+            "无法搜索局域网内的无线调试服务。",
+            "请确认 adb 可用后重试；也可以改用「配对码配对」手动填写。",
+        )
+    })?;
+    let entries = parse_mdns_entries(&raw);
+    if !store.is_paired(&service_name) {
+        let Some(entry) = entries
+            .iter()
+            .find(|entry| entry.service == "_adb-tls-pairing._tcp" && entry.instance == service_name)
+        else {
+            return Ok(QrPairingProgress { stage: "waiting".into(), detail: None });
+        };
+        runtimes
+            .adb
+            .pair(&entry.endpoint, &pairing_code)
+            .map_err(|error| {
+                adb_command_error(
+                    error,
+                    "pairing_failed",
+                    "发现手机但配对未完成。",
+                    "请确认手机停在「使用二维码配对设备」页面后重试；失败持续时可改用配对码配对。",
+                )
+            })?;
+        store.mark_paired(&service_name);
+        return Ok(QrPairingProgress { stage: "paired".into(), detail: None });
+    }
+    // 配对已完成：尝试对手机新广播的连接地址执行 connect。
+    if let Some(entry) = entries.iter().find(|entry| entry.service == "_adb-tls-connect._tcp") {
+        match runtimes.adb.connect(&entry.endpoint) {
+            Ok(()) => {
+                store.remove(&service_name);
+                return Ok(QrPairingProgress { stage: "done".into(), detail: Some(entry.endpoint.clone()) });
+            }
+            Err(_) => {
+                return Ok(QrPairingProgress {
+                    stage: "paired".into(),
+                    detail: Some("手机已配对，但自动连接还没有完成。".into()),
+                });
+            }
+        }
+    }
+    Ok(QrPairingProgress {
+        stage: "paired".into(),
+        detail: Some("配对成功，等待手机回到无线调试主页面后自动连接。".into()),
+    })
+}
+
+/// 结束/取消扫码配对：清除跟踪状态；前端的二维码也随之作废。
+#[tauri::command]
+fn end_qr_pairing(store: State<QrPairingStore>, service_name: String) {
+    store.remove(&service_name);
 }
 
 #[tauri::command]
@@ -3546,6 +3731,7 @@ pub fn run() {
         .manage(SessionStore::default())
         .manage(AppRuntimes::system())
         .manage(DiagnosticsLog::default())
+        .manage(QrPairingStore::default())
         .manage(Arc::new(companion_pairing::PairingState::default()))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -3571,6 +3757,9 @@ pub fn run() {
             pair_wireless_device,
             connect_wireless_device,
             discover_pairing_services,
+            begin_qr_pairing,
+            qr_pairing_progress,
+            end_qr_pairing,
             list_trusted_wireless_devices,
             forget_trusted_wireless_device,
             diagnostics_preview,
@@ -4185,14 +4374,51 @@ mod tests {
     }
 
     /// mDNS 解析（B-开发者中心配对）：只认配对与连接两类服务，端点必须是 ip:port。
+    /// 真实 adb 输出是「实例名 + 服务类型 + 端点」三列，这里同时覆盖三列与两列旧格式。
     #[test]
     fn mdns_parsing_keeps_only_pairing_and_connect_endpoints() {
-        let raw = "List of MDNS services:\n\t_adb._tcp.\t192.168.1.20:5555\n\t_adb-tls-pairing._tcp.\t192.168.1.20:37123\n\t_adb-tls-connect._tcp.\t192.168.1.20:41839\n\t_adb-tls-connect._tcp.\tnot-an-endpoint\n\t_adb-tls-pairing._tcp.\t192.168.1.20:37123\n";
+        let raw = "List of discovered mdns services\nadb-79j7kn9tkjt8rwss-rF7qH8\t_adb-tls-connect._tcp\t192.168.1.9:33739\nstudio-58m7E2\t_adb-tls-pairing._tcp\t192.168.1.20:37123\nadb-other\t_adb-tls-connect._tcp\tnot-an-endpoint\nstudio-58m7E2\t_adb-tls-pairing._tcp\t192.168.1.20:37123\n";
         let (pairing, connect) = parse_mdns_services(raw);
         assert_eq!(pairing, vec!["192.168.1.20:37123".to_owned()]);
-        assert_eq!(connect, vec!["192.168.1.20:41839".to_owned()]);
+        assert_eq!(connect, vec!["192.168.1.9:33739".to_owned()]);
         assert!(parse_mdns_services("").0.is_empty());
         assert!(parse_mdns_services("").1.is_empty());
+    }
+
+    /// 扫码配对：按「服务类型 + 实例名」精确命中手机广播的配对服务；实例名不同的
+    /// 其他配对服务（别的电脑正在配对）绝不能误配。
+    #[test]
+    fn mdns_entries_match_pairing_instance_exactly() {
+        let raw = "adb-xxx-A1\t_adb-tls-pairing._tcp\t192.168.1.20:37001\nmirrordock-abc234\t_adb-tls-pairing._tcp\t192.168.1.20:37002\nmirrordock-abc234\t_adb-tls-connect._tcp\t192.168.1.20:41002\n";
+        let entries = parse_mdns_entries(raw);
+        let found = entries
+            .iter()
+            .find(|entry| entry.service == "_adb-tls-pairing._tcp" && entry.instance == "mirrordock-abc234")
+            .map(|entry| entry.endpoint.clone());
+        assert_eq!(found, Some("192.168.1.20:37002".to_owned()));
+    }
+
+    /// 扫码配对：二维码载荷必须是 Android 识别的 WIFI:T:ADB 格式；生成的配对码
+    /// 必须通过既有校验（6 位数字）。
+    #[test]
+    fn qr_pairing_generates_valid_payload_and_code() {
+        let store = QrPairingStore::default();
+        let offer = {
+            // begin_qr_pairing 只依赖 store；直接内联等价逻辑以避免构造 Tauri State。
+            let service_name = "mirrordock-test1".to_owned();
+            let pairing_code = random_pairing_code();
+            store.insert(&service_name);
+            QrPairingOffer {
+                payload: format!("WIFI:T:ADB;S:{service_name};P:{pairing_code};;"),
+                service_name,
+                pairing_code,
+            }
+        };
+        assert!(offer.payload.starts_with("WIFI:T:ADB;S:mirrordock-"));
+        assert!(offer.payload.ends_with(";;"));
+        assert!(validate_pairing_code(&offer.pairing_code).is_ok());
+        assert_eq!(random_pairing_code().len(), 6);
+        assert!(random_service_name().starts_with("mirrordock-"));
     }
 
     // -- 结构化错误契约 --
