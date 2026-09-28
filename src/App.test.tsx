@@ -14,6 +14,12 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
+// 全局快捷键插件在测试环境中没有 Tauri 运行时；App 内部会先探测
+// __TAURI_INTERNALS__ 再注册，这里 mock 掉以保证双保险。
+vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
+  register: vi.fn().mockResolvedValue(undefined),
+  unregisterAll: vi.fn().mockResolvedValue(undefined),
+}));
 
 import App, {
   capabilitySummary,
@@ -28,6 +34,7 @@ import App, {
   recordingFileName,
   relativeTime,
   screenshotFileName,
+  sessionShortcutKeys,
   sessionStatus,
   supportText,
   type DeviceCapabilities,
@@ -419,6 +426,24 @@ describe("entitlement", () => {
     fireEvent.click(screen.getByRole("button", { name: "激活专业版" }));
     expect(await screen.findByText(/许可证签名无效。 请确认许可证来自官方渠道。/)).toBeInTheDocument();
     expect(screen.getByText("当前版本：免费版")).toBeInTheDocument();
+  });
+});
+
+describe("shortcuts and rotation", () => {
+  it("session_shortcuts_cover_screenshot_record_and_rotation", () => {
+    expect(sessionShortcutKeys()).toEqual([
+      "CommandOrControl+Alt+S",
+      "CommandOrControl+Alt+R",
+      "CommandOrControl+Alt+D",
+    ]);
+  });
+
+  it("rotation_defaults_to_following_the_device_instead_of_locking", async () => {
+    render(<App />);
+    const rotationSelect = await screen.findByLabelText(/显示方向/);
+    expect(rotationSelect).toHaveValue("0");
+    // 「自动（跟随手机）」必须是默认选项，锁定角度只能由用户显式选择。
+    expect(rotationSelect).toHaveTextContent("自动（跟随手机）");
   });
 });
 

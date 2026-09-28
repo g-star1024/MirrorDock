@@ -430,7 +430,7 @@ mod tests {
         let tcp = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
             .await
             .unwrap();
-        let mut tls = connector
+        let tls = connector
             .connect(server_name(), tcp)
             .await
             .expect("TLS 握手（指纹校验通过）");
@@ -485,7 +485,7 @@ mod tests {
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
 
         let tcp = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap();
-        let mut tls = connector.connect(server_name(), tcp).await.unwrap();
+        let tls = connector.connect(server_name(), tcp).await.unwrap();
         let (mut read_half, mut write_half) = tokio::io::split(tls);
         write_half.write_all(b"MDP1 WRONGTOKEN00000\n").await.unwrap();
         let mut buf = vec![0u8; 128];

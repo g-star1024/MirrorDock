@@ -21,6 +21,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# 全局快捷键（B-快捷键）：镜像窗口获得焦点时主窗口收不到键盘事件，只有系统级
+# 快捷键能在不切回主窗口的前提下触发截图/录制/旋转。仅在会话进行中注册。
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

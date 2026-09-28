@@ -22,6 +22,8 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_CAMERA = 42
         private const val REQUEST_CAPTURE = 43
         private const val REQUEST_NOTIFICATION = 44
+        /** 上一次崩溃堆栈的落盘文件名（见 CrashGuard）。 */
+        const val CRASH_FILE = "last_crash.txt"
     }
 
     private lateinit var statusText: TextView
@@ -33,6 +35,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashGuard.install(applicationContext)
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.status_text)
         logText = findViewById(R.id.log_text)
@@ -58,6 +61,11 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
 
         log("伴侣 App 已启动。")
+        // 崩溃取证：如果上一次会话闪退，把堆栈原样回显，方便拍照反馈。
+        CrashGuard.lastCrash(applicationContext)?.let { last ->
+            log("⚠️ 上一次运行发生崩溃，堆栈如下（可拍照发给支持）：")
+            log(last)
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -65,7 +73,14 @@ class MainActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
-            REQUEST_CAMERA -> if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) openScanner()
+            REQUEST_CAMERA -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    openScanner()
+                } else {
+                    log("相机权限被拒绝：扫码需要相机，请在系统设置中允许后重试。")
+                    Toast.makeText(this, "扫码需要相机权限", Toast.LENGTH_SHORT).show()
+                }
+            }
             REQUEST_NOTIFICATION -> if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) requestCaptureConsent()
         }
     }
@@ -161,5 +176,40 @@ class MainActivity : AppCompatActivity() {
     private fun log(line: String) {
         logLines.appendLine(line)
         logText.text = logLines.toString()
+    }
+}
+
+/**
+ * 全局崩溃取证：任何未捕获异常（包括扫码页）先把堆栈写入应用私有目录，
+ * 再交回系统默认处理（该崩还是崩）。下次启动把堆栈回显到主界面日志区。
+ *
+ * 为什么不静默吞掉：闪退必须能看到原因，否则无法排查；堆栈只落在本机，
+ * 不自动上传，由用户拍照或手动发送。
+ */
+object CrashGuard {
+
+    fun install(context: android.content.Context) {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching { save(context, throwable) }
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
+    fun lastCrash(context: android.content.Context): String? {
+        val file = java.io.File(context.getExternalFilesDir(null) ?: context.filesDir, MainActivity.CRASH_FILE)
+        return runCatching { file.takeIf { it.exists() }?.readText() }.getOrNull()
+    }
+
+    private fun save(context: android.content.Context, throwable: Throwable) {
+        val dir = context.getExternalFilesDir(null) ?: context.filesDir
+        java.io.File(dir, MainActivity.CRASH_FILE).writeText(
+            buildString {
+                appendLine("时间: ${java.util.Date()}")
+                appendLine("设备: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
+                appendLine()
+                appendLine(android.util.Log.getStackTraceString(throwable))
+            },
+        )
     }
 }

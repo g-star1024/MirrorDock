@@ -297,6 +297,12 @@ trait AdbRuntime: Send + Sync {
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error>;
     fn connect(&self, endpoint: &str) -> Result<(), std::io::Error>;
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error>;
+    /// 列出局域网内 adb 通过 mDNS 发现的服务（`adb mdns services` 原始输出）。
+    ///
+    /// 用于「开发者中心扫码配对」的自动填地址：手机无线调试处于配对页时，会
+    /// 广播 `_adb-tls-pairing._tcp.` 服务；主页面广播 `_adb-tls-connect._tcp.`。
+    /// 解析只挑这两类，其余服务一律忽略。
+    fn mdns_services(&self) -> Result<String, std::io::Error>;
 }
 
 /// 一个已启动的镜像进程。抽象出 `try_wait` 与 `kill`，使会话生命周期可在测试中验证。
@@ -452,8 +458,13 @@ impl SessionOptions {
             format!("--max-size={size}"),
             format!("--video-bit-rate={bitrate}"),
             "--video-codec=h264".into(),
-            format!("--display-orientation={}", self.rotation),
         ];
+        // rotation == 0 表示「自动（跟随手机）」：不传 --display-orientation，
+        // scrcpy 会随设备旋转（如打开横屏游戏）自动转正画面并调整窗口大小。
+        // 只有用户显式选择 90/180/270 时才锁定方向。
+        if self.rotation != 0 {
+            args.push(format!("--display-orientation={}", self.rotation));
+        }
         if self.keep_awake {
             args.push("--stay-awake".into());
         }
@@ -615,6 +626,10 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn connect(&self, endpoint: &str) -> Result<(), std::io::Error> {
         Self::run(&["connect", endpoint])
+    }
+
+    fn mdns_services(&self) -> Result<String, std::io::Error> {
+        Self::capture(&["mdns", "services"])
     }
 
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error> {
@@ -2750,6 +2765,74 @@ fn delete_recording(
     remove_recording_file(&directory, &file_name, &sessions)
 }
 
+/// 解析 `adb mdns services` 输出，挑出无线调试相关的两类服务。
+///
+/// adb 输出形如（制表符分隔）：
+/// ```text
+/// List of MDNS services:
+/// \t_adb-tls-pairing._tcp.\t192.168.1.20:37123
+/// \t_adb-tls-connect._tcp.\t192.168.1.20:41839
+/// ```
+/// 配对地址只在手机停留于「使用配对码配对设备」页时广播，窗口很短；连接地址
+/// 在无线调试主页面广播。返回 (配对地址, 连接地址) 两组，均为去重后的 ip:port。
+fn parse_mdns_services(raw: &str) -> (Vec<String>, Vec<String>) {
+    let mut pairing = Vec::new();
+    let mut connect = Vec::new();
+    for line in raw.lines() {
+        let mut fields = line.split_whitespace();
+        let service = fields.next().unwrap_or("");
+        let endpoint = fields.next().unwrap_or("");
+        // 端点必须形如 ip:port，其余字段忽略；非法形式直接跳过，不猜。
+        let valid = endpoint.rsplit_once(':').is_some_and(|(_, port)| {
+            !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+        });
+        if !valid {
+            continue;
+        }
+        if service == "_adb-tls-pairing._tcp." && !pairing.contains(&endpoint.to_owned()) {
+            pairing.push(endpoint.to_owned());
+        } else if service == "_adb-tls-connect._tcp." && !connect.contains(&endpoint.to_owned()) {
+            connect.push(endpoint.to_owned());
+        }
+    }
+    (pairing, connect)
+}
+
+/// 自动发现局域网内手机的无线调试地址（mDNS）。手机端要求：
+/// - 配对地址：停在「使用配对码配对设备」页面才会广播；
+/// - 连接地址：无线调试主页面广播（Android 12+ 部分机型需开启「无线调试」里的
+///   mDNS 后端开关）。
+/// 端点是局域网地址，不写诊断日志。
+#[tauri::command]
+fn discover_pairing_services(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+) -> Result<WirelessServices, AppError> {
+    let result = runtimes
+        .adb
+        .mdns_services()
+        .map(|raw| {
+            let (pairing, connect) = parse_mdns_services(&raw);
+            WirelessServices { pairing, connect }
+        })
+        .map_err(|error| {
+            adb_command_error(
+                error,
+                "mdns_failed",
+                "自动发现不可用。",
+                "请手动填写配对地址；旧版本 adb 可能不支持 mDNS，可运行 adb version 确认。",
+            )
+        });
+    log.record_outcome("mdns_discover", result.as_ref().err(), &[]);
+    result
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct WirelessServices {
+    pairing: Vec<String>,
+    connect: Vec<String>,
+}
+
 #[tauri::command]
 fn pair_wireless_device(
     runtimes: State<AppRuntimes>,
@@ -3466,6 +3549,7 @@ pub fn run() {
         .manage(Arc::new(companion_pairing::PairingState::default()))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             check_adb_devices,
             probe_device_capabilities,
@@ -3486,6 +3570,7 @@ pub fn run() {
             delete_recording,
             pair_wireless_device,
             connect_wireless_device,
+            discover_pairing_services,
             list_trusted_wireless_devices,
             forget_trusted_wireless_device,
             diagnostics_preview,
@@ -3749,6 +3834,10 @@ mod tests {
                 .unwrap()
                 .push(format!("disconnect {endpoint}"));
             Ok(())
+        }
+
+        fn mdns_services(&self) -> Result<String, std::io::Error> {
+            Ok(String::new())
         }
     }
 
@@ -4079,6 +4168,31 @@ mod tests {
             assert!(args.contains(&"--always-on-top".into()));
             assert!(args.contains(&"--display-orientation=90".into()));
         }
+    }
+
+    /// 自动横竖屏（B-旋转）：rotation=0 表示「跟随手机」，必须**不传**
+    /// `--display-orientation`——传了 0 反而会把画面锁死在竖屏，横屏游戏
+    /// 打开时镜像不会跟着转（真机问题定案）。
+    #[test]
+    fn rotation_zero_omits_display_orientation_so_device_rotation_is_followed() {
+        let options = SessionOptions::default();
+        assert_eq!(options.rotation, 0);
+        let args = options.arguments().unwrap();
+        assert!(!args.iter().any(|arg| arg.starts_with("--display-orientation")));
+        // 显式选择其它角度时仍然锁定。
+        let rotated = SessionOptions { rotation: 270, ..Default::default() };
+        assert!(rotated.arguments().unwrap().contains(&"--display-orientation=270".into()));
+    }
+
+    /// mDNS 解析（B-开发者中心配对）：只认配对与连接两类服务，端点必须是 ip:port。
+    #[test]
+    fn mdns_parsing_keeps_only_pairing_and_connect_endpoints() {
+        let raw = "List of MDNS services:\n\t_adb._tcp.\t192.168.1.20:5555\n\t_adb-tls-pairing._tcp.\t192.168.1.20:37123\n\t_adb-tls-connect._tcp.\t192.168.1.20:41839\n\t_adb-tls-connect._tcp.\tnot-an-endpoint\n\t_adb-tls-pairing._tcp.\t192.168.1.20:37123\n";
+        let (pairing, connect) = parse_mdns_services(raw);
+        assert_eq!(pairing, vec!["192.168.1.20:37123".to_owned()]);
+        assert_eq!(connect, vec!["192.168.1.20:41839".to_owned()]);
+        assert!(parse_mdns_services("").0.is_empty());
+        assert!(parse_mdns_services("").1.is_empty());
     }
 
     // -- 结构化错误契约 --
