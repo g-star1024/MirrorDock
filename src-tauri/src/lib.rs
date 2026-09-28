@@ -69,6 +69,8 @@ struct AdbCheck {
 ///   invalid_rotation / endpoint_invalid / pairing_code_invalid / pairing_failed
 ///   connect_failed / connect_not_ready
 ///   trusted_list_unavailable / trusted_list_unreadable / trusted_list_write_failed
+///   lock_probe_failed / wake_failed
+///   recent_list_unavailable / recent_list_unreadable / recent_list_write_failed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AppError {
     code: &'static str,
@@ -1100,6 +1102,23 @@ fn save_recent_devices(path: &Path, devices: &[RecentDevice]) -> Result<(), AppE
     })
 }
 
+/// 从最近设备列表中移除一台设备；返回是否真的移除了。
+///
+/// 最近设备是**本地便利记录**，用户必须能撤销它——否则“本地优先”就只是口号。
+fn forget_recent_device_from(devices: &mut Vec<RecentDevice>, serial: &str) -> bool {
+    let before = devices.len();
+    devices.retain(|device| device.serial != serial);
+    before != devices.len()
+}
+
+/// 从磁盘上的记录中移除一台设备，并返回移除后的完整列表（省去前端再取一次）。
+fn forget_recent_device_at(path: &Path, serial: &str) -> Result<Vec<RecentDevice>, AppError> {
+    let mut devices = load_recent_devices(path)?;
+    forget_recent_device_from(&mut devices, serial);
+    save_recent_devices(path, &devices)?;
+    Ok(devices)
+}
+
 /// 记录一台成功启动过镜像的设备。这是本地便利功能：读写失败不得影响镜像主流程。
 fn remember_recent_device(app: &AppHandle, serial: &str, label: &str) {
     let Ok(path) = recent_devices_path(app) else {
@@ -1834,6 +1853,17 @@ fn list_recent_devices(app: AppHandle) -> Result<Vec<RecentDevice>, AppError> {
     load_recent_devices(&recent_devices_path(&app)?)
 }
 
+/// 把一台设备从本机的最近使用记录中移除。
+///
+/// 它只删除“最近使用”这条**本地便利记录**：不会断开当前连接、不会忘记无线配对，也不会
+/// 撤销手机上的调试授权。本地优先的产品里，用户必须能撤销自己被记下的痕迹。
+/// 返回移除后的完整列表，省去前端再取一次。
+#[tauri::command]
+fn forget_recent_device(app: AppHandle, serial: String) -> Result<Vec<RecentDevice>, AppError> {
+    let serial = validate_serial(&serial)?;
+    forget_recent_device_at(&recent_devices_path(&app)?, &serial)
+}
+
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
@@ -1859,6 +1889,7 @@ pub fn run() {
             wake_device,
             device_lock_report,
             list_recent_devices,
+            forget_recent_device,
             pair_wireless_device,
             connect_wireless_device,
             list_trusted_wireless_devices,
@@ -3194,6 +3225,59 @@ mod tests {
             devices[0].serial,
             format!("device-{}", MAX_RECENT_DEVICES + 4)
         );
+    }
+
+    #[test]
+    fn forgetting_a_recent_device_removes_only_that_record() {
+        let mut devices = Vec::new();
+        for (serial, label, at) in [("usb-a", "A", 1u64), ("192.168.1.20:37123", "B", 2)] {
+            record_recent_device(
+                &mut devices,
+                RecentDevice {
+                    serial: serial.into(),
+                    label: label.into(),
+                    last_used_at: at,
+                },
+            );
+        }
+
+        assert!(forget_recent_device_from(&mut devices, "usb-a"));
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].serial, "192.168.1.20:37123");
+
+        // 移除不存在的记录不算成功，也不得改动列表；重复移除必须幂等。
+        assert!(!forget_recent_device_from(&mut devices, "usb-a"));
+        assert_eq!(devices.len(), 1);
+    }
+
+    #[test]
+    fn a_recent_device_record_is_removable_from_disk() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrordock-recent-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let path = directory.join("recent-devices.json");
+
+        assert!(load_recent_devices(&path).unwrap().is_empty());
+        save_recent_devices(
+            &path,
+            &[RecentDevice {
+                serial: "usb-a".into(),
+                label: "A".into(),
+                last_used_at: 7,
+            }],
+        )
+        .unwrap();
+
+        let remaining = forget_recent_device_at(&path, "usb-a").unwrap();
+        assert!(remaining.is_empty());
+        assert!(
+            load_recent_devices(&path).unwrap().is_empty(),
+            "删除必须真正落盘，不能只改内存"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]

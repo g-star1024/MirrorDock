@@ -18,6 +18,21 @@ type AdbCheck = {
 };
 
 type TrustedWirelessDevice = { endpoint: string };
+// 最近使用记录只保存在这台电脑上，用户可以逐条移除。last_used_at 是 Unix 秒。
+type RecentDevice = { serial: string; label: string; last_used_at: number };
+// 无线设备的标识形如 ip:port；USB 序列号不含冒号。仅用于决定给出哪种恢复动作。
+function looksLikeWirelessEndpoint(serial: string) {
+  return serial.includes(":");
+}
+function relativeTime(seconds: number) {
+  if (!seconds) return "使用时间未知";
+  const diff = Date.now() / 1000 - seconds;
+  if (diff < 60) return "刚刚使用";
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前使用`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前使用`;
+  const days = Math.floor(diff / 86400);
+  return days === 1 ? "昨天使用" : `${days} 天前使用`;
+}
 type AppError = { code: string; message: string; recovery: string };
 type SessionPhase = "idle" | "unauthorized" | "offline" | "paired" | "connecting" | "streaming" | "failed";
 // 进程正在运行不等于首帧已到达；未接入端到端探针前后端只会返回 unknown。
@@ -156,6 +171,8 @@ function App() {
   const [wirelessMessage, setWirelessMessage] = useState<string | null>(null);
   const [wirelessBusy, setWirelessBusy] = useState(false);
   const [trustedDevices, setTrustedDevices] = useState<TrustedWirelessDevice[]>([]);
+  const [recentDevices, setRecentDevices] = useState<RecentDevice[]>([]);
+  const [recentMessage, setRecentMessage] = useState<string | null>(null);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
@@ -225,7 +242,40 @@ function App() {
     try { setSelectedSerial(localStorage.getItem("mirrordock.lastDeviceSerial")); } catch { /* Storage may be unavailable. */ }
     void refreshDevices();
     void refreshTrustedDevices();
+    void refreshRecentDevices();
   }, []);
+
+  async function refreshRecentDevices() {
+    try {
+      setRecentDevices(await invoke<RecentDevice[]>("list_recent_devices"));
+    } catch (error) {
+      setRecentDevices([]);
+      setRecentMessage(errorMessage(error, "无法读取本机最近使用的设备记录。"));
+    }
+  }
+
+  // 只移除这条本地记录：不断开连接、不忘记无线配对、不撤销手机上的调试授权。
+  async function forgetRecentDevice(serial: string) {
+    setRecentMessage(null);
+    try {
+      setRecentDevices(await invoke<RecentDevice[]>("forget_recent_device", { serial }));
+      setRecentMessage("已从本机的最近使用记录中移除。");
+    } catch (error) {
+      setRecentMessage(errorMessage(error, "无法移除这条记录。"));
+    }
+  }
+
+  // 无线设备的连接端口每次重新开启无线调试都可能变化，因此这里不承诺一定能连上。
+  async function reconnectRecentDevice(endpoint: string) {
+    setRecentMessage(null);
+    try {
+      await invoke("connect_wireless_device", { endpoint });
+      setRecentMessage("已发送连接请求，正在更新设备列表。如果手机重新开启过无线调试，端口可能已经变化，需要重新配对。");
+      await refreshDevices();
+    } catch (error) {
+      setRecentMessage(errorMessage(error, "这条记录无法直接连接，请在下方“无线调试”区域重新配对。"));
+    }
+  }
 
   async function refreshTrustedDevices() {
     try {
@@ -244,6 +294,8 @@ function App() {
     try {
       await invoke("start_mirroring", { serial, options });
       try { localStorage.setItem("mirrordock.lastDeviceSerial", serial); } catch { setSettingsNotice("无法保存最近设备，本次连接不受影响。"); }
+      // 启动成功后端才记入最近设备，这里同步刷新以反映新的排序。
+      void refreshRecentDevices();
     } catch (error) {
       setLaunchError(errorMessage(error, "无法启动镜像窗口。请重新检查连接后再试。"));
     } finally {
@@ -498,6 +550,37 @@ function App() {
                 <span className="status-label">{stateCopy[device.state].label}</span>
               </div>
             ))}
+          </div>
+        )}
+
+        {recentDevices.length > 0 && (
+          <div className="recent-devices" aria-label="最近使用过的设备">
+            <strong>最近使用过的设备</strong>
+            {recentDevices.map((device) => {
+              const connected = check?.devices.find((item) => item.serial === device.serial);
+              return (
+                <div className="recent-device" key={device.serial}>
+                  <div className="recent-device-info">
+                    <strong>{device.label}</strong>
+                    <p>
+                      {relativeTime(device.last_used_at)} · {connected ? stateCopy[connected.state].label : "当前未连接"}
+                    </p>
+                  </div>
+                  <span>
+                    {connected?.state === "ready" ? (
+                      <button className="text-button" type="button" disabled={isLaunching || sessionActive} onClick={() => void startMirroring(device.serial)}>开始镜像</button>
+                    ) : looksLikeWirelessEndpoint(device.serial) ? (
+                      <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
+                    ) : (
+                      <span className="recent-hint">请用数据线重新连接</span>
+                    )}
+                    <button className="text-button danger" type="button" onClick={() => void forgetRecentDevice(device.serial)}>移除记录</button>
+                  </span>
+                </div>
+              );
+            })}
+            <p className="recent-note">这份记录只保存在这台电脑上，可随时逐条移除。移除记录不会断开连接，也不会撤销手机上的调试授权。</p>
+            {recentMessage && <p className="recent-note" role="status">{recentMessage}</p>}
           </div>
         )}
       </section>

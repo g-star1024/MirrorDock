@@ -70,6 +70,14 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .device-choice { padding: 8px 11px; border: 1px solid #cdd8cb; border-radius: 999px; color: #48604e; background: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
 .device-choice.selected { border-color: #307c52; color: #fff; background: #307c52; }
 .device-list { display: grid; gap: 10px; margin-top: 20px; }
+/* 「最近使用过的设备」：本地便利记录，可逐条移除。 */
+.recent-devices { display: grid; gap: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #edf1eb; color: #415044; font-size: 14px; }
+.recent-device { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px; border-radius: 10px; background: #f5f8f4; }
+.recent-device-info strong { display: block; }
+.recent-device-info p { margin: 3px 0 0; color: #68736a; font-size: 13px; }
+.recent-device span { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+.recent-hint { color: #68736a; font-size: 13px; }
+.recent-note { margin: 0; color: #68736a; font-size: 13px; line-height: 1.5; }
 .device-row { margin-top: 0; background: #fafcf9; }
 .status-dot { flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%; background: #a8b2a9; }
 .status-dot.ready { background: #2e9a5c; box-shadow: 0 0 0 4px #d8f1df; }
@@ -117,4 +125,6 @@ button:disabled { cursor: not-allowed; opacity: .58; }
   .wireless-form { grid-template-columns: 1fr; }
   .wireless-form label:nth-child(3) { grid-column: auto; }
   .trusted-device { align-items: flex-start; flex-direction: column; }
+  .recent-device { align-items: flex-start; flex-direction: column; }
+  .recent-device span { flex-wrap: wrap; }
 }
