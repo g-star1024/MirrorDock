@@ -46,6 +46,8 @@ type DeviceLockReport = {
   recovery: string;
 };
 type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean };
+// 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
+type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true };
 function readOptions(): SessionOptions {
   try {
@@ -162,6 +164,8 @@ function App() {
   const [lockBusy, setLockBusy] = useState(false);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [applyingOptions, setApplyingOptions] = useState(false);
+  const [applyNotice, setApplyNotice] = useState<string | null>(null);
   const sessionActive = session?.phase === "connecting" || session?.phase === "streaming";
   useEffect(() => {
     let disposed = false;
@@ -180,8 +184,25 @@ function App() {
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   function updateOptions(next: SessionOptions) {
     setOptions(next);
+    // 设置一旦被改动，上一次「已应用 / 无需重启」的结论就不再适用，先清掉避免误导。
+    setApplyNotice(null);
     try { localStorage.setItem("mirrordock.sessionOptions", JSON.stringify(next)); }
     catch { setSettingsNotice("本机设置无法保存，本次会话仍可使用这些选项。"); }
+  }
+
+  // 会话进行中应用新设置：镜像窗口会按新参数重新打开，画面会短暂中断。
+  async function applySessionOptions() {
+    setApplyingOptions(true);
+    setApplyNotice(null);
+    try {
+      const result = await invoke<SessionUpdate>("update_session_options", { options });
+      setSession(result.session);
+      setApplyNotice(result.applied ? "新设置已生效：镜像窗口已按新设置重新打开。" : result.note ?? "设置与当前会话一致，未重启镜像窗口。");
+    } catch (error) {
+      setApplyNotice(errorMessage(error, "无法应用新设置。"));
+    } finally {
+      setApplyingOptions(false);
+    }
   }
 
   async function refreshDevices() {
@@ -219,6 +240,7 @@ function App() {
     setSelectedSerial(serial);
     setIsLaunching(true);
     setLaunchError(null);
+    setApplyNotice(null);
     try {
       await invoke("start_mirroring", { serial, options });
       try { localStorage.setItem("mirrordock.lastDeviceSerial", serial); } catch { setSettingsNotice("无法保存最近设备，本次连接不受影响。"); }
@@ -234,6 +256,8 @@ function App() {
     setLaunchError(null);
     try {
       await invoke("stop_mirroring");
+      // 会话已结束，上一次「新设置已生效」的提示不再有意义。
+      setApplyNotice(null);
     } catch (error) {
       setLaunchError(errorMessage(error, "无法结束镜像会话，请手动关闭镜像窗口。"));
     } finally {
@@ -382,7 +406,7 @@ function App() {
         )}
         {settingsNotice && <p className="diagnostic">{settingsNotice}</p>}
         <fieldset className="session-options">
-          <legend>镜像窗口设置（下次启动生效）</legend>
+          <legend>镜像窗口设置{sessionActive ? "（会话中修改需重启镜像窗口）" : "（开始镜像时生效）"}</legend>
           <label>画质 <select value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>
             <option value="smooth">流畅 · 1024 / 2 Mbps</option><option value="balanced">均衡 · 1920 / 8 Mbps</option><option value="sharp">清晰 · 2560 / 16 Mbps</option>
           </select></label>
@@ -392,8 +416,15 @@ function App() {
           <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
           <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
           <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
+          {sessionActive && (
+            <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
+              {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
+            </button>
+          )}
           <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
+          {sessionActive && <p>这些设置由镜像窗口在启动时确定，无法在运行中热更新。点击“应用并重启镜像窗口”后，画面会短暂中断并自动恢复。</p>}
           <p>无线卡顿时可选择“流畅”。受保护内容可能显示黑屏；旋转只改变电脑上的显示方向。</p>
+          {applyNotice && <p className="apply-notice" role="status">{applyNotice}</p>}
         </fieldset>
 
         {readyDevice ? (

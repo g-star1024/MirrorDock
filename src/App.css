@@ -65,6 +65,8 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .session-options label { display: flex; align-items: center; gap: 8px; }
 .session-options select { font: inherit; padding: 6px; max-width: 100%; }
 .session-options p { width: 100%; margin: 0; color: #68736a; font-size: 14px; }
+/* 「应用并重启镜像窗口」的结果反馈：与普通说明文字区分开，失败信息不能被当成背景文字被忽略。 */
+.session-options p.apply-notice { padding: 10px 12px; border-left: 3px solid #2e9a5c; border-radius: 8px; color: #26603c; background: #f2faf4; }
 .device-choice { padding: 8px 11px; border: 1px solid #cdd8cb; border-radius: 999px; color: #48604e; background: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
 .device-choice.selected { border-color: #307c52; color: #fff; background: #307c52; }
 .device-list { display: grid; gap: 10px; margin-top: 20px; }

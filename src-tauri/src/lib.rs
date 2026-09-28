@@ -65,7 +65,7 @@ struct AdbCheck {
 ///   device_offline / device_not_connected
 ///   adb_missing / adb_unavailable / probe_failed
 ///   mirror_runtime_missing / mirror_start_failed / mirror_exited / mirror_stop_failed
-///   session_unavailable / session_busy / session_not_running
+///   session_unavailable / session_busy / session_not_running / session_restart_failed
 ///   invalid_rotation / endpoint_invalid / pairing_code_invalid / pairing_failed
 ///   connect_failed / connect_not_ready
 ///   trusted_list_unavailable / trusted_list_unreadable / trusted_list_write_failed
@@ -291,7 +291,7 @@ impl AppRuntimes {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Quality {
     Smooth,
@@ -304,7 +304,7 @@ fn keep_awake_by_default() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct SessionOptions {
     quality: Quality,
@@ -495,6 +495,12 @@ struct SessionState {
     process: Option<Box<dyn MirrorProcess>>,
     /// 每次状态跃迁递增。监视线程据此判断自己是否仍然拥有当前会话。
     epoch: u64,
+    /// 当前会话**实际使用**的启动参数。
+    ///
+    /// 保存在这里的原因是：镜像窗口是独立进程，窗口形态（全屏、置顶、旋转、画质）
+    /// 在启动时确定，无法在运行中改写。要让界面能判断「这次修改是否真的需要重启
+    /// 镜像窗口」，就必须知道上一次启动到底用了什么参数。
+    options: SessionOptions,
 }
 
 struct SessionStore(Arc<Mutex<SessionState>>);
@@ -505,6 +511,7 @@ impl Default for SessionStore {
             session: MirrorSession::idle(),
             process: None,
             epoch: 0,
+            options: SessionOptions::default(),
         })))
     }
 }
@@ -569,11 +576,13 @@ fn attach_process(
     store: &SessionStore,
     process: Box<dyn MirrorProcess>,
     serial: String,
+    options: SessionOptions,
 ) -> Result<u64, AppError> {
     let mut state = store.lock()?;
     state.epoch = state.epoch.wrapping_add(1);
     state.session = MirrorSession::streaming(serial);
     state.process = Some(process);
+    state.options = options;
     Ok(state.epoch)
 }
 
@@ -1483,6 +1492,20 @@ fn start_mirroring_with(
 
     reserve_session(sessions, MirrorSession::connecting(serial.clone()))?;
 
+    launch_into_reserved_session(runtimes, sessions, serial, options)
+}
+
+/// 在**已被本次请求占用**的会话槽位（`Connecting`）上真正拉起镜像进程。
+///
+/// 调用前提：`reserve_session` 或等价的占位动作已经成功。这里不再做互斥检查，
+/// 因此「首次启动」与「会话中应用新设置后的重启」可以共用同一条启动路径，
+/// 也就共用同一套设备校验与错误码。
+fn launch_into_reserved_session(
+    runtimes: &AppRuntimes,
+    sessions: &SessionStore,
+    serial: String,
+    options: SessionOptions,
+) -> Result<(), AppError> {
     if !runtimes.mirror.is_available() {
         return Err(fail_session(
             sessions,
@@ -1535,9 +1558,121 @@ fn start_mirroring_with(
         }
     };
 
-    let epoch = attach_process(sessions, process, serial.clone())?;
+    let epoch = attach_process(sessions, process, serial.clone(), options)?;
     spawn_session_monitor(sessions.clone(), epoch, serial);
     Ok(())
+}
+
+/// 会话中应用新设置的结果。
+///
+/// 镜像窗口的形态（全屏、置顶、旋转、画质）由 scrcpy 进程在启动时确定，运行中无法
+/// 改写。因此这里的语义是**「应用新设置 = 结束旧窗口 + 按新设置重新打开」**，而不是
+/// 悄悄把界面上的选项标记为已生效。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SessionUpdate {
+    /// 请求的设置是否已经真正生效（即镜像窗口是否已按新设置重启）。
+    applied: bool,
+    /// 未重启时的原因说明；已重启时为 `None`。
+    note: Option<String>,
+    /// 操作后的会话状态，供界面立即刷新而无需等待下一次轮询。
+    session: MirrorSession,
+}
+
+/// 会话没有运行中的进程时统一的错误：说明「设置何时生效」，而不是只说“没有会话”。
+fn session_not_running_error() -> AppError {
+    AppError::new(
+        "session_not_running",
+        "当前没有正在运行的镜像会话。",
+        "设置会在下次开始镜像时生效；如需立即应用，请先开始镜像。",
+    )
+}
+
+/// 读取正在运行的会话所使用的设备与启动参数。
+///
+/// 只有真正持有运行中的进程时才算“会话进行中”：处于 `Connecting` 但尚未拿到进程、
+/// 以及 `Paired` / `Failed` 等阶段都会返回可恢复的错误，而不是去 kill 一个不存在的进程。
+fn running_session_options(store: &SessionStore) -> Result<(String, SessionOptions), AppError> {
+    let state = store.lock()?;
+    if state.process.is_none() {
+        return Err(session_not_running_error());
+    }
+    let Some(serial) = state.session.serial.clone() else {
+        return Err(session_not_running_error());
+    };
+    Ok((serial, state.options.clone()))
+}
+
+fn session_snapshot(store: &SessionStore) -> Result<MirrorSession, AppError> {
+    Ok(store.lock()?.session.clone())
+}
+
+/// 为重启过程中的失败补充上下文：用户必须知道「新设置没生效，而且镜像已经关了」。
+///
+/// 这里刻意保留原始错误码与原因（可能是 `device_unauthorized`、`device_offline`、
+/// `mirror_runtime_missing` 等具体状态），只改写恢复建议，避免把具体状态塌缩成一个
+/// 笼统的“重启失败”。
+fn with_restart_context(error: &AppError) -> AppError {
+    AppError {
+        code: error.code,
+        message: error.message.clone(),
+        recovery: format!("{} 本次修改未生效，镜像窗口已关闭。", error.recovery),
+    }
+}
+
+/// 把已写入会话的错误替换为带重启上下文的版本，且**不改变会话阶段**。
+fn annotate_session_error(store: &SessionStore, error: &AppError) {
+    if let Ok(mut state) = store.0.lock() {
+        if state.session.error.is_some() {
+            state.session.error = Some(error.clone());
+        }
+    }
+}
+
+/// 会话进行中应用新设置：先结束旧窗口，再按新设置重新打开。
+fn apply_session_options_with(
+    runtimes: &AppRuntimes,
+    sessions: &SessionStore,
+    options: SessionOptions,
+) -> Result<SessionUpdate, AppError> {
+    // 先校验参数，再触碰正在运行的会话：一个非法请求绝不能打断一次正常的镜像。
+    options.arguments()?;
+
+    let (serial, current) = running_session_options(sessions)?;
+    if current == options {
+        return Ok(SessionUpdate {
+            applied: false,
+            note: Some("设置与当前会话一致，无需重启镜像窗口。".to_owned()),
+            session: session_snapshot(sessions)?,
+        });
+    }
+
+    let Some(mut previous) = take_running_process(sessions)? else {
+        return Err(session_not_running_error());
+    };
+
+    if previous.kill().is_err() {
+        return Err(fail_session(
+            sessions,
+            Some(serial),
+            AppError::new(
+                "session_restart_failed",
+                "无法结束旧的镜像窗口，新设置尚未应用。",
+                "请手动关闭镜像窗口后重新开始镜像。",
+            ),
+        ));
+    }
+
+    if let Err(error) = launch_into_reserved_session(runtimes, sessions, serial, options) {
+        let error = with_restart_context(&error);
+        annotate_session_error(sessions, &error);
+        return Err(error);
+    }
+
+    Ok(SessionUpdate {
+        applied: true,
+        note: None,
+        session: session_snapshot(sessions)?,
+    })
 }
 
 #[tauri::command]
@@ -1565,6 +1700,20 @@ fn stop_mirroring_with(store: &SessionStore) -> Result<(), AppError> {
 #[tauri::command]
 fn mirror_session(sessions: State<SessionStore>) -> Result<MirrorSession, AppError> {
     sessions.lock().map(|state| state.session.clone())
+}
+
+/// 会话进行中应用新的窗口设置。
+///
+/// 语义是明确的「结束旧窗口 + 按新设置重新打开」：镜像画面会短暂中断，界面必须如实
+/// 告知用户，不能假装设置已经热更新。设置与当前会话一致时不做任何动作，避免无谓地
+/// 打断一次正常的镜像。
+#[tauri::command]
+fn update_session_options(
+    runtimes: State<AppRuntimes>,
+    sessions: State<SessionStore>,
+    options: SessionOptions,
+) -> Result<SessionUpdate, AppError> {
+    apply_session_options_with(&runtimes, &sessions, options)
 }
 
 #[tauri::command]
@@ -1706,6 +1855,7 @@ pub fn run() {
             start_mirroring,
             stop_mirroring,
             mirror_session,
+            update_session_options,
             wake_device,
             device_lock_report,
             list_recent_devices,
@@ -1736,6 +1886,8 @@ mod tests {
     #[derive(Default)]
     struct FakeAdb {
         devices: Vec<AdbDevice>,
+        /// 允许测试在**运行中**改变设备列表（例如模拟「会话进行到一半手机被拔掉」）。
+        live_devices: Option<Arc<Mutex<Vec<AdbDevice>>>>,
         unavailable: bool,
         /// `adb shell getprop` 的原始输出；`None` 表示读取失败。
         properties: Option<String>,
@@ -1752,6 +1904,18 @@ mod tests {
                 devices,
                 ..Self::default()
             }
+        }
+
+        /// 返回一个可在测试中持续改写的设备列表句柄。
+        fn with_live_devices(devices: Vec<AdbDevice>) -> (Self, Arc<Mutex<Vec<AdbDevice>>>) {
+            let live = Arc::new(Mutex::new(devices));
+            (
+                Self {
+                    live_devices: Some(Arc::clone(&live)),
+                    ..Self::default()
+                },
+                live,
+            )
         }
 
         fn with_capabilities(devices: Vec<AdbDevice>, properties: &str) -> Self {
@@ -1785,6 +1949,9 @@ mod tests {
 
     impl AdbRuntime for FakeAdb {
         fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error> {
+            if let Some(live) = &self.live_devices {
+                return Ok(live.lock().unwrap().clone());
+            }
             if self.unavailable {
                 Err(std::io::Error::from(std::io::ErrorKind::NotFound))
             } else {
@@ -1874,6 +2041,10 @@ mod tests {
         available: bool,
         exit: Option<bool>,
         killed: Arc<Mutex<bool>>,
+        /// 每次 `start` 实际收到的启动参数，用于验证「会话中应用设置」确实按新参数重启。
+        starts: Arc<Mutex<Vec<SessionOptions>>>,
+        /// 为真时 `start` 直接失败，用于验证重启失败不会塌缩会话状态。
+        fail_start: bool,
     }
 
     impl FakeMirror {
@@ -1883,6 +2054,8 @@ mod tests {
                 available: true,
                 exit: None,
                 killed: Arc::new(Mutex::new(false)),
+                starts: Arc::new(Mutex::new(Vec::new())),
+                fail_start: false,
             }
         }
 
@@ -1892,6 +2065,8 @@ mod tests {
                 available: true,
                 exit: Some(success),
                 killed: Arc::new(Mutex::new(false)),
+                starts: Arc::new(Mutex::new(Vec::new())),
+                fail_start: false,
             }
         }
 
@@ -1900,6 +2075,16 @@ mod tests {
                 available: false,
                 exit: None,
                 killed: Arc::new(Mutex::new(false)),
+                starts: Arc::new(Mutex::new(Vec::new())),
+                fail_start: false,
+            }
+        }
+
+        /// 可用但一旦尝试启动就失败，用于验证「重启后启动失败」的路径。
+        fn failing_start() -> Self {
+            Self {
+                fail_start: true,
+                ..Self::running()
             }
         }
     }
@@ -1912,8 +2097,12 @@ mod tests {
         fn start(
             &self,
             _serial: &str,
-            _options: &SessionOptions,
+            options: &SessionOptions,
         ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
+            self.starts.lock().unwrap().push(options.clone());
+            if self.fail_start {
+                return Err(std::io::Error::other("mirror start failed"));
+            }
             Ok(Box::new(FakeProcess {
                 exit: self.exit,
                 killed: Arc::clone(&self.killed),
@@ -1942,6 +2131,18 @@ mod tests {
             .expect("session state must be readable in tests")
             .session
             .clone()
+    }
+
+    /// 手工写入一个「进程正在运行」的会话，用于测试无法走完首次启动的路径。
+    fn mark_running_for_test(store: &SessionStore, options: SessionOptions) {
+        let mut state = store.lock().unwrap();
+        state.epoch = state.epoch.wrapping_add(1);
+        state.session = MirrorSession::streaming("phone".into());
+        state.process = Some(Box::new(FakeProcess {
+            exit: None,
+            killed: Arc::new(Mutex::new(false)),
+        }));
+        state.options = options;
     }
 
     fn wait_until_idle_or_failed(store: &SessionStore) -> MirrorSession {
@@ -2230,6 +2431,241 @@ mod tests {
             stop_mirroring_with(&store).unwrap_err().code,
             "session_not_running"
         );
+    }
+
+    // -- 会话中应用设置（镜像窗口形态由启动参数决定，只能靠「结束 + 重开」生效） --
+
+    /// 「已经启动的会话」在测试中的句柄：运行时、会话存储，以及可断言的镜像替身状态。
+    struct StartedSession {
+        runtimes: AppRuntimes,
+        store: SessionStore,
+        killed: Arc<Mutex<bool>>,
+        starts: Arc<Mutex<Vec<SessionOptions>>>,
+    }
+
+    /// 启动一个使用默认参数的会话。
+    fn started_session() -> StartedSession {
+        let mirror = FakeMirror::running();
+        let killed = Arc::clone(&mirror.killed);
+        let starts = Arc::clone(&mirror.starts);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            mirror,
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+        StartedSession {
+            runtimes,
+            store,
+            killed,
+            starts,
+        }
+    }
+
+    #[test]
+    fn applying_new_options_restarts_the_mirror_window_with_the_new_arguments() {
+        let session = started_session();
+
+        let update = apply_session_options_with(
+            &session.runtimes,
+            &session.store,
+            SessionOptions {
+                rotation: 90,
+                fullscreen: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(update.applied, "有新设置时应当真的重启镜像窗口");
+        assert!(update.note.is_none());
+        let recorded = session.starts.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 2, "应当恰好启动两次：原会话 + 按新设置重启");
+        assert_eq!(recorded[1].rotation, 90);
+        assert!(recorded[1].fullscreen);
+        assert!(
+            *session.killed.lock().unwrap(),
+            "旧镜像窗口必须被结束，不能留下两个窗口"
+        );
+        let live = snapshot(&session.store);
+        assert_eq!(live.phase, SessionPhase::Streaming);
+        assert_eq!(live.serial.as_deref(), Some("phone"));
+        assert_eq!(
+            update.session, live,
+            "返回的会话状态必须与轮询到的状态一致"
+        );
+    }
+
+    #[test]
+    fn unchanged_options_never_interrupt_a_healthy_session() {
+        let session = started_session();
+
+        let update = apply_session_options_with(
+            &session.runtimes,
+            &session.store,
+            SessionOptions::default(),
+        )
+        .unwrap();
+
+        assert!(!update.applied);
+        assert!(
+            update.note.is_some(),
+            "未重启时必须说明原因，不能让用户以为改动被忽略了"
+        );
+        assert_eq!(session.starts.lock().unwrap().len(), 1);
+        assert!(
+            !*session.killed.lock().unwrap(),
+            "参数没变就不该关闭正在正常运行的窗口"
+        );
+        assert_eq!(snapshot(&session.store).phase, SessionPhase::Streaming);
+    }
+
+    #[test]
+    fn invalid_options_are_rejected_without_disturbing_the_running_session() {
+        let session = started_session();
+
+        let error = apply_session_options_with(
+            &session.runtimes,
+            &session.store,
+            SessionOptions {
+                rotation: 45,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "invalid_rotation");
+        assert_eq!(session.starts.lock().unwrap().len(), 1);
+        assert!(!*session.killed.lock().unwrap());
+        assert_eq!(
+            snapshot(&session.store).phase,
+            SessionPhase::Streaming,
+            "一个非法请求绝不能打断一次正常的镜像"
+        );
+    }
+
+    #[test]
+    fn applying_options_without_a_running_session_is_refused_and_explains_when_it_applies() {
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+
+        let error = apply_session_options_with(&runtimes, &store, SessionOptions::default())
+            .unwrap_err();
+        assert_eq!(error.code, "session_not_running");
+        assert!(
+            error.recovery.contains("下次开始镜像"),
+            "必须说明设置何时生效，而不是只说没有会话：{}",
+            error.recovery
+        );
+
+        // 「已配对但还没开始镜像」同样不是进行中的会话。
+        mark_session(&store, MirrorSession::paired("192.168.1.20:37123".into()));
+        assert_eq!(
+            apply_session_options_with(&runtimes, &store, SessionOptions::default())
+                .unwrap_err()
+                .code,
+            "session_not_running"
+        );
+    }
+
+    #[test]
+    fn a_failed_restart_says_the_settings_did_not_apply() {
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::failing_start(),
+        );
+        let store = SessionStore::default();
+        // 用一个必然失败的镜像替身无法走完首次启动，因此这里手工占位一个运行中的会话。
+        reserve_session(&store, MirrorSession::connecting("phone".into())).unwrap();
+        mark_running_for_test(&store, SessionOptions::default());
+
+        let error = apply_session_options_with(
+            &runtimes,
+            &store,
+            SessionOptions {
+                fullscreen: true,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "mirror_start_failed", "必须保留具体原因");
+        assert!(
+            error.recovery.contains("本次修改未生效"),
+            "用户必须知道新设置没有生效：{}",
+            error.recovery
+        );
+        let session = snapshot(&store);
+        assert_eq!(session.phase, SessionPhase::Failed);
+        assert!(
+            session
+                .error
+                .as_ref()
+                .is_some_and(|stored| stored.recovery.contains("本次修改未生效")),
+            "轮询到的会话错误也要带上同样的上下文"
+        );
+    }
+
+    #[test]
+    fn a_restart_that_loses_the_device_reports_that_device_state() {
+        let (adb, live) = FakeAdb::with_live_devices(vec![device("phone", DeviceState::Ready)]);
+        let mirror = FakeMirror::running();
+        let runtimes = runtimes(adb, mirror);
+        let store = SessionStore::default();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default()).unwrap();
+
+        // 重启过程中手机掉线：必须落到设备状态，而不是笼统的“重启失败”。
+        *live.lock().unwrap() = vec![device("phone", DeviceState::Offline)];
+        let error = apply_session_options_with(
+            &runtimes,
+            &store,
+            SessionOptions {
+                quality: Quality::Smooth,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "device_offline");
+        assert!(error.recovery.contains("本次修改未生效"));
+        assert_eq!(snapshot(&store).phase, SessionPhase::Offline);
+
+        // 上一次重启已经让会话停机，此时再点「应用」应当明确回答没有进行中的会话，
+        // 而不是去 kill 一个不存在的进程。
+        *live.lock().unwrap() = Vec::new();
+        let error = apply_session_options_with(
+            &runtimes,
+            &store,
+            SessionOptions {
+                quality: Quality::Sharp,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "session_not_running");
+    }
+
+    #[test]
+    fn stopping_after_a_restart_still_returns_to_idle() {
+        let session = started_session();
+
+        apply_session_options_with(
+            &session.runtimes,
+            &session.store,
+            SessionOptions {
+                always_on_top: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(session.starts.lock().unwrap().len(), 2);
+
+        stop_mirroring_with(&session.store).unwrap();
+        assert!(*session.killed.lock().unwrap());
+        assert_eq!(snapshot(&session.store).phase, SessionPhase::Idle);
     }
 
     #[test]
