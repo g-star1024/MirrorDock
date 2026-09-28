@@ -12,6 +12,7 @@
 - [ ] P0-06 实现无线调试配对、同网连接、保存/忘记可信设备与网络切换恢复。**已在 Android 13 真机完成配对、独立端口连接和镜像；重连、忘记与网络切换待测。**
 - [ ] P0-07 建立首帧、FPS、时延估算、掉线与 60 分钟稳定性测试记录。**已采集一组 Wi-Fi FPS/分辨率真实数据；首帧、时延、掉线与 60 分钟数据待测。**
 - [x] ✅ P0-08 将 MirrorDock 开发技能体系接入 WorkBuddy：项目级技能 `mirrordock-development`（含启动闸门、技能路由表、产品红线、完成标准与两份参考材料）建于 `.workbuddy/skills/`；12 个配套专业技能安装至用户级 `~/.workbuddy/skills/`。**证据：安装前完成安全审计（无凭据访问、无混淆代码、无外发数据，风险 🟢 LOW–🟡 MEDIUM）；安装后校验 13 份 SKILL.md frontmatter 均可解析、无 `CODEX_HOME` 残留引用、与既有技能无重名。**
+- [x] ✅ P0-09 建立 Git 版本控制与 GitHub 远端基线：初始化仓库并以 `main` 为默认分支；加固 `.gitignore` 排除构建产物（`src-tauri/target` 2.1G、`node_modules`、`.tools/`、`test-runs/`、`dist/`）与本地工作笔记 `.workbuddy/memory/`；创建远端公开仓库 `g-star1024/MirrorDock` 并完成首次推送。**证据：远端递归文件树 53 个 blob、构建产物泄漏 0；本地 `HEAD` 与 `origin/main` 同为 `8436bb5`、工作区干净；SCP 通道经 SSH 认证（`Hi g-star1024!`）推送成功。**
 
 ## 阶段 1：MVP Alpha
 
