@@ -225,7 +225,22 @@ describe("readOptions", () => {
       record: false,
       clipboard_autosync: true,
       audio: true,
+      shortcut_mod: null,
+      show_touches: false,
+      read_only: false,
     });
+  });
+
+  it("drops_invalid_shortcut_modifiers_from_older_stored_settings", () => {
+    // 修饰键只允许白名单值：被篡改或过期的值回落到 scrcpy 默认（null）。
+    localStorage.setItem(
+      "mirrordock.sessionOptions",
+      JSON.stringify({ quality: "balanced", rotation: 0, fullscreen: false, always_on_top: false, shortcut_mod: "--video-codec=h265", show_touches: true, read_only: true }),
+    );
+    const options = readOptions();
+    expect(options.shortcut_mod).toBeNull();
+    expect(options.show_touches).toBe(true);
+    expect(options.read_only).toBe(true);
   });
 
   it("rejects_invalid_stored_values_and_returns_defaults", () => {

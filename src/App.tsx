@@ -68,7 +68,7 @@ export type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; read_only: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
@@ -77,7 +77,7 @@ type Recording = { file_name: string; path: string; active: boolean };
 type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, read_only: false };
 export function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
@@ -93,6 +93,9 @@ export function readOptions(): SessionOptions {
         record: typeof value.record === "boolean" ? value.record : false,
         clipboard_autosync: typeof value.clipboard_autosync === "boolean" ? value.clipboard_autosync : true,
         audio: typeof value.audio === "boolean" ? value.audio : true,
+        shortcut_mod: ["lctrl", "rctrl", "lalt", "ralt", "lsuper", "rsuper"].includes(value.shortcut_mod) ? value.shortcut_mod : null,
+        show_touches: typeof value.show_touches === "boolean" ? value.show_touches : false,
+        read_only: typeof value.read_only === "boolean" ? value.read_only : false,
       };
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
@@ -729,6 +732,17 @@ function App() {
           <label><input type="checkbox" checked={options.record} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）</label>
           <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板（关闭后手机与电脑的复制内容不再自动互通）</label>
           <label><input type="checkbox" checked={options.audio} disabled={audioUnsupported} onChange={e => updateOptions({...options, audio: e.target.checked})}/> 转发手机播放的声音（Android 11+）{audioUnsupported ? "——这台手机不支持系统音频转发，已自动关闭" : ""}</label>
+          <label>镜像窗口快捷键修饰键 <select value={options.shortcut_mod ?? ""} onChange={e => updateOptions({...options, shortcut_mod: e.target.value || null})}>
+            <option value="">默认（左 Alt / 左 Super）</option>
+            <option value="lctrl">左 Ctrl</option>
+            <option value="rctrl">右 Ctrl</option>
+            <option value="lalt">左 Alt</option>
+            <option value="ralt">右 Alt</option>
+            <option value="lsuper">左 Super（Win / ⌘）</option>
+            <option value="rsuper">右 Super</option>
+          </select></label>
+          <label><input type="checkbox" checked={options.show_touches} onChange={e => updateOptions({...options, show_touches: e.target.checked})}/> 显示触摸点（演示用）——画面中会显示手机上的实际触摸位置，结束镜像后手机自动恢复原设置</label>
+          <label><input type="checkbox" checked={options.read_only} onChange={e => updateOptions({...options, read_only: e.target.checked})}/> 只读模式（电脑键鼠不控制手机，适合向他人演示）</label>
           {sessionActive && (
             <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
               {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
@@ -738,6 +752,8 @@ function App() {
           {sessionActive && <p>这些设置由镜像窗口在启动时确定，无法在运行中热更新。点击“应用并重启镜像窗口”后，画面会短暂中断并自动恢复。</p>}
           <p>无线卡顿时可选择“流畅”。受保护内容可能显示黑屏；旋转只改变电脑上的显示方向。</p>
           <p>声音转发开启时，声音只在电脑播放、手机本地静音。通话与部分应用的音频受系统捕获策略限制可能无法转发；Android 11 设备需在解锁状态下开始镜像才能转发声音；MirrorDock 只转发系统播放声音，不使用麦克风。</p>
+          <p>MirrorDock 无法遮盖画面中的敏感内容（如消息预览）——这是镜像引擎的能力边界，我们不假装有此功能。需要隐私时：开启只读模式可避免他人通过这台电脑误操作你的手机；要隐藏内容请先在手机上打开勿扰模式，或直接结束镜像。</p>
+          <p>常用镜像窗口快捷键：修饰键 + H 回到主屏幕，+ B 返回，+ S 最近任务，+ N 展开通知栏，+ P 电源键，+ O 关闭手机屏幕（镜像继续），+ 上/下箭头 调节音量，+ F 全屏窗口，+ Q 退出镜像。修饰键可在上方修改。</p>
           {applyNotice && <p className="apply-notice" role="status">{applyNotice}</p>}
         </fieldset>
 

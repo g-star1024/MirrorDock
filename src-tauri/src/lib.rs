@@ -392,6 +392,28 @@ struct SessionOptions {
     /// 转发系统播放声音（scrcpy `--audio-source` 默认 `output`），**不提供麦克风
     /// 采集**——麦克风是更敏感的隐私面，MVP 不开放。
     audio: bool,
+    /// 镜像窗口快捷键的修饰键（scrcpy `--shortcut-mod`）。
+    ///
+    /// `None` 表示沿用 scrcpy 默认（左 Alt 或 左 Super）。合法值限定为白名单：
+    /// `lctrl` / `rctrl` / `lalt` / `ralt` / `lsuper` / `rsuper`。MVP 只提供单键
+    /// 选择——scrcpy 支持 `+` 组合与逗号分组，但非技术用户不需要那层自由度。
+    #[serde(default)]
+    shortcut_mod: Option<String>,
+    /// 在镜像画面中显示手机上的**物理**触摸点（scrcpy `--show-touches`）。
+    ///
+    /// **默认关闭**：它会在演示期间开启设备的系统级「显示触摸点」，虽由 scrcpy
+    /// 在退出时恢复原值，但默认替用户改设备设置并不合适——这是演示/教学场景的
+    /// 主动选择。scrcpy 文档明确：只显示物理触摸，不显示 scrcpy 自己注入的点击。
+    #[serde(default)]
+    show_touches: bool,
+    /// 只读演示模式（scrcpy `--no-control`）：电脑键鼠不控制手机，只观看画面。
+    ///
+    /// **默认关闭**。这是「隐私遮罩」的诚实替代：scrcpy 没有任何遮盖画面内容的
+    /// 能力（无滤镜、无遮挡层），向他人演示时的真正风险是误操作——只读模式直接
+    /// 消除它。需要隐藏敏感内容时，唯一诚实的建议仍是「先在手机上处理（勿扰
+    /// 模式/退出应用），或直接结束镜像」。
+    #[serde(default)]
+    read_only: bool,
 }
 
 impl Default for SessionOptions {
@@ -405,6 +427,9 @@ impl Default for SessionOptions {
             record: false,
             clipboard_autosync: true,
             audio: true,
+            shortcut_mod: None,
+            show_touches: false,
+            read_only: false,
         }
     }
 }
@@ -437,6 +462,23 @@ impl SessionOptions {
         }
         if !self.audio {
             args.push("--no-audio".into());
+        }
+        if let Some(modifier) = &self.shortcut_mod {
+            // 白名单校验：不把任意值透传进 scrcpy 参数。
+            if !["lctrl", "rctrl", "lalt", "ralt", "lsuper", "rsuper"].contains(&modifier.as_str()) {
+                return Err(AppError::new(
+                    "shortcut_mod_invalid",
+                    "快捷键修饰键无效。",
+                    "请重新打开设置；若仍报错请恢复默认设置。",
+                ));
+            }
+            args.push(format!("--shortcut-mod={modifier}"));
+        }
+        if self.show_touches {
+            args.push("--show-touches".into());
+        }
+        if self.read_only {
+            args.push("--no-control".into());
         }
         if self.fullscreen {
             args.push("--fullscreen".into());
@@ -3593,6 +3635,9 @@ mod tests {
                 record: false,
                 clipboard_autosync: true,
                 audio: true,
+                shortcut_mod: None,
+                show_touches: false,
+                read_only: false,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
@@ -4712,6 +4757,56 @@ mod tests {
         // 字段缺省时同样视为开启。
         let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
         assert!(parsed.audio);
+    }
+
+    #[test]
+    fn shortcut_modifier_is_whitelisted_and_off_by_default() {
+        // 默认不传参数：沿用 scrcpy 默认修饰键（左 Alt / 左 Super）。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(!args.iter().any(|argument| argument.contains("shortcut-mod")));
+
+        // 白名单内的值原样透传为固定参数。
+        let custom = SessionOptions {
+            shortcut_mod: Some("rctrl".to_owned()),
+            ..Default::default()
+        };
+        assert!(custom
+            .arguments()
+            .unwrap()
+            .contains(&"--shortcut-mod=rctrl".into()));
+
+        // 白名单外的值拒绝——不把任意字符串透传进 scrcpy 参数。
+        let hostile = SessionOptions {
+            shortcut_mod: Some("--video-codec=h265".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            hostile.arguments().unwrap_err().code,
+            "shortcut_mod_invalid"
+        );
+    }
+
+    #[test]
+    fn show_touches_and_read_only_are_off_by_default_and_send_fixed_flags() {
+        // 两个演示相关开关默认关闭，不传任何参数。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(!args.iter().any(|argument| argument.contains("show-touches")));
+        assert!(!args.iter().any(|argument| argument.contains("no-control")));
+
+        let demo = SessionOptions {
+            show_touches: true,
+            read_only: true,
+            ..Default::default()
+        };
+        let args = demo.arguments().unwrap();
+        assert!(args.contains(&"--show-touches".into()));
+        assert!(args.contains(&"--no-control".into()));
+
+        // 字段缺省时同样视为关闭。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
+        assert!(!parsed.show_touches);
+        assert!(!parsed.read_only);
+        assert!(parsed.shortcut_mod.is_none());
     }
 
     // -- 截图：可见、可撤销、失败必须能被发现 --
