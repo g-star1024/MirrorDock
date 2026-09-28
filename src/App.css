@@ -119,6 +119,10 @@ button:disabled { cursor: not-allowed; opacity: .58; }
 .trusted-device span { display: flex; gap: 12px; flex: 0 0 auto; }
 .text-button { padding: 0; border: 0; color: #27623d; background: transparent; font-size: 13px; font-weight: 700; cursor: pointer; }
 .text-button.danger { color: #a34a40; }
+.transfer-panel span { display: flex; flex-wrap: wrap; gap: 12px; }
+.transfer-file-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.transfer-file-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border-radius: 8px; background: #f5f8f4; }
+.transfer-file-name { font-size: 14px; color: #30523a; overflow-wrap: anywhere; }
 
 @media (max-width: 620px) {
   .topbar { padding-inline: 24px; }

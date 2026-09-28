@@ -75,6 +75,8 @@ struct AdbCheck {
 ///   screenshot_dir_unavailable / screenshot_not_image / screenshot_failed
 ///   screenshot_write_failed / screenshot_missing / screenshot_delete_failed
 ///   recording_dir_unavailable / recording_in_progress / recording_missing / recording_delete_failed
+///   transfer_name_invalid / transfer_local_missing / transfer_dir_unavailable
+///   transfer_push_failed / transfer_pull_failed / transfer_list_failed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AppError {
     code: &'static str,
@@ -267,6 +269,24 @@ trait AdbRuntime: Send + Sync {
     /// 返回值是**屏幕内容**，属于最敏感的数据类别：只允许写入用户可见的本地文件，
     /// 任何情况下都不得写入日志、错误消息或遥测。
     fn screenshot_png(&self, serial: &str) -> Result<Vec<u8>, std::io::Error>;
+    /// 在设备上创建目录（含父目录，幂等）。
+    fn make_directory(&self, serial: &str, remote_dir: &str) -> Result<(), std::io::Error>;
+    /// 列出设备目录内容（`ls -1` 原始输出，每行一个条目）。
+    fn list_directory(&self, serial: &str, remote_dir: &str) -> Result<String, std::io::Error>;
+    /// 把本机文件推送到设备目录。返回 adb 的输出摘要。
+    fn push_file(
+        &self,
+        serial: &str,
+        local: &Path,
+        remote_dir: &str,
+    ) -> Result<String, std::io::Error>;
+    /// 把设备文件拉取到本机路径。返回 adb 的输出摘要。
+    fn pull_file(
+        &self,
+        serial: &str,
+        remote_path: &str,
+        local: &Path,
+    ) -> Result<String, std::io::Error>;
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error>;
     fn connect(&self, endpoint: &str) -> Result<(), std::io::Error>;
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error>;
@@ -339,6 +359,14 @@ struct SessionOptions {
     /// 的默认值取向不同——「保护用户」的默认值可以替用户打开，「替用户留存一份屏幕
     /// 副本」必须由用户自己决定。
     record: bool,
+    /// 电脑与手机之间自动同步剪贴板（对应 scrcpy 的默认行为；关闭时传
+    /// `--no-clipboard-autosync`）。
+    ///
+    /// **默认开启**：双向剪贴板是镜像控制体验的一部分，设备剪贴板变化时会同步到
+    /// 电脑、粘贴前会把电脑剪贴板同步到设备。提供关闭开关的原因是隐私取向——
+    /// 有的用户不希望手机上复制的内容自动出现在电脑剪贴板里。剪贴板文本内容
+    /// 由 scrcpy 进程内部处理，不经过 MirrorDock，也不入日志。
+    clipboard_autosync: bool,
 }
 
 impl Default for SessionOptions {
@@ -350,6 +378,7 @@ impl Default for SessionOptions {
             rotation: 0,
             keep_awake: true,
             record: false,
+            clipboard_autosync: true,
         }
     }
 }
@@ -376,6 +405,9 @@ impl SessionOptions {
         ];
         if self.keep_awake {
             args.push("--stay-awake".into());
+        }
+        if !self.clipboard_autosync {
+            args.push("--no-clipboard-autosync".into());
         }
         if self.fullscreen {
             args.push("--fullscreen".into());
@@ -457,6 +489,53 @@ impl AdbRuntime for SystemAdbRuntime {
             return Err(std::io::Error::other("adb returned a failing status"));
         }
         Ok(output.stdout)
+    }
+
+    fn make_directory(&self, serial: &str, remote_dir: &str) -> Result<(), std::io::Error> {
+        Self::run(&["-s", serial, "shell", "mkdir", "-p", remote_dir])
+    }
+
+    fn list_directory(&self, serial: &str, remote_dir: &str) -> Result<String, std::io::Error> {
+        // `-1`：每行恰好一个条目，文件名里的空格不会被拆开。
+        Self::capture(&["-s", serial, "shell", "ls", "-1", remote_dir])
+    }
+
+    fn push_file(
+        &self,
+        serial: &str,
+        local: &Path,
+        remote_dir: &str,
+    ) -> Result<String, std::io::Error> {
+        // 本机路径与设备路径都作为单个 argv 传入：不做 shell 拼接或插值，文件名里
+        // 带空格也安全。
+        let output = Command::new("adb")
+            .args(["-s", serial, "push"])
+            .arg(local)
+            .arg(remote_dir)
+            .output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(std::io::Error::other("adb returned a failing status"))
+        }
+    }
+
+    fn pull_file(
+        &self,
+        serial: &str,
+        remote_path: &str,
+        local: &Path,
+    ) -> Result<String, std::io::Error> {
+        let output = Command::new("adb")
+            .args(["-s", serial, "pull"])
+            .arg(remote_path)
+            .arg(local)
+            .output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(std::io::Error::other("adb returned a failing status"))
+        }
     }
 
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error> {
@@ -1397,6 +1476,216 @@ fn capture_screenshot_into(
 }
 
 // ---------------------------------------------------------------------------
+// 文件传输：本机 <-> 设备 /sdcard/Download/MirrorDock
+// ---------------------------------------------------------------------------
+
+/// 设备端文件传输目录。收发都限制在这个目录内，不碰设备的其它位置。
+const DEVICE_TRANSFER_DIR: &str = "/sdcard/Download/MirrorDock";
+
+/// 传输文件名的长度上限（字节数）。文件名可能来自本机文件系统或设备目录清单，
+/// 两者都必须当作不可信输入。
+const MAX_TRANSFER_NAME_LEN: usize = 128;
+
+/// 一次收发的结果回执。只含文件名、路径与字节数，不含任何文件内容。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TransferReceipt {
+    /// 实际生效的文件名（同名时可能已加序号）。
+    file_name: String,
+    /// 发送时为设备上的完整路径；接收时为本机完整路径。
+    path: String,
+    bytes: u64,
+}
+
+fn transfer_name_invalid_error() -> AppError {
+    AppError::new(
+        "transfer_name_invalid",
+        "文件名不可用。",
+        "请使用常规的文件名（不含路径分隔符或特殊控制字符）后重试。",
+    )
+}
+
+fn transfer_local_invalid_error() -> AppError {
+    AppError::new(
+        "transfer_local_missing",
+        "选择的文件不存在或不是一个文件。",
+        "请重新选择一个本地文件。",
+    )
+}
+
+fn transfer_dir_unavailable_error() -> AppError {
+    AppError::new(
+        "transfer_dir_unavailable",
+        "无法确定文件的保存位置。",
+        "请检查本机文件权限，或重新安装 MirrorDock。",
+    )
+}
+
+/// 校验一个传输文件名。
+///
+/// 与截图/录像不同：这里的文件名可能来自设备上的真实文件，常常包含中文等非
+/// ASCII 字符，因此不能用 ASCII 白名单。改用黑名单：拒绝路径分隔符（`/`、`\`）、
+/// `..`、控制字符、隐藏文件前缀与超长名——枚举出的每一项都是唯一的逃逸途径，
+/// 列尽它们之后，名字只可能落在传输目录内部。
+fn validate_transfer_name(name: &str) -> Result<String, AppError> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_TRANSFER_NAME_LEN {
+        return Err(transfer_name_invalid_error());
+    }
+    if name.starts_with('.')
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || name.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(transfer_name_invalid_error());
+    }
+    Ok(name.to_owned())
+}
+
+/// 设备上某个文件名的完整路径。名字先经 `validate_transfer_name` 校验，
+/// 因此拼接结果不可能逃出传输目录。
+fn device_transfer_path(name: &str) -> String {
+    format!("{DEVICE_TRANSFER_DIR}/{name}")
+}
+
+/// 设备目录清单解析：每行一个条目，剔除空行；`\r` 来自部分平台的行尾。
+fn parse_device_listing(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(|line| line.trim_end_matches('\r').trim())
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// 把一个本机文件发送到设备的传输目录。
+fn send_file_to_device_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    local_path: String,
+) -> Result<TransferReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    // 本机路径由用户通过系统文件选择器给出，先确认它真实存在且是文件。
+    let local = PathBuf::from(&local_path);
+    let metadata = fs::metadata(&local).map_err(|_| transfer_local_invalid_error())?;
+    if !metadata.is_file() {
+        return Err(transfer_local_invalid_error());
+    }
+    let bytes = metadata.len();
+    let file_name = local
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or_else(transfer_local_invalid_error)?;
+    let file_name = validate_transfer_name(&file_name)?;
+
+    runtimes
+        .adb
+        .make_directory(&serial, DEVICE_TRANSFER_DIR)
+        .map_err(|_| {
+            AppError::new(
+                "transfer_push_failed",
+                "无法在手机上准备接收目录。",
+                "请确认手机存储可用、连接仍然有效，然后重试。",
+            )
+        })?;
+    runtimes
+        .adb
+        .push_file(&serial, &local, DEVICE_TRANSFER_DIR)
+        .map_err(|_| {
+            AppError::new(
+                "transfer_push_failed",
+                "文件没有传到手机上。",
+                "请确认连接仍然有效、手机存储空间充足，然后重试。",
+            )
+        })?;
+
+    Ok(TransferReceipt {
+        path: device_transfer_path(&file_name),
+        file_name,
+        bytes,
+    })
+}
+
+/// 列出设备传输目录里的文件名。
+fn list_device_files_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<Vec<String>, AppError> {
+    let serial = validate_serial(&serial)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    // 先确保目录存在（幂等），避免「还没发送过文件」时把目录缺失误报成故障。
+    runtimes
+        .adb
+        .make_directory(&serial, DEVICE_TRANSFER_DIR)
+        .map_err(|_| {
+            AppError::new(
+                "transfer_list_failed",
+                "无法读取手机上的文件列表。",
+                "请确认连接仍然有效，然后重试。",
+            )
+        })?;
+    let raw = runtimes
+        .adb
+        .list_directory(&serial, DEVICE_TRANSFER_DIR)
+        .map_err(|_| {
+            AppError::new(
+                "transfer_list_failed",
+                "无法读取手机上的文件列表。",
+                "请确认连接仍然有效，然后重试。",
+            )
+        })?;
+    Ok(parse_device_listing(&raw))
+}
+
+/// 从设备传输目录取回一个文件，保存到本机「下载 / MirrorDock」。
+fn fetch_file_from_device_into(
+    runtimes: &AppRuntimes,
+    directory: &Path,
+    serial: String,
+    file_name: String,
+) -> Result<TransferReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+    let file_name = validate_transfer_name(&file_name)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    fs::create_dir_all(directory).map_err(|_| transfer_dir_unavailable_error())?;
+    let local = unique_file_path(directory, &file_name);
+    runtimes
+        .adb
+        .pull_file(&serial, &device_transfer_path(&file_name), &local)
+        .map_err(|_| {
+            AppError::new(
+                "transfer_pull_failed",
+                "文件没有从手机取回来。",
+                "请确认手机上这个文件还在，然后重试。",
+            )
+        })?;
+    let bytes = fs::metadata(&local)
+        .map(|metadata| metadata.len())
+        .map_err(|_| transfer_dir_unavailable_error())?;
+
+    Ok(TransferReceipt {
+        file_name: local
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file_name.clone()),
+        path: local.to_string_lossy().into_owned(),
+        bytes,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // 录制：把本会话的画面录成 MP4 保存在本机
 // ---------------------------------------------------------------------------
 
@@ -2280,6 +2569,48 @@ fn delete_screenshot(app: AppHandle, file_name: String) -> Result<(), AppError> 
     remove_screenshot_file(&directory, &file_name)
 }
 
+/// 从手机取回文件的本机保存目录：「下载 / MirrorDock」（不可用时退回应用数据目录）。
+fn transfer_download_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .download_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map(|directory| directory.join("MirrorDock"))
+        .map_err(|_| transfer_dir_unavailable_error())
+}
+
+/// 把一个本机文件发送到手机的「下载 / MirrorDock」目录。
+///
+/// 只在用户明确选择文件后调用；文件内容不经过 MirrorDock 进程，不入日志。
+#[tauri::command]
+fn send_file_to_device(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    local_path: String,
+) -> Result<TransferReceipt, AppError> {
+    send_file_to_device_with(&runtimes, serial, local_path)
+}
+
+/// 列出手机传输目录里的文件名，供用户挑选要取回的文件。
+#[tauri::command]
+fn list_device_files(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+) -> Result<Vec<String>, AppError> {
+    list_device_files_with(&runtimes, serial)
+}
+
+/// 从手机取回一个文件，保存到本机「下载 / MirrorDock」。
+#[tauri::command]
+fn fetch_file_from_device(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    file_name: String,
+) -> Result<TransferReceipt, AppError> {
+    let directory = transfer_download_dir(&app)?;
+    fetch_file_from_device_into(&runtimes, &directory, serial, file_name)
+}
+
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
@@ -2295,6 +2626,7 @@ pub fn run() {
         .manage(SessionStore::default())
         .manage(AppRuntimes::system())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             check_adb_devices,
             probe_device_capabilities,
@@ -2308,6 +2640,9 @@ pub fn run() {
             forget_recent_device,
             capture_screenshot,
             delete_screenshot,
+            send_file_to_device,
+            list_device_files,
+            fetch_file_from_device,
             current_recording,
             delete_recording,
             pair_wireless_device,
@@ -2348,6 +2683,12 @@ mod tests {
         power_dump: Option<String>,
         /// `screencap -p` 返回的字节流；`None` 表示读取失败。
         screenshot: Option<Vec<u8>>,
+        /// 设备传输目录的 `ls -1` 输出；`None` 表示读取失败。
+        device_listing: Option<String>,
+        /// 为真时传输类调用（mkdir/push/pull）一律失败。
+        transfer_fails: bool,
+        /// `pull_file` 成功时写进本机文件的内容，用于验证回执字节数。
+        pulled_contents: Vec<u8>,
         calls: Arc<Mutex<Vec<String>>>,
     }
 
@@ -2477,6 +2818,69 @@ mod tests {
                 Some(bytes) => Ok(bytes.clone()),
                 None => Err(std::io::Error::other("screenshot unavailable")),
             }
+        }
+
+        fn make_directory(&self, serial: &str, remote_dir: &str) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("mkdir {serial} {remote_dir}"));
+            if self.transfer_fails {
+                Err(std::io::Error::other("mkdir failed"))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn list_directory(&self, serial: &str, remote_dir: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("ls {serial} {remote_dir}"));
+            match &self.device_listing {
+                Some(raw) => Ok(raw.clone()),
+                None => Err(std::io::Error::other("listing unavailable")),
+            }
+        }
+
+        fn push_file(
+            &self,
+            serial: &str,
+            local: &Path,
+            remote_dir: &str,
+        ) -> Result<String, std::io::Error> {
+            self.calls.lock().unwrap().push(format!(
+                "push {serial} {} {remote_dir}",
+                local.to_string_lossy()
+            ));
+            if self.transfer_fails {
+                Err(std::io::Error::other("push failed"))
+            } else {
+                Ok("1 file pushed".to_owned())
+            }
+        }
+
+        fn pull_file(
+            &self,
+            serial: &str,
+            remote_path: &str,
+            local: &Path,
+        ) -> Result<String, std::io::Error> {
+            self.calls.lock().unwrap().push(format!(
+                "pull {serial} {remote_path} {}",
+                local.to_string_lossy()
+            ));
+            if self.transfer_fails {
+                return Err(std::io::Error::other("pull failed"));
+            }
+            // 模拟 adb pull 的落盘结果，让上层对回执字节数的校验可以走到真实路径。
+            let contents: &[u8] = if self.pulled_contents.is_empty() {
+                b"device-bytes"
+            } else {
+                &self.pulled_contents
+            };
+            fs::write(local, contents).map_err(|_| std::io::Error::other("cannot write pulled file"))?;
+            Ok("1 file pulled".to_owned())
         }
 
         fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error> {
@@ -2763,6 +3167,7 @@ mod tests {
                 always_on_top: true,
                 keep_awake: true,
                 record: false,
+                clipboard_autosync: true,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
@@ -3792,6 +4197,28 @@ mod tests {
         assert!(parsed.keep_awake);
     }
 
+    #[test]
+    fn clipboard_autosync_is_on_by_default_and_only_sends_the_disable_flag_when_turned_off() {
+        // 默认不传任何剪贴板参数：自动同步是 scrcpy 的默认行为，MirrorDock 不画蛇添足。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(!args
+            .iter()
+            .any(|argument| argument.contains("clipboard")));
+
+        let off = SessionOptions {
+            clipboard_autosync: false,
+            ..Default::default()
+        };
+        assert!(off
+            .arguments()
+            .unwrap()
+            .contains(&"--no-clipboard-autosync".into()));
+
+        // 字段缺省时同样视为开启（隐私开关默认关闭 = 同步默认开启）。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
+        assert!(parsed.clipboard_autosync);
+    }
+
     // -- 截图：可见、可撤销、失败必须能被发现 --
 
     /// 一个只有文件头的最小 PNG：足以通过「这确实是图片」的判定。
@@ -4122,5 +4549,217 @@ mod tests {
         assert!(current_recording_with(&store).unwrap().unwrap().active);
 
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    // -- 文件传输：目录受限、状态可见、失败可恢复 --
+
+    #[test]
+    fn a_chosen_local_file_is_pushed_into_the_device_transfer_directory() {
+        let local_dir = scratch_dir("transfer-push-src");
+        fs::create_dir_all(&local_dir).unwrap();
+        let contents = b"\xff\xd8\xff\xe0 fake jpeg bytes".to_vec();
+        let local = local_dir.join("相册 导出.jpg");
+        fs::write(&local, &contents).unwrap();
+
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let receipt = send_file_to_device_with(&runtimes, "phone".into(), local.to_string_lossy().into_owned())
+            .unwrap();
+
+        assert_eq!(receipt.file_name, "相册 导出.jpg", "中文与空格的文件名必须原样保留");
+        assert_eq!(receipt.path, "/sdcard/Download/MirrorDock/相册 导出.jpg");
+        assert_eq!(receipt.bytes, contents.len() as u64);
+        let calls = calls.lock().unwrap().clone();
+        assert!(
+            calls.contains(&format!("mkdir phone {DEVICE_TRANSFER_DIR}")),
+            "发送前必须先确保接收目录存在，实际调用：{calls:?}"
+        );
+        assert!(calls
+            .iter()
+            .any(|call| call.starts_with(&format!("push phone {} {DEVICE_TRANSFER_DIR}", local.to_string_lossy()))),
+            "推送必须直达传输目录，实际调用：{calls:?}");
+
+        let _ = fs::remove_dir_all(&local_dir);
+    }
+
+    #[test]
+    fn a_missing_or_non_file_local_path_is_rejected_before_touching_the_device() {
+        let local_dir = scratch_dir("transfer-push-missing");
+        fs::create_dir_all(&local_dir).unwrap();
+
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let missing = send_file_to_device_with(
+            &runtimes,
+            "phone".into(),
+            local_dir.join("不存在.zip").to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, "transfer_local_missing");
+
+        let directory = send_file_to_device_with(
+            &runtimes,
+            "phone".into(),
+            local_dir.to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
+        assert_eq!(directory.code, "transfer_local_missing", "目录不能当作文件发送");
+
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.starts_with("push") || call.starts_with("mkdir")),
+            "本地文件不存在时不得对设备发起任何写入"
+        );
+
+        let _ = fs::remove_dir_all(&local_dir);
+    }
+
+    #[test]
+    fn an_unauthorized_device_is_refused_before_any_transfer_call() {
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let error = list_device_files_with(&runtimes, "phone".into()).unwrap_err();
+
+        assert_eq!(error.code, "device_unauthorized");
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.starts_with("ls") || call.starts_with("mkdir")),
+            "未授权设备不得发起目录读取"
+        );
+    }
+
+    #[test]
+    fn transfer_names_cannot_escape_the_device_directory() {
+        for name in [
+            "../escape.txt",
+            "sub/dir.txt",
+            "sub\\dir.txt",
+            ".hidden",
+            "line\nbreak",
+            "tab\tname",
+            "",
+            "   ",
+        ] {
+            assert!(
+                validate_transfer_name(name).is_err(),
+                "“{name}”必须被拒绝"
+            );
+        }
+        assert!(validate_transfer_name(&"a".repeat(MAX_TRANSFER_NAME_LEN + 1)).is_err());
+
+        // 设备上的真实文件名常常包含中文等非 ASCII 字符：必须放行，不能用截图那套
+        // ASCII 白名单。
+        for name in ["照片.jpg", "导出-数据_1.csv", "a.txt"] {
+            assert_eq!(
+                validate_transfer_name(name).unwrap().as_str(),
+                name,
+                "“{name}”是合法的设备文件名"
+            );
+        }
+    }
+
+    #[test]
+    fn device_files_are_listed_one_per_line_and_blanks_are_dropped() {
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            device_listing: Some("photo.jpg\r\nnotes.txt\n\n子目录 1.zip\n".to_owned()),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let names = list_device_files_with(&runtimes, "phone".into()).unwrap();
+
+        assert_eq!(names, vec!["photo.jpg", "notes.txt", "子目录 1.zip"]);
+        let calls = calls.lock().unwrap().clone();
+        assert!(
+            calls.contains(&format!("mkdir phone {DEVICE_TRANSFER_DIR}")),
+            "列出前先确保目录存在，避免把「从未发送过文件」误报成故障"
+        );
+    }
+
+    #[test]
+    fn a_device_file_is_pulled_into_the_local_transfer_directory() {
+        let directory = scratch_dir("transfer-pull");
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            pulled_contents: b"hello".to_vec(),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let receipt =
+            fetch_file_from_device_into(&runtimes, &directory, "phone".into(), "导出.csv".into())
+                .unwrap();
+
+        assert_eq!(receipt.bytes, 5);
+        assert!(receipt.path.ends_with("导出.csv"));
+        assert_eq!(
+            fs::read(directory.join("导出.csv")).unwrap(),
+            b"hello",
+            "取回的文件必须真实落盘"
+        );
+        let calls = calls.lock().unwrap().clone();
+        assert!(calls
+            .iter()
+            .any(|call| call == &format!("pull phone {DEVICE_TRANSFER_DIR}/导出.csv {}",
+                directory.join("导出.csv").to_string_lossy())),
+            "拉取必须指向传输目录内的同名文件，实际调用：{calls:?}");
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn transfer_failures_are_reported_and_never_claim_success() {
+        let directory = scratch_dir("transfer-fail");
+        let local_dir = scratch_dir("transfer-fail-src");
+        fs::create_dir_all(&local_dir).unwrap();
+        let local = local_dir.join("ok.png");
+        fs::write(&local, b"png").unwrap();
+
+        let runtimes = screenshot_runtimes(FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            transfer_fails: true,
+            ..FakeAdb::default()
+        });
+
+        assert_eq!(
+            send_file_to_device_with(
+                &runtimes,
+                "phone".into(),
+                local.to_string_lossy().into_owned()
+            )
+            .unwrap_err()
+            .code,
+            "transfer_push_failed"
+        );
+        assert_eq!(
+            list_device_files_with(&runtimes, "phone".into()).unwrap_err().code,
+            "transfer_list_failed"
+        );
+        let pull_error =
+            fetch_file_from_device_into(&runtimes, &directory, "phone".into(), "x.csv".into())
+                .unwrap_err();
+        assert_eq!(pull_error.code, "transfer_pull_failed");
+        assert!(
+            !directory.join("x.csv").exists(),
+            "拉取失败时不得留下空的半成品文件"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+        let _ = fs::remove_dir_all(&local_dir);
     }
 }

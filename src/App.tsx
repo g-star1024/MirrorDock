@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+// 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
+import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 type DeviceState = "ready" | "unauthorized" | "offline" | "unknown";
@@ -61,19 +63,22 @@ type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
 type Recording = { file_name: string; path: string; active: boolean };
 // 截图结果。后端只回文件名、路径与字节数，不回传任何像素数据。
 type Screenshot = { file_name: string; path: string; bytes: number };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false };
+// 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
+type TransferReceipt = { file_name: string; path: string; bytes: number };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true };
 function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
     if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") {
-      // 旧版本没有 keep_awake / record 字段：前者缺省视为开启，后者缺省视为关闭。
+      // 旧版本没有 keep_awake / record / clipboard_autosync 字段：前两者按各自默认值
+      // 取向回填（唤醒开、录制关），剪贴板同步沿用 scrcpy 默认（开）。
       return {
         quality: value.quality,
         rotation: value.rotation,
@@ -81,6 +86,7 @@ function readOptions(): SessionOptions {
         always_on_top: value.always_on_top,
         keep_awake: typeof value.keep_awake === "boolean" ? value.keep_awake : true,
         record: typeof value.record === "boolean" ? value.record : false,
+        clipboard_autosync: typeof value.clipboard_autosync === "boolean" ? value.clipboard_autosync : true,
       };
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
@@ -214,6 +220,12 @@ function App() {
   const [recording, setRecording] = useState<Recording | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
+  // 文件传输：发送与取回共用一处状态。设备文件列表按需加载，不随会话轮询。
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferMessage, setTransferMessage] = useState<string | null>(null);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const [lastTransfer, setLastTransfer] = useState<TransferReceipt | null>(null);
+  const [deviceFiles, setDeviceFiles] = useState<string[] | null>(null);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
@@ -457,6 +469,73 @@ function App() {
     }
   }
 
+  // 发送文件：由用户通过系统文件选择器明确挑选，MirrorDock 不替用户选。
+  // 文件内容直接经 adb 传到手机，不经过前端、不入日志。
+  async function sendFileTo(serial: string) {
+    setTransferMessage(null);
+    setTransferError(null);
+    setLastTransfer(null);
+    let picked: string | string[] | null;
+    try {
+      picked = await openFilePicker({ multiple: false, title: "选择要发送到手机的文件" });
+    } catch (error) {
+      setTransferError(errorMessage(error, "无法打开文件选择器。"));
+      return;
+    }
+    // 用户取消选择不算错误，界面回到原样即可。
+    if (typeof picked !== "string" || picked.length === 0) return;
+    setTransferBusy(true);
+    try {
+      const receipt = await invoke<TransferReceipt>("send_file_to_device", { serial, localPath: picked });
+      setLastTransfer(receipt);
+      setTransferMessage("已发送到手机的「下载 / MirrorDock」文件夹。");
+      // 发送成功后设备目录内容已变化，让下一次列表请求重新拉取。
+      setDeviceFiles(null);
+    } catch (error) {
+      setTransferError(errorMessage(error, "文件没有传到手机上。"));
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  async function refreshDeviceFiles(serial: string) {
+    setTransferBusy(true);
+    setTransferError(null);
+    try {
+      setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
+    } catch (error) {
+      setTransferError(errorMessage(error, "无法读取手机上的文件列表。"));
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  // 取回文件：保存到本机「下载 / MirrorDock」，同名时后端自动顺延序号。
+  async function fetchDeviceFile(serial: string, fileName: string) {
+    setTransferBusy(true);
+    setTransferMessage(null);
+    setTransferError(null);
+    setLastTransfer(null);
+    try {
+      const receipt = await invoke<TransferReceipt>("fetch_file_from_device", { serial, fileName });
+      setLastTransfer(receipt);
+      setTransferMessage("已保存到这台电脑的「下载 / MirrorDock」文件夹。");
+    } catch (error) {
+      setTransferError(errorMessage(error, "文件没有从手机取回。"));
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  async function revealTransfer() {
+    if (!lastTransfer) return;
+    try {
+      await revealItemInDir(lastTransfer.path);
+    } catch (error) {
+      setTransferError(errorMessage(error, "无法打开文件所在的文件夹。"));
+    }
+  }
+
   async function pairAndConnect() {
     setWirelessBusy(true);
     setWirelessMessage(null);
@@ -586,6 +665,7 @@ function App() {
           <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
           <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持唤醒（建议开启，避免镜像中手机自动锁屏）</label>
           <label><input type="checkbox" checked={options.record} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）</label>
+          <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板（关闭后手机与电脑的复制内容不再自动互通）</label>
           {sessionActive && (
             <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
               {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
@@ -688,6 +768,39 @@ function App() {
             )}
             {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
             <p className="capability-pending">录像保存在本机的视频目录（Windows / Linux 为「视频」，macOS 为「影片」）下的 MirrorDock 文件夹，不会上传。录像由镜像窗口直接写入文件，结束镜像即同时结束录制。</p>
+          </div>
+          <div className="capability-panel transfer-panel" aria-live="polite">
+            <strong>文件传输</strong>
+            <p className="capability-pending">在电脑与手机之间收发文件。发送由你挑选文件后进入手机的「下载 / MirrorDock」；取回把手机该目录里的文件保存到这台电脑的「下载 / MirrorDock」。文件内容只经过数据线，不会上传。</p>
+            <span>
+              <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(readyDevice.serial)}>
+                {transferBusy ? "正在处理…" : "选择文件发送到手机"}
+              </button>
+              <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void refreshDeviceFiles(readyDevice.serial)}>
+                {transferBusy ? "正在处理…" : deviceFiles ? "刷新手机文件列表" : "查看手机上的文件"}
+              </button>
+            </span>
+            {lastTransfer && (
+              <div className="screenshot-result">
+                <p className="capability-summary">{lastTransfer.file_name} · {formatBytes(lastTransfer.bytes)}</p>
+                <p className="screenshot-path">{lastTransfer.path}</p>
+                <button className="text-button" type="button" onClick={() => void revealTransfer()}>在文件夹中显示</button>
+              </div>
+            )}
+            {deviceFiles !== null && (deviceFiles.length > 0 ? (
+              <ul className="transfer-file-list">
+                {deviceFiles.map((name) => (
+                  <li key={name}>
+                    <span className="transfer-file-name">{name}</span>
+                    <button className="text-button" type="button" disabled={transferBusy} onClick={() => void fetchDeviceFile(readyDevice.serial, name)}>取回到电脑</button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="capability-pending">手机的「下载 / MirrorDock」文件夹当前没有文件。</p>
+            ))}
+            {transferMessage && <p className="apply-notice" role="status">{transferMessage}</p>}
+            {transferError && <p className="capability-pending" role="alert">{transferError}</p>}
           </div>
           </>
         ) : (
