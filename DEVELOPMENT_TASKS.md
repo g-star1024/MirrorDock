@@ -67,11 +67,13 @@
   - **物理场景 E（撤销授权，test-runs/physical-revoke-*.log）**：撤销瞬间 USB+无线同时掉出设备列表；插回后进入 `unauthorized` 独立状态（持续 ~24s，等待用户在设备端授权）；点允许后直接回 device。**证实 unauthorized 必须作为独立可恢复状态建模**（与 offline/failed 不同）。意外发现：撤销 USB 调试授权未连带清除无线调试配对——USB 重新授权 1s 后无线 TLS 通道自动恢复。
   - **物理场景 F（FLAG_SECURE 保护内容，test-runs/physical-secure-20260928.mp4/.txt）**：4.8 分钟无窗录制（70.5MB），ffmpeg blackdetect（d=1.5, pix_th=0.10）检出 3 个黑帧区段（6.7s / 21.7s / 3.6s，含用户操作的保护页面时段）；**所有黑屏区段期间录制流持续、会话未中断、收尾 moov 完整**；非黑帧区段有正常画面作对照。符合 Android FLAG_SECURE 保护预期（镜像黑屏但不断流）。
   - **范围边界（如实记录）**：以上验证 adb/scrcpy 传输通道层 + 设备端授权状态机；应用 GUI 下故障表现的端到端验收（用户看到的状态文案与恢复引导）待后续真机验收轮次。
-- [ ] B2-04 性能/稳定性门禁：P95 首帧 <5 秒、60 分钟会话与回归基线。**首帧门禁已通过（真机 10 轮，P50=0.91s / P95=0.99s）；60 分钟 soak 待运行完成。**
+- [ ] B2-04 性能/稳定性门禁：P95 首帧 <5 秒、60 分钟会话与回归基线。**首帧门禁已通过（真机 10 轮，P50=0.91s / P95=0.99s）；60 分钟 soak 已通过（进程 60 分钟全程存活 + 自然收尾，详见 soak 证据）。**
   - **脚本**：`scripts/perf-gate.sh`（子命令 `first-frame [轮数]` / `soak [分钟]`），报告落 `test-runs/`。
   - **首帧口径（如实记录）**：进程启动 → 视频隧道 TCP 连接建立（lsof ESTABLISHED，排除 adb server:5037），是可见首帧的**乐观下界代理**（不含解码渲染；macOS 无头模式无法捕获窗口首帧）。已实测 scrcpy 的 mp4/mkv 封装在缓冲满或收尾前不落盘，文件增长不可作首帧信号。
   - **首帧证据**：Xiaomi M2104K10AC / Android 13，10/10 轮有效，P50=0.91s、P95=0.99s、max=0.99s，门禁 P95<5s 通过（test-runs/perf-first-frame-20260928-224728.txt）。
-  - **待完成**：60 分钟 soak（会话存活 + moov 完整收尾）；回归基线固化（多设备/多桌面矩阵为外部阻塞）。
+  - **60 分钟 soak 证据（Xiaomi M2104K10AC / Android 13，USB，test-runs/perf-soak-20260929-000604.txt）**：scrcpy 无窗无控无音频 `--record --time-limit=3600`，每分钟采样一次，**60/60 分钟进程存活**，录制稳定增长约 1.05 MB/分钟，第 60 分钟 64,223,908 字节；到达 time-limit 后自然收尾，scrcpy 日志 `Time limit reached` + `Recording complete to mp4 file`。
+  - **soak 判定缺陷已修复（外部证据）**：首次运行脚本判 FAIL，根因是本机 macOS BSD grep 2.6.0-FreeBSD 的 `grep -a` 在二进制文件上**反而不匹配**（`grep -aq moov` 恒假）；已验证 `grep -q` 可正确命中 mp4 内的 moov 原子（GNU/BSD 兼容），修复 `scripts/perf-gate.sh` 后 1 分钟 soak PASS（test-runs/perf-soak-20260929-010917.txt，moov 完整）。**如实记录**：60 分钟录制文件按脚本设计随临时目录清理，未直接复查其 moov；其完整性依据为「time-limit 自然收尾 + Recording complete 日志 + 同配置干净收尾录制均含 moov」的证据链，而非对该文件本身的直接检验。
+  - **待完成**：回归基线固化（多设备/多桌面矩阵为外部阻塞）。
 - [ ] B2-05 非技术用户可用性测试、帮助中心、客服分流与兼容性页面。
 - [ ] B2-06 Windows、macOS、Ubuntu 安装包；更新、回滚、签名和渠道差异验证。
 

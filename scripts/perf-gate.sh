@@ -119,7 +119,9 @@ PYEOF
       fi
     done
     wait "$PID" 2>/dev/null
-    if grep -aq moov "$REC"; then
+    # 注意：macOS BSD grep 2.6.0-FreeBSD 的 -a 在二进制文件上反而不匹配（实测），
+    # 故用不带 -a 的 grep -q（GNU/BSD 均在命中时返回 0，-q 下无输出）。
+    if grep -q moov "$REC"; then
       note "PASS 会话全程完成，moov 索引完整（$(wc -c < "$REC" | tr -d ' ') 字节）"
       rc=0
     else
