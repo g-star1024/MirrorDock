@@ -33,3 +33,9 @@ dist-ssr
 # 内部产品规划文档（维护于仓库外，不入库）
 Android桌面镜像工具产品规划.md
 /内部文档/
+
+# 伴侣 App（companion/）Gradle 构建产物
+companion/.gradle/
+companion/build/
+companion/app/build/
+companion/local.properties

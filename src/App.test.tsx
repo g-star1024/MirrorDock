@@ -17,6 +17,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 import App, {
   capabilitySummary,
+  pairingPayload,
   editionLabel,
   errorMessage,
   expiryText,
@@ -82,6 +83,8 @@ function baseInvoke(cmd: string): Promise<unknown> {
       });
     case "entitlement_status":
       return Promise.resolve({ edition: "free", key_id: null, expires_at: null });
+    case "companion_pairing_status":
+      return Promise.resolve({ phase: "idle", events: [], offer: null });
     default:
       return Promise.resolve({});
   }
@@ -416,5 +419,44 @@ describe("entitlement", () => {
     fireEvent.click(screen.getByRole("button", { name: "激活专业版" }));
     expect(await screen.findByText(/许可证签名无效。 请确认许可证来自官方渠道。/)).toBeInTheDocument();
     expect(screen.getByText("当前版本：免费版")).toBeInTheDocument();
+  });
+});
+
+describe("companion pairing", () => {
+  const offer = {
+    version: 1,
+    hosts: ["192.168.1.5", "127.0.0.1"],
+    port: 45123,
+    token: "AB234567CDEF2345",
+    fingerprint: "a".repeat(64),
+  };
+
+  it("pairingPayload_encodes_hosts_port_token_fingerprint", () => {
+    expect(pairingPayload(offer)).toBe(
+      "MDP1|192.168.1.5,127.0.0.1|45123|AB234567CDEF2345|" + "a".repeat(64)
+    );
+  });
+
+  it("begin_pairing_shows_token_and_status_then_end_clears", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "companion_begin_pairing") return Promise.resolve(offer);
+      if (cmd === "companion_pairing_status") {
+        return Promise.resolve({ phase: "listening", events: ["19:00:00 配对监听已就绪"], offer });
+      }
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "开始配对" }));
+    expect(await screen.findByText(/AB234567CDEF2345/)).toBeInTheDocument();
+    expect(await screen.findByText(/等待伴侣扫码/)).toBeInTheDocument();
+    // 结束配对后回到未开始状态。
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "companion_end_pairing") return Promise.resolve(null);
+      return baseInvoke(cmd);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "结束配对" }));
+    await waitFor(() => {
+      expect(screen.queryByText(/等待伴侣扫码/)).not.toBeInTheDocument();
+    });
   });
 });

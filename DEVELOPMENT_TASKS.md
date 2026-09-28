@@ -90,7 +90,7 @@
 - [ ] R3-02 国内、Google Play、企业侧载各自的隐私、权限、签名、更新与支持材料。**底稿完成（docs/channel/）；法务复核与渠道审核为外部流程。**
   - `docs/channel/`：README（三渠道材料矩阵与门禁）、privacy-policy-draft（每条承诺对应实现证据）、permissions-data（桌面端与设备端权限逐项表）、channels（国内/Play/企业差异、更新与支持分流）。
   - 渠道状态如实标记：签名 ❌（外部阻塞）；SBOM/NOTICE ✅（A1-08 产物）。
-- [ ] R3-03 安全审计：威胁模型、依赖漏洞、许可证、SBOM、签名、更新和数据流。**首版完成；两项假设待用户回签（见威胁模型文档）。**
+- [ ] R3-03 安全审计：威胁模型、依赖漏洞、许可证、SBOM、签名、更新和数据流。**首版完成；四项假设已于 2026-09-29 由产品负责人回签成立（私钥永不进 CI / 不承诺公共 WiFi / v1 无自动更新 / scrcpy 固定哈希 fail-closed），结论转为在假设成立时有效。**
   - 威胁模型：`docs/mirrordock-threat-model.md`（7 条威胁 TM-001..007、信任边界与 Mermaid 图、重点审查路径；按方法论第 7 步降级执行——假设显式化，未阻塞产出）。
   - 依赖漏洞：cargo-audit v0.22.2 扫描 **0 漏洞**；2 条警告（RUSTSEC-2024-0370 proc-macro-error unmaintained、RUSTSEC-2024-0429 glib unsound——均为 Linux GTK 传递依赖，记录在案）。
   - 许可证/SBOM：Apache-2.0（与 scrcpy 同源合规）、SBOM/NOTICE 随产物（A1-08）。
@@ -101,10 +101,17 @@
 
 ## v1 后：Android 伴侣 App
 
-- [ ] C4-01 Kotlin Android App、扫码配对与同网加密会话 POC。
-- [ ] C4-02 MediaProjection、前台服务、音频能力探测、同意/撤销状态机。
-- [ ] C4-03 可选 Accessibility 实时控制、显著披露、Play 声明预审和 OEM 限制测试。
-- [ ] C4-04 远程协助 / 企业 MDM / OEM 系统级增强，仅在单独权限与威胁模型审核后进入范围。
+- [ ] C4-01 Kotlin Android App、扫码配对与同网加密会话 POC。**代码与桌面端配对端点完成（POC）；真机端到端验证待用户配合安装 APK。**
+  - 桌面侧：`src-tauri/src/companion_pairing.rs`——TLS 1.3 服务端（rustls/ring）、每次配对现场生成一次性自签证书（rcgen，不落盘）、一次性 token（10 字节熵 base32 16 字符）、SPKI SHA-256 出带指纹校验；命令面 26→29（`companion_begin_pairing` / `companion_pairing_status` / `companion_end_pairing`）。Rust 端到端测试 2 项（真实 TLS 握手 + 指纹锁定 + token 握手 + 统计流；错误 token 拒绝），Rust 102→104。
+  - 前端：「伴侣 App 配对（实验）」面板——qrcode 渲染二维码（内存生成、不落盘）、2s 轮询状态与事件流、二维码不可用时退化为手动输入配对码。前端 27→29。
+  - 伴侣侧：`companion/` Gradle 工程（Kotlin、minSdk 26、仅 zxing-core + CameraX + appcompat）——扫码配对（CameraX ImageAnalysis + zxing 离线解码）与手动输入兜底、TLS SSLSocket 自定义 TrustManager 校验 SPKI 指纹、MDP1 JSON 行会话（device_hello/capture_stats/bye）。
+  - 协议：二维码载荷 `MDP1|主机列表|端口|一次性配对码|SPKI SHA-256(hex)`；token 只经加密通道发送；屏幕帧不落盘不入日志（服务端只回传统计）。
+- [ ] C4-02 MediaProjection、前台服务、音频能力探测、同意/撤销状态机。**代码完成（POC）；真机验证待用户配合。**
+  - 同意状态机 NotRequested→Pending→Granted/Denied→Revoked（系统面板撤销触发 onStop→REVOKED→立即停采，不落盘）。
+  - `CaptureService`：mediaProjection 前台服务类型（API 34 硬性要求已声明权限+类型）、ImageReader 帧计数、首帧 JPEG 样本上行（服务端只统计字节数不保存）、音频播放捕获能力探测（API 29+，以 AudioRecord 初始化成败为准）。
+  - APK：本地 Gradle 8.9 + AGP 8.5.2 构建成功（4.36MB debug），产物归档 test-runs/mirrordock-companion-debug-0.1.0-poc.apk；CI `companion.yml` push 触发上传 artifact。
+- [ ] C4-03 可选 Accessibility 实时控制、显著披露、Play 声明预审和 OEM 限制测试。**按用户指示跳过（硬性前置审核：Play 显著披露预审未完成前不进入范围）。**
+- [ ] C4-04 远程协助 / 企业 MDM / OEM 系统级增强，仅在单独权限与威胁模型审核后进入范围。**按用户指示跳过（硬性前置审核）。**
 
 ## 最终成品退出条件
 

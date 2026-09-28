@@ -3279,6 +3279,7 @@ pub mod licensing {
 }
 
 use licensing::Edition;
+mod companion_pairing;
 
 fn entitlement_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
     app.path().app_data_dir().map_err(|_| {
@@ -3424,6 +3425,29 @@ fn ensure_edition_allows(app: &AppHandle, options: &SessionOptions) -> Result<()
     licensing::ensure_pro_features(edition, options)
 }
 
+// ---------------------------------------------------------------------------
+// C4-01 伴侣 App 配对（POC）
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn companion_begin_pairing(
+    state: State<'_, Arc<companion_pairing::PairingState>>,
+) -> Result<companion_pairing::PairingOffer, AppError> {
+    companion_pairing::begin_pairing(&state)
+}
+
+#[tauri::command]
+fn companion_pairing_status(
+    state: State<'_, Arc<companion_pairing::PairingState>>,
+) -> companion_pairing::PairingStatus {
+    state.status()
+}
+
+#[tauri::command]
+fn companion_end_pairing(state: State<'_, Arc<companion_pairing::PairingState>>) {
+    companion_pairing::end_pairing(&state);
+}
+
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。优雅结束让录制文件有机会收尾。
 fn reclaim_children(app: &AppHandle) {
     if let Some(store) = app.try_state::<SessionStore>() {
@@ -3439,6 +3463,7 @@ pub fn run() {
         .manage(SessionStore::default())
         .manage(AppRuntimes::system())
         .manage(DiagnosticsLog::default())
+        .manage(Arc::new(companion_pairing::PairingState::default()))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -3467,7 +3492,10 @@ pub fn run() {
             export_diagnostics,
             entitlement_status,
             entitlement_activate,
-            entitlement_deactivate
+            entitlement_deactivate,
+            companion_begin_pairing,
+            companion_pairing_status,
+            companion_end_pairing
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

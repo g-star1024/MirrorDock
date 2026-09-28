@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
 import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plugin-dialog";
 import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
+import QRCode from "qrcode";
 import "./App.css";
 
 type DeviceState = "ready" | "unauthorized" | "offline" | "unknown";
@@ -73,6 +74,27 @@ type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: bo
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
 type Recording = { file_name: string; path: string; active: boolean };
+
+// C4-01 伴侣 App 配对（POC）：桌面作为 TLS 服务端，二维码携带连接信息
+// 与服务器证书 SPKI 指纹，伴侣 App 出带校验后建立加密会话。
+type PairingOffer = {
+  version: number;
+  hosts: string[];
+  port: number;
+  token: string;
+  fingerprint: string;
+};
+type PairingStatus = {
+  phase: "idle" | "listening" | "connected";
+  events: string[];
+  offer: PairingOffer | null;
+};
+
+/// 二维码载荷格式：MDP1|主机列表(逗号分隔)|端口|一次性配对码|SPKI SHA-256。
+/// 伴侣 App 与桌面侧共享同一约定（见 companion_pairing.rs 模块注释）。
+export function pairingPayload(offer: Pick<PairingOffer, "hosts" | "port" | "token" | "fingerprint">): string {
+  return `MDP1|${offer.hosts.join(",")}|${offer.port}|${offer.token}|${offer.fingerprint}`;
+}
 // 本地权益状态：无账户、无激活服务器，后端验签后回传。edition 只有 free/pro。
 export type EntitlementView = { edition: string; key_id: string | null; expires_at: number | null };
 export function editionLabel(edition: string | undefined | null) {
@@ -260,6 +282,12 @@ function App() {
   const [licenseError, setLicenseError] = useState<string | null>(null);
   // 品牌引导：用户手动选择优先于按设备 label 自动猜测；null 表示尚未选择。
   const [guideKey, setGuideKey] = useState<string | null>(null);
+  // 伴侣 App 配对（POC）：仅在前端展示，token 不写入任何持久化记录。
+  const [pairingOffer, setPairingOffer] = useState<PairingOffer | null>(null);
+  const [pairingStatus, setPairingStatus] = useState<PairingStatus | null>(null);
+  const [pairingQr, setPairingQr] = useState<string | null>(null);
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
   const [session, setSession] = useState<MirrorSession | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
@@ -584,6 +612,56 @@ function App() {
       setDiagnosticsBusy(false);
     }
   }
+
+  // 伴侣 App 配对：开始后每 2 秒轮询状态展示事件流；二维码只在前端内存生成。
+  async function beginPairing() {
+    setPairingBusy(true);
+    setPairingError(null);
+    setPairingQr(null);
+    try {
+      const offer = await invoke<PairingOffer>("companion_begin_pairing");
+      setPairingOffer(offer);
+      setPairingStatus({ phase: "listening", events: [], offer });
+      try {
+        setPairingQr(await QRCode.toDataURL(pairingPayload(offer), { width: 220, margin: 1 }));
+      } catch {
+        // 渲染环境不支持 canvas 时退化为只显示配对码，可手动输入。
+      }
+    } catch (error) {
+      setPairingError(errorMessage(error, "无法开始配对。"));
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
+  async function stopPairing() {
+    setPairingBusy(true);
+    try {
+      await invoke("companion_end_pairing");
+      setPairingOffer(null);
+      setPairingStatus(null);
+      setPairingQr(null);
+    } catch (error) {
+      setPairingError(errorMessage(error, "结束配对失败。"));
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!pairingOffer) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const status = await invoke<PairingStatus>("companion_pairing_status");
+        if (!disposed) setPairingStatus(status);
+      } catch { /* 配对状态是附加信息，读不到保持上次结果。 */ }
+      if (!disposed) timer = setTimeout(() => void poll(), 2000);
+    }
+    void poll();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [pairingOffer]);
 
   async function sendFileTo(serial: string) {
     setTransferMessage(null);
@@ -1131,6 +1209,42 @@ function App() {
           )}
           {diagnosticsMessage && <p className="apply-notice" role="status">{diagnosticsMessage}</p>}
           {diagnosticsError && <p className="capability-pending" role="alert">{diagnosticsError}</p>}
+        </section>
+
+        <section className="capability-panel diagnostics-panel" aria-live="polite">
+          <strong>伴侣 App 配对（实验）</strong>
+          <p className="capability-pending">
+            在同一 Wi-Fi 下用 MirrorDock 伴侣 App 扫描下方二维码，与这台电脑建立加密连接。
+            配对码一次有效，二维码只显示在这里，不会被保存或上传。
+          </p>
+          <span>
+            <button className="secondary-button" type="button" disabled={pairingBusy} onClick={() => void beginPairing()}>
+              {pairingBusy && !pairingOffer ? "正在准备…" : pairingOffer ? "重新生成配对" : "开始配对"}
+            </button>
+            <button className="secondary-button" type="button" disabled={pairingBusy || !pairingOffer} onClick={() => void stopPairing()}>
+              结束配对
+            </button>
+          </span>
+          {pairingOffer && (
+            <div className="screenshot-result">
+              <p className="capability-summary">
+                配对状态：{pairingStatus?.phase === "connected" ? "伴侣已连接" : pairingStatus?.phase === "listening" ? "等待伴侣扫码" : "未开始"}
+                {" · 一次性配对码 "}
+                <code>{pairingOffer.token}</code>
+              </p>
+              {pairingQr
+                ? <img src={pairingQr} alt="伴侣 App 配对二维码" width={220} height={220} />
+                : <p className="capability-pending">二维码渲染不可用时，可在伴侣 App 中手动输入上方 16 位配对码与本机地址（{pairingOffer.hosts[0]}:{pairingOffer.port}）。</p>}
+              {pairingStatus && pairingStatus.events.length > 0 && (
+                <ul className="transfer-file-list">
+                  {pairingStatus.events.slice(-8).reverse().map((event) => (
+                    <li key={event}><span className="transfer-file-name">{event}</span></li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {pairingError && <p className="capability-pending" role="alert">{pairingError}</p>}
         </section>
     </main>
   );
