@@ -599,6 +599,24 @@ fn take_running_process(store: &SessionStore) -> Result<Option<Box<dyn MirrorPro
     Ok(process)
 }
 
+/// 为「会话中应用新设置」原子地交出运行中的进程，并把会话就地标记为 `Connecting`。
+///
+/// 关键点：**不能先回到 `Idle` 再重新启动**。那会让界面在两次轮询之间读到“没有会话”，
+/// 用户可能误以为镜像已经结束（而且“结束镜像”按钮会闪一下）。会话在整个重启过程中都
+/// 应当停在「正在启动」。没有运行中的进程时返回 `None`，会话状态不作改动。
+fn begin_session_restart(
+    store: &SessionStore,
+    serial: String,
+) -> Result<Option<Box<dyn MirrorProcess>>, AppError> {
+    let mut state = store.lock()?;
+    let Some(process) = state.process.take() else {
+        return Ok(None);
+    };
+    state.epoch = state.epoch.wrapping_add(1);
+    state.session = MirrorSession::connecting(serial);
+    Ok(Some(process))
+}
+
 /// 设备在 ADB 视角下的可用性。用于把失败落到具体状态，而不是统一的“连接失败”。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeviceLookup {
@@ -1665,7 +1683,7 @@ fn apply_session_options_with(
         });
     }
 
-    let Some(mut previous) = take_running_process(sessions)? else {
+    let Some(mut previous) = begin_session_restart(sessions, serial.clone())? else {
         return Err(session_not_running_error());
     };
 
@@ -2677,6 +2695,29 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "session_not_running");
+    }
+
+    #[test]
+    fn a_restart_keeps_the_session_in_connecting_instead_of_dropping_to_idle() {
+        let session = started_session();
+
+        let handed_over = begin_session_restart(&session.store, "phone".into())
+            .unwrap()
+            .is_some();
+        assert!(handed_over, "运行中的会话应当交出进程用于重启");
+
+        let mid_restart = snapshot(&session.store);
+        assert_eq!(
+            mid_restart.phase,
+            SessionPhase::Connecting,
+            "重启途中必须停在“正在启动”，出现瞬间 Idle 会让用户以为镜像已经结束"
+        );
+        assert_eq!(mid_restart.serial.as_deref(), Some("phone"));
+
+        // 没有进程时不得改写会话状态。
+        let idle = SessionStore::default();
+        assert!(begin_session_restart(&idle, "phone".into()).unwrap().is_none());
+        assert_eq!(snapshot(&idle).phase, SessionPhase::Idle);
     }
 
     #[test]
