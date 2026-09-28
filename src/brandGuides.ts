@@ -84,11 +84,12 @@ export const brandGuides: BrandGuide[] = [
 ];
 
 /// 从一组设备 label（厂商 + 型号）里猜最可能的品牌。返回 null 表示无法判断，
-/// 界面不得把「猜不出」伪装成某个具体品牌。
+/// 界面不得把「猜不出」伪装成某个具体品牌。比较不区分大小写，
+/// 因为 adb / 不同系统上报的厂商字段大小写并不统一。
 export function detectBrand(labels: string[]): BrandGuide | null {
-  const joined = labels.join(" ");
+  const joined = labels.join(" ").toLowerCase();
   for (const guide of brandGuides) {
-    if (guide.match.some((keyword) => joined.includes(keyword))) {
+    if (guide.match.some((keyword) => joined.includes(keyword.toLowerCase()))) {
       return guide;
     }
   }

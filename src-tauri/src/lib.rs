@@ -4907,4 +4907,176 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
         let _ = fs::remove_dir_all(&local_dir);
     }
+
+    // -- 集成场景：把多个命令串成完整的用户旅程，验证跨命令的状态与授权一致性。 --
+    // 单元测试各自验证一个行为；这里验证它们组合后仍然守同一条红线。
+
+    #[test]
+    fn a_full_usb_session_journey_from_unauthorized_to_a_graceful_stop() {
+        let (adb, live) =
+            FakeAdb::with_live_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let mirror = FakeMirror::running();
+        let killed = Arc::clone(&mirror.killed);
+        let starts = Arc::clone(&mirror.starts);
+        let runtimes = runtimes(adb, mirror);
+        let store = SessionStore::default();
+
+        // 第一步：手机还没授权。启动被拒且会话如实停在 unauthorized，不得塌缩成"连接失败"。
+        let error = start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "device_unauthorized");
+        assert_eq!(snapshot(&store).phase, SessionPhase::Unauthorized);
+
+        // 第二步：用户在手机上点了"允许" → 设备就绪 → 再次尝试应当成功。
+        *live.lock().unwrap() = vec![device("phone", DeviceState::Ready)];
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
+            .unwrap();
+        assert_eq!(snapshot(&store).phase, SessionPhase::Streaming);
+
+        // 第三步：会话中应用新设置 → 旧窗口被结束、按新参数重开，会话不经过 Idle。
+        let update = apply_session_options_with(
+            &runtimes,
+            &store,
+            SessionOptions {
+                rotation: 90,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(update.applied);
+        assert_eq!(
+            starts.lock().unwrap().len(),
+            2,
+            "应当恰好启动两次：原会话 + 按新设置重启"
+        );
+        assert!(*killed.lock().unwrap(), "旧镜像窗口必须被结束");
+        assert_eq!(snapshot(&store).phase, SessionPhase::Streaming);
+
+        // 第四步：停止 → 回到 idle；重复停止给出明确错误而不是假装成功。
+        stop_mirroring_with(&store).unwrap();
+        assert_eq!(snapshot(&store).phase, SessionPhase::Idle);
+        assert_eq!(
+            stop_mirroring_with(&store).unwrap_err().code,
+            "session_not_running"
+        );
+    }
+
+    #[test]
+    fn screenshot_and_transfer_honor_the_same_authorization_gate_end_to_end() {
+        let local_dir = scratch_dir("journey-transfer-src");
+        fs::create_dir_all(&local_dir).unwrap();
+        let local = local_dir.join("笔记.txt");
+        fs::write(&local, b"hello mirrordock").unwrap();
+        let directory = scratch_dir("journey-transfer-dst");
+
+        let (mut adb, live) =
+            FakeAdb::with_live_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        adb.screenshot = Some(TINY_PNG.to_vec());
+        adb.device_listing = Some("相册 导出.jpg\n".into());
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        // 未授权：四条数据通道全部被拒，并且没有一条调用真正打到设备上。
+        assert_eq!(
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "s.png".into())
+                .unwrap_err()
+                .code,
+            "device_unauthorized"
+        );
+        assert_eq!(
+            send_file_to_device_with(
+                &runtimes,
+                "phone".into(),
+                local.to_string_lossy().into_owned()
+            )
+            .unwrap_err()
+            .code,
+            "device_unauthorized"
+        );
+        assert_eq!(
+            list_device_files_with(&runtimes, "phone".into())
+                .unwrap_err()
+                .code,
+            "device_unauthorized"
+        );
+        assert_eq!(
+            fetch_file_from_device_into(&runtimes, &directory, "phone".into(), "a.jpg".into())
+                .unwrap_err()
+                .code,
+            "device_unauthorized"
+        );
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "未授权时任何 adb 调用都不应发起，实际：{:?}",
+            calls.lock().unwrap()
+        );
+
+        // 授权后：同一组通道全部可用，回执与文件都真实存在。
+        *live.lock().unwrap() = vec![device("phone", DeviceState::Ready)];
+        let shot = capture_screenshot_into(&runtimes, &directory, "phone".into(), "s.png".into())
+            .unwrap();
+        assert_eq!(shot.bytes, TINY_PNG.len());
+        assert!(directory.join("s.png").exists());
+        let receipt = send_file_to_device_with(
+            &runtimes,
+            "phone".into(),
+            local.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        assert_eq!(receipt.file_name, "笔记.txt");
+        assert_eq!(list_device_files_with(&runtimes, "phone".into()).unwrap(), {
+            vec!["相册 导出.jpg".to_string()]
+        });
+        fetch_file_from_device_into(&runtimes, &directory, "phone".into(), "a.jpg".into())
+            .unwrap();
+        assert!(directory.join("a.jpg").exists(), "拉取的文件必须真实落盘");
+
+        let _ = fs::remove_dir_all(&directory);
+        let _ = fs::remove_dir_all(&local_dir);
+    }
+
+    #[test]
+    fn a_wireless_endpoint_session_follows_the_same_lifecycle_contract() {
+        // 无线端点只是 serial 的另一种形态；生命周期契约（启动/重启/停止、状态不塌缩）
+        // 必须与 USB 完全一致，否则前端要为两种连接方式维护两套心智模型。
+        let serial = "adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp";
+        let mirror = FakeMirror::running();
+        let starts = Arc::clone(&mirror.starts);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device(serial, DeviceState::Ready)]),
+            mirror,
+        );
+        let store = SessionStore::default();
+
+        start_mirroring_with(&runtimes, &store, serial.into(), SessionOptions::default(), None)
+            .unwrap();
+        assert_eq!(snapshot(&store).phase, SessionPhase::Streaming);
+
+        apply_session_options_with(
+            &runtimes,
+            &store,
+            SessionOptions {
+                quality: Quality::Sharp,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(starts.lock().unwrap().len(), 2);
+
+        stop_mirroring_with(&store).unwrap();
+        let ended = snapshot(&store);
+        assert_eq!(ended.phase, SessionPhase::Idle);
+        assert_eq!(
+            ended.serial, None,
+            "停止后不得残留上一个设备的序列号"
+        );
+    }
 }

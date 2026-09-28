@@ -1,0 +1,304 @@
+// App 层纯函数与初始渲染的测试。
+// 组件测试通过 vi.mock 拦截 Tauri 命令面：这里验证的是前端的**呈现契约**——
+// 七种会话状态不得塌缩成一句"连接失败"、未知能力必须如实显示"未知"。
+import { render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args),
+}));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: vi.fn(),
+}));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(),
+}));
+
+import App, {
+  capabilitySummary,
+  errorMessage,
+  formatBytes,
+  lockSummary,
+  readOptions,
+  recordingFileName,
+  relativeTime,
+  screenshotFileName,
+  sessionStatus,
+  supportText,
+  type DeviceCapabilities,
+  type DeviceLockReport,
+  type MirrorSession,
+} from "./App";
+
+function adbCheck(overrides: Record<string, unknown> = {}) {
+  return {
+    adb_available: true,
+    scrcpy_available: true,
+    devices: [],
+    diagnostic: null,
+    ...overrides,
+  };
+}
+
+function idleSession(): MirrorSession {
+  return { phase: "idle", serial: null, first_frame: "unknown", error: null };
+}
+
+// App 挂载时会并行轮询多条命令；每个命令都必须返回结构正确的值，
+// 否则组件在渲染期崩溃——这个 helper 保证任何测试忘记 mock 的命令都有安全兜底。
+function baseInvoke(cmd: string): Promise<unknown> {
+  switch (cmd) {
+    case "check_adb_devices":
+      return Promise.resolve(adbCheck());
+    case "mirror_session":
+      return Promise.resolve(idleSession());
+    case "current_recording":
+      return Promise.resolve(null);
+    case "list_recent_devices":
+      return Promise.resolve([]);
+    case "list_trusted_wireless_devices":
+      return Promise.resolve([]);
+    case "probe_device_capabilities":
+      return Promise.resolve({
+        serial: "",
+        label: "",
+        android_release: null,
+        sdk: null,
+        mirroring_supported: null,
+        audio_forwarding_supported: null,
+        notices: [],
+      });
+    case "device_lock_report":
+      return Promise.resolve({
+        keyguard: "unknown",
+        secure_lock: null,
+        screen: "unknown",
+        explanation: "",
+        recovery: "",
+      });
+    default:
+      return Promise.resolve({});
+  }
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(baseInvoke);
+});
+
+describe("sessionStatus", () => {
+  it("gives_every_phase_its_own_writing_never_a_generic_connection_failure", () => {
+    const cases: [MirrorSession, string | null][] = [
+      [idleSession(), null],
+      [{ ...idleSession(), phase: "connecting" }, "正在启动镜像窗口…"],
+      [
+        { ...idleSession(), phase: "streaming", first_frame: "unknown" },
+        "镜像进程已启动，但尚未确认首帧到达。请查看手机画面是否已经出现。",
+      ],
+      [
+        { ...idleSession(), phase: "streaming", first_frame: "reached" },
+        "镜像正在运行。关闭镜像窗口即可结束本次会话。",
+      ],
+      [{ ...idleSession(), phase: "unauthorized" }, "手机尚未允许这台电脑进行调试，请解锁手机后重新允许。"],
+      [{ ...idleSession(), phase: "offline" }, "手机当前处于离线状态，请重新插拔数据线或重新连接无线调试。"],
+      [{ ...idleSession(), phase: "paired" }, "无线设备已配对并连接，可以开始镜像。"],
+      [{ ...idleSession(), phase: "failed" }, "镜像会话失败，请重新检查连接后再试。"],
+    ];
+    for (const [session, expected] of cases) {
+      expect(sessionStatus(session), `phase: ${session.phase}`).toBe(expected);
+    }
+    const writings = cases.map(([, text]) => text);
+    expect(new Set(writings).size).toBe(writings.length);
+  });
+
+  it("prefers_the_backend_error_copy_over_the_local_fallback", () => {
+    const session: MirrorSession = {
+      phase: "failed",
+      serial: "phone",
+      first_frame: "unknown",
+      error: { code: "x", message: "设备已断开", recovery: "重新连接后再试" },
+    };
+    expect(sessionStatus(session)).toBe("设备已断开 重新连接后再试");
+  });
+});
+
+describe("supportText and capabilitySummary", () => {
+  it("never_turns_an_unknown_capability_into_a_yes_or_no", () => {
+    expect(supportText(null, "支持", "不支持", "未知")).toBe("未知");
+    expect(supportText(true, "支持", "不支持", "未知")).toBe("支持");
+    expect(supportText(false, "支持", "不支持", "未知")).toBe("不支持");
+  });
+
+  it("summarizes_capabilities_with_honest_unknowns", () => {
+    const capabilities: DeviceCapabilities = {
+      serial: "phone",
+      label: "Xiaomi M2104K10AC",
+      android_release: "13",
+      sdk: 33,
+      mirroring_supported: true,
+      audio_forwarding_supported: null,
+      notices: [],
+    };
+    const summary = capabilitySummary(capabilities);
+    expect(summary).toContain("Xiaomi M2104K10AC");
+    expect(summary).toContain("Android 13");
+    expect(summary).toContain("可以镜像");
+    expect(summary).toContain("声音能力未知");
+  });
+});
+
+describe("lockSummary", () => {
+  it("separates_secure_locks_from_simple_locks", () => {
+    const base: DeviceLockReport = {
+      keyguard: "locked",
+      secure_lock: true,
+      screen: "awake",
+      explanation: "",
+      recovery: "",
+    };
+    expect(lockSummary(base)).toBe("已锁屏（需要解锁凭据） · 屏幕已点亮");
+    expect(lockSummary({ ...base, secure_lock: false })).toBe("锁屏中 · 屏幕已点亮");
+    expect(lockSummary({ ...base, secure_lock: null, screen: "unknown" })).toBe(
+      "锁屏中 · 屏幕状态未知",
+    );
+    expect(lockSummary({ ...base, keyguard: "unlocked", screen: "asleep" })).toBe(
+      "已解锁 · 屏幕已关闭",
+    );
+  });
+});
+
+describe("errorMessage", () => {
+  it("joins_message_and_recovery_for_structured_backend_errors", () => {
+    const error = { code: "c", message: "无法启动", recovery: "请重试" };
+    expect(errorMessage(error, "fallback")).toBe("无法启动 请重试");
+  });
+
+  it("falls_back_for_plain_strings_and_unknown_shapes", () => {
+    expect(errorMessage("字符串错误", "fallback")).toBe("字符串错误");
+    expect(errorMessage(new Error("boom"), "fallback")).toBe("fallback");
+    expect(errorMessage(undefined, "fallback")).toBe("fallback");
+  });
+});
+
+describe("formatBytes", () => {
+  it("uses_human_readable_units", () => {
+    expect(formatBytes(512)).toBe("512 字节");
+    expect(formatBytes(15_580)).toBe("15 KB");
+    expect(formatBytes(6_815_792)).toBe("6.5 MB");
+  });
+});
+
+describe("relativeTime", () => {
+  it("describes_recency_without_precision_theory", () => {
+    const now = Date.now() / 1000;
+    expect(relativeTime(0)).toBe("使用时间未知");
+    expect(relativeTime(now - 30)).toBe("刚刚使用");
+    expect(relativeTime(now - 5 * 60)).toBe("5 分钟前使用");
+    expect(relativeTime(now - 3 * 3600)).toBe("3 小时前使用");
+    expect(relativeTime(now - 86400)).toBe("昨天使用");
+    expect(relativeTime(now - 3 * 86400)).toBe("3 天前使用");
+  });
+});
+
+describe("screenshot and recording file names", () => {
+  it("keeps_file_names_ascii_only_so_the_backend_whitelist_accepts_them", () => {
+    const now = new Date(2026, 8, 28, 20, 5, 9);
+    expect(screenshotFileName(now)).toBe("MirrorDock-20260928-200509.png");
+    expect(recordingFileName(now)).toBe("MirrorDock-20260928-200509.mp4");
+  });
+});
+
+describe("readOptions", () => {
+  it("backfills_new_fields_for_older_stored_settings", () => {
+    localStorage.setItem(
+      "mirrordock.sessionOptions",
+      JSON.stringify({ quality: "sharp", rotation: 90, fullscreen: true, always_on_top: false }),
+    );
+    expect(readOptions()).toEqual({
+      quality: "sharp",
+      rotation: 90,
+      fullscreen: true,
+      always_on_top: false,
+      keep_awake: true,
+      record: false,
+      clipboard_autosync: true,
+      audio: true,
+    });
+  });
+
+  it("rejects_invalid_stored_values_and_returns_defaults", () => {
+    localStorage.setItem("mirrordock.sessionOptions", JSON.stringify({ quality: "ultra" }));
+    expect(readOptions().quality).toBe("balanced");
+    localStorage.setItem("mirrordock.sessionOptions", "{not json");
+    expect(readOptions().quality).toBe("balanced");
+  });
+});
+
+describe("App rendering", () => {
+  it("shows_setup_steps_and_brand_guidance_when_no_device_is_connected", async () => {
+    render(<App />);
+    await waitFor(() => {
+      // invoke 的实际调用记录带一个 undefined 参数位，所以按命令名匹配。
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "check_adb_devices")).toBe(true);
+    });
+    // 三步引导与品牌知识库在无设备时都应可见。
+    expect(await screen.findByText("使用可传输数据的数据线连接手机")).toBeInTheDocument();
+    expect(await screen.findByText("按品牌查看开启步骤")).toBeInTheDocument();
+    expect(await screen.findByText(/以手机实际设置为准/)).toBeInTheDocument();
+  });
+
+  it("reports_an_unauthorized_device_with_its_own_state_copy", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(
+          adbCheck({ devices: [{ serial: "phone", label: "Xiaomi M2104K10AC", state: "unauthorized" }] }),
+        );
+      }
+      if (cmd === "mirror_session") {
+        return Promise.resolve({ phase: "unauthorized", serial: "phone", first_frame: "unknown", error: null });
+      }
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+    expect(await screen.findByText("等待手机确认")).toBeInTheDocument();
+    // 会话状态文案（而非三步引导里的相似句子）必须原样出现。
+    expect(await screen.findByText(/手机尚未允许这台电脑进行调试/)).toBeInTheDocument();
+  });
+
+  it("surfaces_the_streaming_session_copy_once_a_session_is_running", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "check_adb_devices":
+          return Promise.resolve(
+            adbCheck({ devices: [{ serial: "phone", label: "Pixel 8", state: "ready" }] }),
+          );
+        case "mirror_session":
+          return Promise.resolve({
+            phase: "streaming",
+            serial: "phone",
+            first_frame: "reached",
+            error: null,
+          });
+        default:
+          return baseInvoke(cmd);
+      }
+    });
+    render(<App />);
+    expect(
+      await screen.findByText("镜像正在运行。关闭镜像窗口即可结束本次会话。"),
+    ).toBeInTheDocument();
+  });
+
+  it("explains_when_the_mirror_runtime_itself_is_missing", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ scrcpy_available: false, diagnostic: "未找到 scrcpy" }));
+      }
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+    expect(await screen.findByText(/scrcpy/)).toBeInTheDocument();
+  });
+});

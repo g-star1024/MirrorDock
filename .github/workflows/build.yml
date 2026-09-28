@@ -56,8 +56,11 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: Rust 单元测试
+      - name: Rust 单元与集成测试
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: 前端单元与组件测试
+        run: pnpm test
 
       - name: 前端生产构建
         run: pnpm build

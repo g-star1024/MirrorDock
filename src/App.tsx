@@ -28,7 +28,7 @@ type RecentDevice = { serial: string; label: string; last_used_at: number };
 function looksLikeWirelessEndpoint(serial: string) {
   return serial.includes(":");
 }
-function relativeTime(seconds: number) {
+export function relativeTime(seconds: number) {
   if (!seconds) return "使用时间未知";
   const diff = Date.now() / 1000 - seconds;
   if (diff < 60) return "刚刚使用";
@@ -38,14 +38,14 @@ function relativeTime(seconds: number) {
   return days === 1 ? "昨天使用" : `${days} 天前使用`;
 }
 type AppError = { code: string; message: string; recovery: string };
-type SessionPhase = "idle" | "unauthorized" | "offline" | "paired" | "connecting" | "streaming" | "failed";
+export type SessionPhase = "idle" | "unauthorized" | "offline" | "paired" | "connecting" | "streaming" | "failed";
 // 进程正在运行不等于首帧已到达；未接入端到端探针前后端只会返回 unknown。
-type FirstFrame = "unknown" | "reached";
-type MirrorSession = { phase: SessionPhase; serial: string | null; first_frame: FirstFrame; error: AppError | null };
+export type FirstFrame = "unknown" | "reached";
+export type MirrorSession = { phase: SessionPhase; serial: string | null; first_frame: FirstFrame; error: AppError | null };
 // 能力探测的结论用 null 表示"未知"，不得默认成"支持"或"不支持"。
 type NoticeLevel = "info" | "limitation";
 type CapabilityNotice = { code: string; level: NoticeLevel; title: string; detail: string };
-type DeviceCapabilities = {
+export type DeviceCapabilities = {
   serial: string;
   label: string;
   android_release: string | null;
@@ -57,7 +57,7 @@ type DeviceCapabilities = {
 // 锁屏与屏幕状态。后端读不到时会返回 unknown，前端必须原样展示“未知”而不是猜。
 type KeyguardState = "locked" | "unlocked" | "unknown";
 type ScreenState = "awake" | "asleep" | "unknown";
-type DeviceLockReport = {
+export type DeviceLockReport = {
   keyguard: KeyguardState;
   secure_lock: boolean | null;
   screen: ScreenState;
@@ -74,7 +74,7 @@ type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true };
-function readOptions(): SessionOptions {
+export function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
     if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") {
@@ -104,21 +104,21 @@ function localTimestamp(now: Date) {
   return `${date}-${time}`;
 }
 
-function screenshotFileName(now: Date) {
+export function screenshotFileName(now: Date) {
   return `MirrorDock-${localTimestamp(now)}.png`;
 }
 
-function recordingFileName(now: Date) {
+export function recordingFileName(now: Date) {
   return `MirrorDock-${localTimestamp(now)}.mp4`;
 }
 
-function formatBytes(bytes: number) {
+export function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} 字节`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function lockSummary(report: DeviceLockReport) {
+export function lockSummary(report: DeviceLockReport) {
   const keyguard =
     report.keyguard === "locked"
       ? report.secure_lock === true
@@ -130,7 +130,7 @@ function lockSummary(report: DeviceLockReport) {
   const screen = report.screen === "awake" ? "屏幕已点亮" : report.screen === "asleep" ? "屏幕已关闭" : "屏幕状态未知";
   return `${keyguard} · ${screen}`;
 }
-function errorMessage(error: unknown, fallback: string) {
+export function errorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null && "message" in error && "recovery" in error) {
     const detail = error as AppError;
     return `${detail.message} ${detail.recovery}`;
@@ -138,15 +138,15 @@ function errorMessage(error: unknown, fallback: string) {
   return typeof error === "string" ? error : fallback;
 }
 
-function sessionErrorText(session: MirrorSession, fallback: string) {
+export function sessionErrorText(session: MirrorSession, fallback: string) {
   return session.error ? `${session.error.message} ${session.error.recovery}` : fallback;
 }
 
-function supportText(value: boolean | null, yes: string, no: string, unknown: string) {
+export function supportText(value: boolean | null, yes: string, no: string, unknown: string) {
   return value === true ? yes : value === false ? no : unknown;
 }
 
-function capabilitySummary(capabilities: DeviceCapabilities) {
+export function capabilitySummary(capabilities: DeviceCapabilities) {
   const system = capabilities.android_release
     ? `Android ${capabilities.android_release}`
     : "系统版本未知";
@@ -158,7 +158,7 @@ function capabilitySummary(capabilities: DeviceCapabilities) {
   ].join(" · ");
 }
 
-function sessionStatus(session: MirrorSession): string | null {
+export function sessionStatus(session: MirrorSession): string | null {
   switch (session.phase) {
     case "idle":
       return null;
