@@ -1,0 +1,4 @@
+interface:
+  display_name: "MirrorDock Development"
+  short_description: "Build and verify MirrorDock safely"
+  default_prompt: "Use $mirrordock-development to implement the requested MirrorDock change."

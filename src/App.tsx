@@ -1,0 +1,366 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import "./App.css";
+
+type DeviceState = "ready" | "unauthorized" | "offline" | "unknown";
+
+type Device = {
+  serial: string;
+  label: string;
+  state: DeviceState;
+};
+
+type AdbCheck = {
+  adb_available: boolean;
+  scrcpy_available: boolean;
+  devices: Device[];
+  diagnostic: string | null;
+};
+
+type TrustedWirelessDevice = { endpoint: string };
+type AppError = { code: string; message: string; recovery: string };
+type SessionPhase = "idle" | "unauthorized" | "offline" | "paired" | "connecting" | "streaming" | "failed";
+// 进程正在运行不等于首帧已到达；未接入端到端探针前后端只会返回 unknown。
+type FirstFrame = "unknown" | "reached";
+type MirrorSession = { phase: SessionPhase; serial: string | null; first_frame: FirstFrame; error: AppError | null };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0 };
+function readOptions(): SessionOptions {
+  try {
+    const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
+    if (value && ["smooth", "balanced", "sharp"].includes(value.quality) && [0,90,180,270].includes(value.rotation) && typeof value.fullscreen === "boolean" && typeof value.always_on_top === "boolean") return value;
+  } catch { /* Invalid or unavailable local settings use defaults. */ }
+  return defaultOptions;
+}
+function errorMessage(error: unknown, fallback: string) {
+  if (typeof error === "object" && error !== null && "message" in error && "recovery" in error) {
+    const detail = error as AppError;
+    return `${detail.message} ${detail.recovery}`;
+  }
+  return typeof error === "string" ? error : fallback;
+}
+
+function sessionErrorText(session: MirrorSession, fallback: string) {
+  return session.error ? `${session.error.message} ${session.error.recovery}` : fallback;
+}
+
+function sessionStatus(session: MirrorSession): string | null {
+  switch (session.phase) {
+    case "idle":
+      return null;
+    case "connecting":
+      return "正在启动镜像窗口…";
+    case "streaming":
+      return session.first_frame === "reached"
+        ? "镜像正在运行。关闭镜像窗口即可结束本次会话。"
+        : "镜像进程已启动，但尚未确认首帧到达。请查看手机画面是否已经出现。";
+    case "unauthorized":
+      return sessionErrorText(session, "手机尚未允许这台电脑进行调试，请解锁手机后重新允许。");
+    case "offline":
+      return sessionErrorText(session, "手机当前处于离线状态，请重新插拔数据线或重新连接无线调试。");
+    case "paired":
+      return "无线设备已配对并连接，可以开始镜像。";
+    case "failed":
+      return sessionErrorText(session, "镜像会话失败，请重新检查连接后再试。");
+  }
+}
+
+const stateCopy: Record<DeviceState, { label: string; detail: string }> = {
+  ready: { label: "可以开始镜像", detail: "手机已授权这台电脑。" },
+  unauthorized: {
+    label: "等待手机确认",
+    detail: "请解锁手机，然后在“允许 USB 调试吗？”提示中选择允许。",
+  },
+  offline: {
+    label: "连接暂不可用",
+    detail: "请拔下数据线后重新连接，保持手机解锁。",
+  },
+  unknown: {
+    label: "需要检查连接",
+    detail: "请检查数据线和手机上的 USB 连接模式。",
+  },
+};
+
+function App() {
+  const [check, setCheck] = useState<AdbCheck | null>(null);
+  const [isChecking, setIsChecking] = useState(true);
+  const [isLaunching, setIsLaunching] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [wirelessExpanded, setWirelessExpanded] = useState(false);
+  const [pairEndpoint, setPairEndpoint] = useState("");
+  const [connectEndpoint, setConnectEndpoint] = useState("");
+  const [pairingCode, setPairingCode] = useState("");
+  const [wirelessMessage, setWirelessMessage] = useState<string | null>(null);
+  const [wirelessBusy, setWirelessBusy] = useState(false);
+  const [trustedDevices, setTrustedDevices] = useState<TrustedWirelessDevice[]>([]);
+  const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
+  const [session, setSession] = useState<MirrorSession | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const sessionActive = session?.phase === "connecting" || session?.phase === "streaming";
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const current = await invoke<MirrorSession>("mirror_session");
+        if (!disposed) { setSession(current); setSessionError(null); }
+      } catch { if (!disposed) setSessionError("无法更新会话状态，请重新打开应用后检查。"); }
+      if (!disposed) timer = setTimeout(() => void poll(), 1000);
+    }
+    void poll();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, []);
+  const [options, setOptions] = useState<SessionOptions>(readOptions);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  function updateOptions(next: SessionOptions) {
+    setOptions(next);
+    try { localStorage.setItem("mirrordock.sessionOptions", JSON.stringify(next)); }
+    catch { setSettingsNotice("本机设置无法保存，本次会话仍可使用这些选项。"); }
+  }
+
+  async function refreshDevices() {
+    setIsChecking(true);
+    try {
+      setCheck(await invoke<AdbCheck>("check_adb_devices"));
+    } catch {
+      setCheck({
+        adb_available: false,
+        scrcpy_available: false,
+        devices: [],
+        diagnostic: "无法读取连接状态。请关闭后重新打开 MirrorDock。",
+      });
+    } finally {
+      setIsChecking(false);
+    }
+  }
+
+  useEffect(() => {
+    try { setSelectedSerial(localStorage.getItem("mirrordock.lastDeviceSerial")); } catch { /* Storage may be unavailable. */ }
+    void refreshDevices();
+    void refreshTrustedDevices();
+  }, []);
+
+  async function refreshTrustedDevices() {
+    try {
+      setTrustedDevices(await invoke<TrustedWirelessDevice[]>("list_trusted_wireless_devices"));
+    } catch (error) {
+      setTrustedDevices([]);
+      setWirelessMessage(errorMessage(error, "无法读取本机已保存的无线设备列表。"));
+    }
+  }
+
+  async function startMirroring(serial: string) {
+    setSelectedSerial(serial);
+    setIsLaunching(true);
+    setLaunchError(null);
+    try {
+      await invoke("start_mirroring", { serial, options });
+      try { localStorage.setItem("mirrordock.lastDeviceSerial", serial); } catch { setSettingsNotice("无法保存最近设备，本次连接不受影响。"); }
+    } catch (error) {
+      setLaunchError(errorMessage(error, "无法启动镜像窗口。请重新检查连接后再试。"));
+    } finally {
+      setIsLaunching(false);
+    }
+  }
+
+  async function stopMirroring() {
+    setIsStopping(true);
+    setLaunchError(null);
+    try {
+      await invoke("stop_mirroring");
+    } catch (error) {
+      setLaunchError(errorMessage(error, "无法结束镜像会话，请手动关闭镜像窗口。"));
+    } finally {
+      setIsStopping(false);
+    }
+  }
+
+  async function pairAndConnect() {
+    setWirelessBusy(true);
+    setWirelessMessage(null);
+    try {
+      await invoke("pair_wireless_device", { endpoint: pairEndpoint, pairingCode });
+      setPairingCode("");
+      await invoke("connect_wireless_device", { endpoint: connectEndpoint });
+      setPairingCode("");
+      setWirelessMessage("配对并连接完成。正在更新设备列表。");
+      await Promise.all([refreshDevices(), refreshTrustedDevices()]);
+    } catch (error) {
+      setWirelessMessage(errorMessage(error, "无线连接未完成。请重新检查手机上的无线调试页面。"));
+    } finally {
+      setPairingCode("");
+      setWirelessBusy(false);
+    }
+  }
+
+  async function reconnect(endpoint: string) {
+    setWirelessBusy(true);
+    setWirelessMessage(null);
+    try {
+      await invoke("connect_wireless_device", { endpoint });
+      setWirelessMessage("已发送连接请求，正在更新设备列表。");
+      await refreshDevices();
+    } catch (error) {
+      setWirelessMessage(errorMessage(error, "无法重新连接该设备。"));
+    } finally {
+      setWirelessBusy(false);
+    }
+  }
+
+  async function forgetDevice(endpoint: string) {
+    setWirelessBusy(true);
+    setWirelessMessage(null);
+    try {
+      await invoke("forget_trusted_wireless_device", { endpoint });
+      setWirelessMessage("已从 MirrorDock 的本机列表移除，并断开当前连接。");
+      await Promise.all([refreshDevices(), refreshTrustedDevices()]);
+    } catch (error) {
+      setWirelessMessage(errorMessage(error, "无法移除该设备。"));
+    } finally {
+      setWirelessBusy(false);
+    }
+  }
+
+  const readyDevices = check?.devices.filter((device) => device.state === "ready") ?? [];
+  const readyDevice = readyDevices.find((device) => device.serial === selectedSerial) ?? readyDevices[0];
+  const scrcpyReady = check?.scrcpy_available ?? false;
+  const statusMessage = session ? sessionStatus(session) : null;
+  const statusRole = session && ["unauthorized", "offline", "failed"].includes(session.phase) ? "alert" : "status";
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand" aria-label="MirrorDock">
+          <span className="brand-mark" aria-hidden="true">M</span>
+          <span>MirrorDock</span>
+        </div>
+        <span className="local-pill">仅在本机连接</span>
+      </header>
+
+      <section className="hero" aria-labelledby="page-title">
+        <p className="eyebrow">连接你的 Android 手机</p>
+        <h1 id="page-title">在电脑上安心使用手机</h1>
+        <p className="intro">使用数据线连接后，MirrorDock 会引导你完成一次安全授权。你的屏幕内容不会上传到云端。</p>
+      </section>
+
+      <section className="connection-card" aria-live="polite">
+        <div className="connection-heading">
+          <div>
+            <p className="eyebrow">第一步：连接手机</p>
+            <h2>{isChecking ? "正在检查 USB 连接…" : readyDevice ? "手机已准备就绪" : "等待连接手机"}</h2>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
+            {isChecking ? "检查中…" : "重新检查"}
+          </button>
+        </div>
+
+        {check?.diagnostic && <p className="diagnostic">{check.diagnostic}</p>}
+        {launchError && <p className="diagnostic">{launchError}</p>}
+        {sessionError && <p className="diagnostic" role="alert">{sessionError}</p>}
+        {statusMessage && <p className="diagnostic" role={statusRole}>{statusMessage}</p>}
+        {session?.phase === "streaming" && (
+          <button className="secondary-button" type="button" onClick={() => void stopMirroring()} disabled={isStopping}>
+            {isStopping ? "正在结束…" : "结束镜像"}
+          </button>
+        )}
+        {settingsNotice && <p className="diagnostic">{settingsNotice}</p>}
+        <fieldset className="session-options">
+          <legend>镜像窗口设置（下次启动生效）</legend>
+          <label>画质 <select value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>
+            <option value="smooth">流畅 · 1024 / 2 Mbps</option><option value="balanced">均衡 · 1920 / 8 Mbps</option><option value="sharp">清晰 · 2560 / 16 Mbps</option>
+          </select></label>
+          <label>显示旋转 <select value={options.rotation} onChange={e => updateOptions({...options, rotation: Number(e.target.value)})}>
+            {[0,90,180,270].map(value => <option key={value} value={value}>{value}°</option>)}
+          </select></label>
+          <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
+          <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
+          <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
+          <p>无线卡顿时可选择“流畅”。受保护内容可能显示黑屏；旋转只改变电脑上的显示方向。</p>
+        </fieldset>
+
+        {readyDevice ? (
+          <>
+          {readyDevices.length > 1 && <div className="device-picker" aria-label="选择要镜像的设备">
+            {readyDevices.map((device) => <button className={device.serial === readyDevice.serial ? "device-choice selected" : "device-choice"} type="button" key={device.serial} onClick={() => setSelectedSerial(device.serial)}>{device.label}</button>)}
+          </div>}
+          <div className="ready-panel">
+            <span className="status-dot ready" aria-hidden="true" />
+            <div>
+              <strong>{readyDevice.label}</strong>
+              <p>已获得 USB 调试授权。下一步将开启镜像窗口。</p>
+            </div>
+            <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || sessionActive} onClick={() => void startMirroring(readyDevice.serial)}>
+              {sessionActive ? "会话进行中" : isLaunching ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
+            </button>
+          </div>
+          </>
+        ) : (
+          <ol className="setup-steps">
+            <li><span>1</span><div><strong>使用可传输数据的数据线连接手机</strong><p>如果手机弹出 USB 用途选择，请选择“文件传输”。</p></div></li>
+            <li><span>2</span><div><strong>在手机上开启“USB 调试”</strong><p>这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
+            <li><span>3</span><div><strong>解锁手机并允许这台电脑</strong><p>在“允许 USB 调试吗？”中选择允许。你可以随时在手机设置中撤销。</p></div></li>
+          </ol>
+        )}
+
+        {!isChecking && check?.devices && check.devices.length > 0 && !readyDevice && (
+          <div className="device-list">
+            {check.devices.map((device) => (
+              <div className="device-row" key={device.serial}>
+                <span className={`status-dot ${device.state}`} aria-hidden="true" />
+                <div><strong>{device.label}</strong><p>{stateCopy[device.state].detail}</p></div>
+                <span className="status-label">{stateCopy[device.state].label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="wireless-card" aria-labelledby="wireless-title">
+        <div className="wireless-heading">
+          <div>
+            <p className="eyebrow">也可以使用无线调试</p>
+            <h2 id="wireless-title">同一 Wi-Fi 下连接 Android 11 或更高版本</h2>
+            <p>配对码仅用于这一次配对，不会保存。已连接设备的网络地址仅保存在这台电脑上。</p>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => setWirelessExpanded((value) => !value)}>
+            {wirelessExpanded ? "收起" : "设置无线连接"}
+          </button>
+        </div>
+
+        {wirelessExpanded && <div className="wireless-content">
+          <ol className="wireless-steps">
+            <li>在手机的“开发者选项”中打开“无线调试”，并确认手机和电脑在同一 Wi-Fi。</li>
+            <li>选择“使用配对码配对设备”，填写手机显示的配对地址和 6 位配对码。</li>
+            <li>回到无线调试主页面，填写“IP 地址和端口”中的连接地址；它可能与配对地址不同。</li>
+          </ol>
+          <div className="wireless-form">
+            <label>配对地址<input value={pairEndpoint} onChange={(event) => setPairEndpoint(event.target.value)} placeholder="例如 192.168.1.20:37123" autoComplete="off" /></label>
+            <label>6 位配对码<input value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="不会保存" autoComplete="one-time-code" /></label>
+            <label>连接地址<input value={connectEndpoint} onChange={(event) => setConnectEndpoint(event.target.value)} placeholder="例如 192.168.1.20:41839" autoComplete="off" /></label>
+            <button className="primary-button" type="button" onClick={() => void pairAndConnect()} disabled={wirelessBusy}>{wirelessBusy ? "正在连接…" : "配对并连接"}</button>
+          </div>
+        </div>}
+
+        {wirelessMessage && <p className="diagnostic">{wirelessMessage}</p>}
+        {trustedDevices.length > 0 && <div className="trusted-devices" aria-label="本机已保存的无线设备">
+          <strong>本机已保存的无线设备</strong>
+          {trustedDevices.map((device) => <div className="trusted-device" key={device.endpoint}>
+            <code>{device.endpoint}</code>
+            <span>
+              <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnect(device.endpoint)}>重新连接</button>
+              <button className="text-button danger" type="button" disabled={wirelessBusy} onClick={() => void forgetDevice(device.endpoint)}>忘记</button>
+            </span>
+          </div>)}
+        </div>}
+      </section>
+
+      <aside className="privacy-note">
+        <strong>为什么需要授权？</strong>
+        <p>MirrorDock 通过 Android 的 USB 调试机制获得画面和控制权限。该授权只授予你确认过的电脑，且可以在手机的开发者选项中随时撤销。</p>
+      </aside>
+    </main>
+  );
+}
+
+export default App;
