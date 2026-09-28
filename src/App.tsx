@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
-import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plugin-dialog";
 import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
 import "./App.css";
 
@@ -38,6 +38,10 @@ export function relativeTime(seconds: number) {
   return days === 1 ? "昨天使用" : `${days} 天前使用`;
 }
 type AppError = { code: string; message: string; recovery: string };
+// 诊断包：预览内容与导出文件内容一致——不多不少。
+export type DiagnosticsEvent = { timestamp_ms: number; kind: string; code: string; detail: string };
+export type DiagnosticsPreviewData = { generated_at_ms: number; app_version: string; system: string; scrcpy_available: boolean; events: DiagnosticsEvent[] };
+type DiagnosticsReceipt = { path: string; events: number; bytes: number };
 export type SessionPhase = "idle" | "unauthorized" | "offline" | "paired" | "connecting" | "streaming" | "failed";
 // 进程正在运行不等于首帧已到达；未接入端到端探针前后端只会返回 unknown。
 export type FirstFrame = "unknown" | "reached";
@@ -227,6 +231,11 @@ function App() {
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [lastTransfer, setLastTransfer] = useState<TransferReceipt | null>(null);
+  // 诊断包：默认不生成、不落盘；预览后由用户显式导出。
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsPreviewData | null>(null);
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
+  const [diagnosticsMessage, setDiagnosticsMessage] = useState<string | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<string[] | null>(null);
   // 品牌引导：用户手动选择优先于按设备 label 自动猜测；null 表示尚未选择。
   const [guideKey, setGuideKey] = useState<string | null>(null);
@@ -475,6 +484,40 @@ function App() {
 
   // 发送文件：由用户通过系统文件选择器明确挑选，MirrorDock 不替用户选。
   // 文件内容直接经 adb 传到手机，不经过前端、不入日志。
+  async function previewDiagnostics() {
+    setDiagnosticsBusy(true);
+    setDiagnosticsError(null);
+    setDiagnosticsMessage(null);
+    try {
+      setDiagnostics(await invoke<DiagnosticsPreviewData>("diagnostics_preview"));
+    } catch (error) {
+      setDiagnosticsError(errorMessage(error, "无法生成诊断预览。"));
+    } finally {
+      setDiagnosticsBusy(false);
+    }
+  }
+
+  async function exportDiagnostics() {
+    if (!diagnostics) return;
+    setDiagnosticsBusy(true);
+    setDiagnosticsError(null);
+    setDiagnosticsMessage(null);
+    try {
+      // 系统保存对话框：取消选择不算错误。
+      const path = await saveFilePicker({
+        defaultPath: `MirrorDock-诊断-${localTimestamp(new Date())}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      const receipt = await invoke<DiagnosticsReceipt>("export_diagnostics", { path });
+      setDiagnosticsMessage(`诊断包已保存：${receipt.path}（${receipt.events} 条事件，${formatBytes(receipt.bytes)}）`);
+    } catch (error) {
+      setDiagnosticsError(errorMessage(error, "诊断包导出失败。"));
+    } finally {
+      setDiagnosticsBusy(false);
+    }
+  }
+
   async function sendFileTo(serial: string) {
     setTransferMessage(null);
     setTransferError(null);
@@ -958,6 +1001,34 @@ function App() {
         <strong>为什么需要授权？</strong>
         <p>MirrorDock 通过 Android 的 USB 调试机制获得画面和控制权限。该授权只授予你确认过的电脑，且可以在手机的开发者选项中随时撤销。</p>
       </aside>
+        <section className="capability-panel diagnostics-panel" aria-live="polite">
+          <strong>帮助与诊断</strong>
+          <p className="capability-pending">联系支持时可以导出诊断包：它只包含应用版本、系统类型、镜像引擎是否可用，以及最近的操作结果（已抹去设备序列号、配对码和文件路径）。内容先在这里预览，你确认后才会保存成文件；MirrorDock 不会自动上传任何内容。</p>
+          <span>
+            <button className="secondary-button" type="button" disabled={diagnosticsBusy} onClick={() => void previewDiagnostics()}>
+              {diagnosticsBusy ? "正在处理…" : diagnostics ? "刷新预览" : "预览诊断内容"}
+            </button>
+            <button className="secondary-button" type="button" disabled={diagnosticsBusy || !diagnostics} onClick={() => void exportDiagnostics()}>
+              导出为文件
+            </button>
+          </span>
+          {diagnostics && (
+            <div className="screenshot-result">
+              <p className="capability-summary">{diagnostics.app_version} · {diagnostics.system} · 镜像引擎{diagnostics.scrcpy_available ? "可用" : "不可用"} · {diagnostics.events.length} 条最近事件</p>
+              {diagnostics.events.length > 0 && (
+                <ul className="transfer-file-list">
+                  {diagnostics.events.slice().reverse().map((event) => (
+                    <li key={`${event.timestamp_ms}-${event.kind}-${event.code}`}>
+                      <span className="transfer-file-name">{new Date(event.timestamp_ms).toLocaleString()} · {event.kind} · {event.code} · {event.detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {diagnosticsMessage && <p className="apply-notice" role="status">{diagnosticsMessage}</p>}
+          {diagnosticsError && <p className="capability-pending" role="alert">{diagnosticsError}</p>}
+        </section>
     </main>
   );
 }

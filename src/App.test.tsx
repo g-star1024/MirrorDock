@@ -1,7 +1,7 @@
 // App 层纯函数与初始渲染的测试。
 // 组件测试通过 vi.mock 拦截 Tauri 命令面：这里验证的是前端的**呈现契约**——
 // 七种会话状态不得塌缩成一句"连接失败"、未知能力必须如实显示"未知"。
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
@@ -237,6 +237,42 @@ describe("readOptions", () => {
 });
 
 describe("App rendering", () => {
+  it("diagnostics_panel_previews_before_export_and_never_lists_secrets", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "diagnostics_preview") {
+        return Promise.resolve({
+          generated_at_ms: 1_789_000_000_000,
+          app_version: "0.1.0-test",
+          system: "macos / x86_64",
+          scrcpy_available: true,
+          events: [
+            {
+              timestamp_ms: 1_789_000_000_000,
+              kind: "mirror_start",
+              code: "ok",
+              detail: "成功",
+            },
+          ],
+        });
+      }
+      return baseInvoke(cmd);
+    });
+
+    render(<App />);
+
+    // 面板常驻可见，导出在预览前不可用。
+    const exportButton = await screen.findByRole("button", { name: "导出为文件" });
+    expect(exportButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "预览诊断内容" }));
+    expect(await screen.findByText(/0\.1\.0-test/)).toBeInTheDocument();
+    expect(await screen.findByText(/镜像引擎可用/)).toBeInTheDocument();
+    // 预览出现后导出可用。
+    expect(exportButton).toBeEnabled();
+    // 界面明确告知不会自动上传。
+    expect(screen.getByText(/不会自动上传任何内容/)).toBeInTheDocument();
+  });
+
   it("shows_setup_steps_and_brand_guidance_when_no_device_is_connected", async () => {
     render(<App />);
     await waitFor(() => {

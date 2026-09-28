@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -83,6 +83,7 @@ struct AdbCheck {
 ///   recording_dir_unavailable / recording_in_progress / recording_missing / recording_delete_failed
 ///   transfer_name_invalid / transfer_local_missing / transfer_dir_unavailable
 ///   transfer_push_failed / transfer_pull_failed / transfer_list_failed
+///   diagnostics_write_failed（诊断包导出失败）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AppError {
     code: &'static str,
@@ -2224,9 +2225,9 @@ fn probe_device_capabilities_with(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn check_adb_devices(runtimes: State<AppRuntimes>) -> AdbCheck {
+fn check_adb_devices(runtimes: State<AppRuntimes>, log: State<DiagnosticsLog>) -> AdbCheck {
     let scrcpy_available = runtimes.mirror.is_available();
-    match runtimes.adb.list_devices() {
+    let check = match runtimes.adb.list_devices() {
         Ok(devices) => AdbCheck {
             adb_available: true,
             scrcpy_available,
@@ -2247,7 +2248,142 @@ fn check_adb_devices(runtimes: State<AppRuntimes>) -> AdbCheck {
                 "Android 调试服务暂时不可用。请拔下数据线后重新连接，再试一次。".to_owned(),
             ),
         },
+    };
+    // 诊断事件只记设备状态计数，不记序列号与型号。
+    let mut by_state: BTreeMap<String, usize> = BTreeMap::new();
+    for device in &check.devices {
+        *by_state.entry(format!("{:?}", device.state)).or_insert(0) += 1;
     }
+    let summary: Vec<String> = by_state
+        .iter()
+        .map(|(state, count)| format!("{}×{}", state, count))
+        .collect();
+    let detail = if check.adb_available {
+        if summary.is_empty() {
+            "未发现设备".to_owned()
+        } else {
+            format!("连接设备状态：{}", summary.join("、"))
+        }
+    } else {
+        check.diagnostic.clone().unwrap_or_default()
+    };
+    log.record(
+        "device_check",
+        if check.adb_available { "ok" } else { "adb_missing" },
+        &detail,
+        &[],
+    );
+    check
+}
+
+// -- 产品内诊断包（B2-01）：显式同意、导出前可预览、默认脱敏 --
+
+/// 诊断事件容量上限：只保留最近的事件，避免无限增长。
+const DIAGNOSTICS_CAP: usize = 200;
+
+/// 单条事件详情的长度上限。
+const DIAGNOSTICS_DETAIL_CAP: usize = 400;
+
+/// 一条脱敏后的诊断事件。`detail` 只允许来自用户可见文案或固定字符串；
+/// 序列号、配对码、本地路径等敏感值由调用方声明进 `secrets`，入库前统一擦除。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct DiagnosticsEvent {
+    /// Unix 毫秒时间戳。
+    timestamp_ms: u128,
+    kind: String,
+    code: String,
+    detail: String,
+}
+
+/// 内存中的诊断事件环形日志。默认不落盘——只有用户预览并显式导出时才写成文件。
+#[derive(Default)]
+struct DiagnosticsLog(Mutex<VecDeque<DiagnosticsEvent>>);
+
+impl DiagnosticsLog {
+    fn record(&self, kind: &str, code: &str, detail: &str, secrets: &[&str]) {
+        let mut detail = detail.to_owned();
+        for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+            detail = detail.replace(secret, "[已脱敏]");
+        }
+        if detail.chars().count() > DIAGNOSTICS_DETAIL_CAP {
+            detail = detail.chars().take(DIAGNOSTICS_DETAIL_CAP).collect();
+        }
+        let mut events = match self.0.lock() {
+            Ok(events) => events,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if events.len() >= DIAGNOSTICS_CAP {
+            events.pop_front();
+        }
+        events.push_back(DiagnosticsEvent {
+            timestamp_ms: now_unix_ms(),
+            kind: kind.to_owned(),
+            code: code.to_owned(),
+            detail,
+        });
+    }
+
+    /// 按命令结果记录：成功记 `ok`，失败记录错误码与用户可见文案（不引入新信息源）。
+    fn record_outcome(&self, kind: &str, error: Option<&AppError>, secrets: &[&str]) {
+        match error {
+            None => self.record(kind, "ok", "成功", secrets),
+            Some(error) => self.record(
+                kind,
+                error.code,
+                &format!("{}（修复建议：{}）", error.message, error.recovery),
+                secrets,
+            ),
+        }
+    }
+
+    fn snapshot(&self) -> Vec<DiagnosticsEvent> {
+        let events = match self.0.lock() {
+            Ok(events) => events,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        events.iter().cloned().collect()
+    }
+}
+
+fn now_unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+/// 诊断包预览：用户在导出前看到的全部内容，也就是导出文件的全部内容——不多不少。
+#[derive(Debug, Serialize)]
+struct DiagnosticsPreview {
+    generated_at_ms: u128,
+    app_version: String,
+    system: String,
+    scrcpy_available: bool,
+    events: Vec<DiagnosticsEvent>,
+}
+
+/// 用给定事实组装预览。独立成函数便于测试断言「预览里没有机密字段」。
+fn build_diagnostics_preview(
+    app_version: String,
+    system: String,
+    scrcpy_available: bool,
+    events: Vec<DiagnosticsEvent>,
+) -> DiagnosticsPreview {
+    DiagnosticsPreview {
+        generated_at_ms: now_unix_ms(),
+        app_version,
+        system,
+        scrcpy_available,
+        events,
+    }
+}
+
+/// 导出回执：写了哪个文件、多少条事件、多少字节。
+#[derive(Debug, Serialize)]
+struct DiagnosticsReceipt {
+    path: String,
+    events: usize,
+    bytes: u64,
 }
 
 #[tauri::command]
@@ -2263,6 +2399,7 @@ fn start_mirroring(
     app: AppHandle,
     runtimes: State<AppRuntimes>,
     sessions: State<SessionStore>,
+    log: State<DiagnosticsLog>,
     serial: String,
     options: Option<SessionOptions>,
     record_file_name: Option<String>,
@@ -2270,7 +2407,9 @@ fn start_mirroring(
     let options = options.unwrap_or_default();
     // 先准备录制路径：目录不可写或文件名非法时，在占用会话槽位之前就失败。
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
-    start_mirroring_with(&runtimes, &sessions, serial.clone(), options, record_path)?;
+    let result = start_mirroring_with(&runtimes, &sessions, serial.clone(), options, record_path);
+    log.record_outcome("mirror_start", result.as_ref().err(), &[&serial]);
+    result?;
 
     // 只有成功启动才记入最近设备；读取人类可读的名称失败时退回序列号。
     let serial = serial.trim().to_owned();
@@ -2497,8 +2636,10 @@ fn apply_session_options_with(
 }
 
 #[tauri::command]
-fn stop_mirroring(sessions: State<SessionStore>) -> Result<(), AppError> {
-    stop_mirroring_with(&sessions)
+fn stop_mirroring(sessions: State<SessionStore>, log: State<DiagnosticsLog>) -> Result<(), AppError> {
+    let result = stop_mirroring_with(&sessions);
+    log.record_outcome("mirror_stop", result.as_ref().err(), &[]);
+    result
 }
 
 fn stop_mirroring_with(store: &SessionStore) -> Result<(), AppError> {
@@ -2534,12 +2675,15 @@ fn update_session_options(
     app: AppHandle,
     runtimes: State<AppRuntimes>,
     sessions: State<SessionStore>,
+    log: State<DiagnosticsLog>,
     options: SessionOptions,
     record_file_name: Option<String>,
 ) -> Result<SessionUpdate, AppError> {
     // 同样是「先校验、再触碰运行中的会话」：路径不可用时不打断正在进行的镜像。
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
-    apply_session_options_with(&runtimes, &sessions, options, record_path)
+    let result = apply_session_options_with(&runtimes, &sessions, options, record_path);
+    log.record_outcome("session_update", result.as_ref().err(), &[]);
+    result
 }
 
 /// 读取最近一次会话的录制信息（若有）。`active` 表示此刻进程是否仍在写这个文件。
@@ -2563,19 +2707,25 @@ fn delete_recording(
 #[tauri::command]
 fn pair_wireless_device(
     runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
     endpoint: String,
     pairing_code: String,
 ) -> Result<(), AppError> {
-    let endpoint = validate_endpoint(&endpoint)?;
-    let pairing_code = validate_pairing_code(&pairing_code)?;
-    runtimes.adb.pair(&endpoint, &pairing_code).map_err(|error| {
-        adb_command_error(
-            error,
-            "pairing_failed",
-            "配对未完成。",
-            "请确认手机与电脑在同一 Wi-Fi，且配对地址、端口和 6 位配对码仍在有效期内。",
-        )
-    })
+    let result = (|| {
+        let endpoint = validate_endpoint(&endpoint)?;
+        let pairing_code = validate_pairing_code(&pairing_code)?;
+        runtimes.adb.pair(&endpoint, &pairing_code).map_err(|error| {
+            adb_command_error(
+                error,
+                "pairing_failed",
+                "配对未完成。",
+                "请确认手机与电脑在同一 Wi-Fi，且配对地址、端口和 6 位配对码仍在有效期内。",
+            )
+        })
+    })();
+    // 配对码与端点都不进诊断日志；详情只来自用户可见文案。
+    log.record_outcome("wireless_pair", result.as_ref().err(), &[&pairing_code, &endpoint]);
+    result
 }
 
 #[tauri::command]
@@ -2583,44 +2733,50 @@ fn connect_wireless_device(
     app: AppHandle,
     runtimes: State<AppRuntimes>,
     sessions: State<SessionStore>,
+    log: State<DiagnosticsLog>,
     endpoint: String,
 ) -> Result<(), AppError> {
-    let endpoint = validate_endpoint(&endpoint)?;
-    runtimes.adb.connect(&endpoint).map_err(|error| {
-        adb_command_error(
-            error,
-            "connect_failed",
-            "无法连接手机。",
-            "请确认手机无线调试仍开启、电脑和手机在同一 Wi-Fi，然后重试。",
-        )
-    })?;
+    let result = (|| {
+        let endpoint = validate_endpoint(&endpoint)?;
+        runtimes.adb.connect(&endpoint).map_err(|error| {
+            adb_command_error(
+                error,
+                "connect_failed",
+                "无法连接手机。",
+                "请确认手机无线调试仍开启、电脑和手机在同一 Wi-Fi，然后重试。",
+            )
+        })?;
 
-    let devices = runtimes.adb.list_devices().map_err(|error| {
-        adb_command_error(
-            error,
-            "adb_unavailable",
-            "无法确认手机的连接状态。",
-            "请重新检查连接后再试。",
-        )
-    })?;
-    if !endpoint_is_ready(&devices, &endpoint) {
-        return Err(AppError::new(
-            "connect_not_ready",
-            "尚未确认已授权连接。",
-            "请使用无线调试主页面的连接端口，保持同一 Wi-Fi 后重试。",
-        ));
-    }
+        let devices = runtimes.adb.list_devices().map_err(|error| {
+            adb_command_error(
+                error,
+                "adb_unavailable",
+                "无法确认手机的连接状态。",
+                "请重新检查连接后再试。",
+            )
+        })?;
+        if !endpoint_is_ready(&devices, &endpoint) {
+            return Err(AppError::new(
+                "connect_not_ready",
+                "尚未确认已授权连接。",
+                "请使用无线调试主页面的连接端口，保持同一 Wi-Fi 后重试。",
+            ));
+        }
 
-    let path = trusted_devices_path(&app)?;
-    let mut trusted = load_trusted_devices(&path)?;
-    if !trusted.iter().any(|device| device.endpoint == endpoint) {
-        trusted.push(TrustedWirelessDevice {
-            endpoint: endpoint.clone(),
-        });
-        save_trusted_devices(&path, &trusted)?;
-    }
-    mark_paired_if_idle(&sessions, endpoint);
-    Ok(())
+        let path = trusted_devices_path(&app)?;
+        let mut trusted = load_trusted_devices(&path)?;
+        if !trusted.iter().any(|device| device.endpoint == endpoint) {
+            trusted.push(TrustedWirelessDevice {
+                endpoint: endpoint.clone(),
+            });
+            save_trusted_devices(&path, &trusted)?;
+        }
+        mark_paired_if_idle(&sessions, endpoint);
+        Ok(())
+    })();
+    // 端点（局域网地址）不进诊断日志。
+    log.record_outcome("wireless_connect", result.as_ref().err(), &[&endpoint]);
+    result
 }
 
 #[tauri::command]
@@ -2697,11 +2853,15 @@ fn forget_recent_device(app: AppHandle, serial: String) -> Result<Vec<RecentDevi
 fn capture_screenshot(
     app: AppHandle,
     runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
     serial: String,
     file_name: String,
 ) -> Result<Screenshot, AppError> {
     let directory = screenshot_dir(&app)?;
-    capture_screenshot_into(&runtimes, &directory, serial, file_name)
+    let result = capture_screenshot_into(&runtimes, &directory, serial.clone(), file_name.clone());
+    // 文件名与序列号都不入日志；失败详情只来自用户可见文案。
+    log.record_outcome("screenshot", result.as_ref().err(), &[&serial, &file_name]);
+    result
 }
 
 /// 删除一张由本应用保存的截图，对应界面上的「撤销」。
@@ -2727,10 +2887,14 @@ fn transfer_download_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
 #[tauri::command]
 fn send_file_to_device(
     runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
     serial: String,
     local_path: String,
 ) -> Result<TransferReceipt, AppError> {
-    send_file_to_device_with(&runtimes, serial, local_path)
+    let result = send_file_to_device_with(&runtimes, serial.clone(), local_path.clone());
+    // 本地路径可能包含用户名等隐私，一并作为机密擦除。
+    log.record_outcome("file_send", result.as_ref().err(), &[&serial, &local_path]);
+    result
 }
 
 /// 列出手机传输目录里的文件名，供用户挑选要取回的文件。
@@ -2747,11 +2911,75 @@ fn list_device_files(
 fn fetch_file_from_device(
     app: AppHandle,
     runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
     serial: String,
     file_name: String,
 ) -> Result<TransferReceipt, AppError> {
     let directory = transfer_download_dir(&app)?;
-    fetch_file_from_device_into(&runtimes, &directory, serial, file_name)
+    let result = fetch_file_from_device_into(&runtimes, &directory, serial.clone(), file_name.clone());
+    log.record_outcome("file_fetch", result.as_ref().err(), &[&serial, &file_name]);
+    result
+}
+
+/// 组装诊断预览。adb 的可用性不单独作为字段——它已经体现在 device_check 事件里。
+fn diagnostics_preview_with(
+    app: &AppHandle,
+    runtimes: &AppRuntimes,
+    log: &DiagnosticsLog,
+) -> DiagnosticsPreview {
+    build_diagnostics_preview(
+        app.package_info().version.to_string(),
+        format!("{} / {}", std::env::consts::OS, std::env::consts::ARCH),
+        runtimes.mirror.is_available(),
+        log.snapshot(),
+    )
+}
+
+/// 诊断包预览：用户先看到将要导出的全部内容，再决定是否导出。
+#[tauri::command]
+fn diagnostics_preview(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+) -> DiagnosticsPreview {
+    diagnostics_preview_with(&app, &runtimes, &log)
+}
+
+/// 把预览内容原样写成 JSON 文件。路径来自系统保存对话框，不猜测、不改写。
+#[tauri::command]
+fn export_diagnostics(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    path: String,
+) -> Result<DiagnosticsReceipt, AppError> {
+    let preview = diagnostics_preview_with(&app, &runtimes, &log);
+    export_diagnostics_into(&path, &preview)
+}
+
+fn export_diagnostics_into(
+    path: &str,
+    preview: &DiagnosticsPreview,
+) -> Result<DiagnosticsReceipt, AppError> {
+    let json = serde_json::to_vec_pretty(preview).map_err(|_| {
+        AppError::new(
+            "diagnostics_write_failed",
+            "诊断包序列化失败。",
+            "请重试一次；若仍失败请联系支持人员。",
+        )
+    })?;
+    fs::write(path, &json).map_err(|_| {
+        AppError::new(
+            "diagnostics_write_failed",
+            "诊断包写入失败。",
+            "请换一个保存位置（例如桌面或下载文件夹）再试。",
+        )
+    })?;
+    Ok(DiagnosticsReceipt {
+        path: path.to_owned(),
+        events: preview.events.len(),
+        bytes: json.len() as u64,
+    })
 }
 
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。优雅结束让录制文件有机会收尾。
@@ -2768,6 +2996,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(SessionStore::default())
         .manage(AppRuntimes::system())
+        .manage(DiagnosticsLog::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -2791,7 +3020,9 @@ pub fn run() {
             pair_wireless_device,
             connect_wireless_device,
             list_trusted_wireless_devices,
-            forget_trusted_wireless_device
+            forget_trusted_wireless_device,
+            diagnostics_preview,
+            export_diagnostics
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -5197,5 +5428,111 @@ mod tests {
             ended.serial, None,
             "停止后不得残留上一个设备的序列号"
         );
+    }
+
+    // -- 诊断包：显式同意、可预览、默认脱敏 --
+
+    fn diagnostic_log_with_sample() -> DiagnosticsLog {
+        let log = DiagnosticsLog::default();
+        log.record(
+            "mirror_start",
+            "device_unauthorized",
+            "手机未授权这台电脑调试（序列号 79j7kn9tkjt8rwss，端点 192.168.1.8:39085）。请在手机上允许 USB 调试。",
+            &["79j7kn9tkjt8rwss", "192.168.1.8:39085"],
+        );
+        log
+    }
+
+    #[test]
+    fn recorded_events_never_contain_declared_secrets() {
+        let log = diagnostic_log_with_sample();
+        let events = log.snapshot();
+
+        assert_eq!(events.len(), 1);
+        let detail = &events[0].detail;
+        assert!(
+            !detail.contains("79j7kn9tkjt8rwss") && !detail.contains("192.168.1.8:39085"),
+            "声明的机密必须被擦除：{detail}"
+        );
+        assert!(
+            detail.contains("[已脱敏]"),
+            "擦除位置要有可见占位，便于确认脱敏发生了"
+        );
+        // 用户可见文案本身保留——没有它支持人员无法定位问题。
+        assert!(detail.contains("允许 USB 调试"));
+    }
+
+    #[test]
+    fn diagnostic_events_are_capped_and_keep_the_newest() {
+        let log = DiagnosticsLog::default();
+        for index in 0..(DIAGNOSTICS_CAP + 5) {
+            log.record("probe", "ok", &format!("事件 {index}"), &[]);
+        }
+
+        let events = log.snapshot();
+        assert_eq!(events.len(), DIAGNOSTICS_CAP);
+        assert_eq!(events.last().unwrap().detail, "事件 204");
+        assert_eq!(events.first().unwrap().detail, "事件 5");
+    }
+
+    #[test]
+    fn outcome_recording_uses_the_user_facing_error_only() {
+        let log = DiagnosticsLog::default();
+        let error = AppError::new(
+            "mirror_start_failed",
+            "无法启动镜像窗口。",
+            "请重新检查连接后再试。",
+        );
+        log.record_outcome("mirror_start", Some(&error), &[]);
+        log.record_outcome("mirror_stop", None, &[]);
+
+        let events = log.snapshot();
+        assert_eq!(events[0].code, "mirror_start_failed");
+        assert!(events[0].detail.contains("无法启动镜像窗口"));
+        assert_eq!(events[1].code, "ok");
+    }
+
+    #[test]
+    fn preview_contains_only_environment_facts_and_redacted_events() {
+        let log = diagnostic_log_with_sample();
+        let preview = build_diagnostics_preview(
+            "0.1.0".to_owned(),
+            "macos / x86_64".to_owned(),
+            true,
+            log.snapshot(),
+        );
+
+        assert_eq!(preview.app_version, "0.1.0");
+        assert!(preview.scrcpy_available);
+        assert_eq!(preview.events.len(), 1);
+        let serialized = serde_json::to_string(&preview).unwrap();
+        assert!(
+            !serialized.contains("79j7kn9tkjt8rwss"),
+            "序列化后的预览也不得包含机密"
+        );
+    }
+
+    #[test]
+    fn an_exported_diagnostics_file_is_json_and_matches_the_receipt() {
+        let directory = scratch_dir("diagnostics-export");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("diag.json");
+        let log = diagnostic_log_with_sample();
+        let preview = build_diagnostics_preview(
+            "0.1.0-test".to_owned(),
+            "macos / x86_64".to_owned(),
+            false,
+            log.snapshot(),
+        );
+
+        let receipt = export_diagnostics_into(path.to_str().unwrap(), &preview).unwrap();
+        assert_eq!(receipt.events, 1);
+
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("\"app_version\": \"0.1.0-test\""));
+        assert!(written.contains("[已脱敏]"));
+        assert_eq!(receipt.bytes, written.len() as u64);
+
+        let _ = fs::remove_dir_all(&directory);
     }
 }
