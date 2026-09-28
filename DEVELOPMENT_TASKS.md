@@ -143,6 +143,11 @@
 - [ ] X6-02 精简客户端文案。**已完成。**连接/工具/无线/设置/帮助全页去保姆式长段说明，关键隐私与安全结论保留短句版。
 - [ ] X6-03 全局快捷键自定义。**代码完成。**设置页新增「全局快捷键」：截图/录制/轮换方向三组合可改，校验「修饰键+普通键」，localStorage 持久化，会话中改组合即时重注册。前端 31→34。
 - [ ] X6-04 Pro 激活码签发验收。**已签发（key-id 2026-001，永久）**，交付用户做 GUI 激活验收；私钥仍只在仓库外内部目录。
+- [x] X6-05 伴侣 App 扫码闪退根因修复。**已修复并真机验证。**
+  - **根因（真机 logcat 定案）**：`ActivityNotFoundException: ScanActivity 未在 AndroidManifest.xml 声明`——X5-04 重写扫码页时漏了清单注册，点击「扫码配对」即闪退。与权限、CameraX、zxing 均无关。
+  - 修复：清单补声明（exported=false + 竖屏）；版本 0.1.2-poc（versionCode 3）。
+  - **真机验证**（Redmi M2104K10AC USB）：`pm grant CAMERA` → am start 主页 → uiautomator 定位「扫码配对」按钮 → input tap → `topResumedActivity=.ScanActivity`，crash 缓冲区 0 条。
+  - 教训：**新 Activity 必须同步进清单**；此前无 logcat 的「加固」方向（权限流程/崩溃取证）没有命中真因——有真机时第一动作是拉 `logcat -b crash`。
 
 ## 最终成品退出条件
 

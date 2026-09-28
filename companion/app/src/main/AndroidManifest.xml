@@ -25,6 +25,12 @@
             </intent-filter>
         </activity>
 
+        <!-- 扫码页：仅应用内部启动；缺失声明会导致 ActivityNotFoundException 闪退。 -->
+        <activity
+            android:name=".ScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <service
             android:name=".CaptureService"
             android:exported="false"
