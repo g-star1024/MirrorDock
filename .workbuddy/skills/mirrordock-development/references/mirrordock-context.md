@@ -19,6 +19,15 @@
 | `scripts/measure-session.sh` | 真机会话测量脚本，输出到被忽略的 `test-runs/` |
 | `.tools/scrcpy/<platform>/` | 开发期 scrcpy 运行时（**被 Git 忽略**，不随发行物分发） |
 
+### 版本控制与远端
+
+- 远端：`git@github.com:g-star1024/MirrorDock.git`（SSH），**公开**仓库，默认/工作分支 `main`。
+- 推送走 SSH（无需 token）；**建库必须走 HTTP API**，SSH 不能创建仓库。
+- 本机 keychain 凭据 scope 仅 `public_repo, read:user` → **只能创建公开仓库**；建私有库需额外授权。
+- 已忽略目录：`src-tauri/target/`、`node_modules/`、`dist/`、`.tools/`、`test-runs/`、`.workbuddy/memory/`。`.workbuddy/skills/` **入库**，团队共享。
+- **尚无 LICENSE 文件**（公开仓库默认"保留所有权利"），待用户决策。
+- 推送后**独立**校验 `git rev-parse HEAD` 与 `origin/main` 是否一致，不要依赖 `&&` 链式命令的返回值。
+
 ## 2. Tauri 命令面（`src-tauri/src/lib.rs`）
 
 | 命令 | 说明 |
