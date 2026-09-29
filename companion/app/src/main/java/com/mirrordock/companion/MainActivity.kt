@@ -29,6 +29,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var logText: TextView
     private lateinit var manualInput: EditText
+    private lateinit var crashCard: View
+    private lateinit var crashDetail: TextView
+    private lateinit var logScroller: View
+    private lateinit var logToggle: Button
 
     private val logLines = StringBuilder()
     private var client: PairingClient? = null
@@ -40,6 +44,10 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.status_text)
         logText = findViewById(R.id.log_text)
         manualInput = findViewById(R.id.manual_input)
+        crashCard = findViewById(R.id.crash_card)
+        crashDetail = findViewById(R.id.crash_detail)
+        logScroller = findViewById(R.id.log_scroller)
+        logToggle = findViewById(R.id.button_log_toggle)
 
         findViewById<Button>(R.id.button_scan).setOnClickListener {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -60,12 +68,30 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
 
-        log("伴侣 App 已启动。")
-        // 崩溃取证：如果上一次会话闪退，把堆栈原样回显，方便拍照反馈。
-        CrashGuard.lastCrash(applicationContext)?.let { last ->
-            log("⚠️ 上一次运行发生崩溃，堆栈如下（可拍照发给支持）：")
-            log(last)
+        // 运行日志默认收起：正常使用时不需要看；点「查看」展开、再点「收起」。
+        logToggle.setOnClickListener {
+            val expanded = logScroller.visibility == View.VISIBLE
+            logScroller.visibility = if (expanded) View.GONE else View.VISIBLE
+            logToggle.setText(if (expanded) R.string.action_show else R.string.action_hide)
         }
+
+        // 崩溃取证：上次会话崩溃时显示一条可收敛的红卡——默认只显示标题，
+        // 详情按需展开；点「清除」删掉落盘堆栈后立即消失，不影响后续正常使用。
+        CrashGuard.lastCrash(applicationContext)?.let { last ->
+            crashCard.visibility = View.VISIBLE
+            crashDetail.text = last
+            findViewById<Button>(R.id.button_crash_view).setOnClickListener {
+                crashDetail.visibility =
+                    if (crashDetail.visibility == View.GONE) View.VISIBLE else View.GONE
+            }
+            findViewById<Button>(R.id.button_crash_clear).setOnClickListener {
+                CrashGuard.clear(applicationContext)
+                crashCard.visibility = View.GONE
+                log("已清除上次的崩溃记录。")
+            }
+            log("检测到上次运行崩溃，详情见上方红色卡片。")
+        }
+        log("伴侣 App 已启动。")
     }
 
     override fun onRequestPermissionsResult(
@@ -199,6 +225,12 @@ object CrashGuard {
     fun lastCrash(context: android.content.Context): String? {
         val file = java.io.File(context.getExternalFilesDir(null) ?: context.filesDir, MainActivity.CRASH_FILE)
         return runCatching { file.takeIf { it.exists() }?.readText() }.getOrNull()
+    }
+
+    /** 用户确认过崩溃信息后的清除入口；删文件而非写标记，避免下次启动再次出现。 */
+    fun clear(context: android.content.Context) {
+        val file = java.io.File(context.getExternalFilesDir(null) ?: context.filesDir, MainActivity.CRASH_FILE)
+        runCatching { file.delete() }
     }
 
     private fun save(context: android.content.Context, throwable: Throwable) {

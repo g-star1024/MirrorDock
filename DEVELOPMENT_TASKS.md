@@ -149,6 +149,20 @@
   - **真机验证**（Redmi M2104K10AC USB）：`pm grant CAMERA` → am start 主页 → uiautomator 定位「扫码配对」按钮 → input tap → `topResumedActivity=.ScanActivity`，crash 缓冲区 0 条。
   - 教训：**新 Activity 必须同步进清单**；此前无 logcat 的「加固」方向（权限流程/崩溃取证）没有命中真因——有真机时第一动作是拉 `logcat -b crash`。
 
+## X7 Beta 发布轮（2026-09-29 上午）
+
+- [x] X7-01 伴侣 App 重设计。**已完成并真机验证。**
+  - 与桌面客户端同一视觉：蓝色头部（#2563EB）+ 浅灰底 + 白卡片 + 圆角按钮；扫码页加同款标题条。
+  - 崩溃取证收敛：红卡只在确实有崩溃时出现，默认只显示标题、详情按需展开，「清除」删盘后立即消失（真机验证：清除后卡片收敛）。运行日志默认收起为一行，点「查看」展开。
+  - 图标：桌面客户端 icon.png（512px）经 sips 生成 mdpi→xxxhdpi 五档 mipmap，替换旧矢量图标；CaptureService 通知图标同步改 @mipmap。
+- [x] X7-02 激活码运营手册。**已完成**（docs/license-operations.md）：key-id 规范、签发命令、交付流程、续费换码；诚实边界= v1 无远程吊销，泄露兜底靠换钥+有效期。
+- [x] X7-03 Beta 全量内置激活码。**已完成**（Rust 108→109）。
+  - `BETA_LICENSE_KEY`（key-id `beta`，永久）编译进二进制；`entitlement_status` 发现未激活时静默激活；用户显式撤销后写 `beta_opt_out` 标记不再自动激活。
+  - 新增守卫测试：内置码必须能被内置公钥验签（防止换钥/换码不同步）。
+- [x] X7-04 版本 0.2.0 + tag 发布首个 GitHub Release。
+  - tauri.conf.json / Cargo.toml / package.json 统一 0.2.0；tag `v0.2.0-beta`。
+  - build.yml 新增 companion-apk（tag 触发出 APK）与 release 任务（softprops/action-gh-release@v2，汇总桌面安装包 + SHA256SUMS + SBOM + APK，prerelease）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

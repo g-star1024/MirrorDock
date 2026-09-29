@@ -2,56 +2,203 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="20dp">
+    android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/status_text"
+    <!-- 头部：与桌面客户端一致的蓝色品牌区。状态一行跟随其下。 -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="16sp"
-        android:text="未连接。点击「扫码配对」开始。" />
+        android:orientation="vertical"
+        android:background="@color/brand_blue"
+        android:paddingLeft="20dp"
+        android:paddingRight="20dp"
+        android:paddingTop="24dp"
+        android:paddingBottom="20dp">
 
-    <Button
-        android:id="@+id/button_scan"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="扫码配对" />
+        <TextView
+            android:id="@+id/app_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
 
-    <Button
-        android:id="@+id/button_manual"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="手动输入配对信息" />
-
-    <EditText
-        android:id="@+id/manual_input"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:visibility="gone"
-        android:hint="MDP1|主机|端口|配对码|指纹"
-        android:inputType="text"
-        android:autofillHints="none" />
-
-    <Button
-        android:id="@+id/button_capture"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="开始屏幕捕获（实验）" />
+        <TextView
+            android:id="@+id/status_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/header_text_secondary"
+            android:textSize="13sp"
+            android:text="@string/status_idle" />
+    </LinearLayout>
 
     <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:layout_marginTop="12dp">
+        android:layout_height="match_parent"
+        android:fillViewport="true">
 
-        <TextView
-            android:id="@+id/log_text"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:textIsSelectable="true" />
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- 主操作：扫码配对。 -->
+            <Button
+                android:id="@+id/button_scan"
+                style="@style/PrimaryButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="@string/action_scan" />
+
+            <!-- 次要操作并排。 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="10dp">
+
+                <Button
+                    android:id="@+id/button_manual"
+                    style="@style/SecondaryButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:layout_marginRight="5dp"
+                    android:text="@string/action_manual" />
+
+                <Button
+                    android:id="@+id/button_capture"
+                    style="@style/SecondaryButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:layout_marginLeft="5dp"
+                    android:text="@string/action_capture" />
+            </LinearLayout>
+
+            <!-- 手动输入（默认隐藏）。 -->
+            <EditText
+                android:id="@+id/manual_input"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:visibility="gone"
+                android:background="@drawable/bg_input"
+                android:padding="12dp"
+                android:textSize="13sp"
+                android:hint="@string/manual_hint"
+                android:inputType="text"
+                android:autofillHints="none" />
+
+            <!-- 崩溃取证卡：只在确实发生过崩溃时出现，可查看详情、可清除。 -->
+            <LinearLayout
+                android:id="@+id/crash_card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="vertical"
+                android:background="@drawable/bg_danger_card"
+                android:padding="14dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/crash_title"
+                    android:textColor="@color/danger_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/crash_detail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:visibility="gone"
+                    android:background="@drawable/bg_input"
+                    android:padding="10dp"
+                    android:textSize="11sp"
+                    android:textColor="@color/danger_text"
+                    android:fontFamily="monospace"
+                    android:textIsSelectable="true" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp">
+
+                    <Button
+                        android:id="@+id/button_crash_view"
+                        style="@style/SecondaryButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="38dp"
+                        android:text="@string/action_view_detail" />
+
+                    <Button
+                        android:id="@+id/button_crash_clear"
+                        style="@style/SecondaryButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="38dp"
+                        android:layout_marginLeft="8dp"
+                        android:text="@string/action_clear" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- 运行日志卡：默认收起；点「查看」展开，随时可收起。 -->
+            <LinearLayout
+                android:id="@+id/log_card"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:id="@+id/log_title"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/log_title"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/button_log_toggle"
+                        style="@style/SecondaryButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/action_show" />
+                </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/log_scroller"
+                    android:layout_width="match_parent"
+                    android:layout_height="220dp"
+                    android:layout_marginTop="8dp"
+                    android:visibility="gone"
+                    android:background="@drawable/bg_input">
+
+                    <TextView
+                        android:id="@+id/log_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:padding="10dp"
+                        android:textSize="12sp"
+                        android:textColor="@color/text_primary"
+                        android:fontFamily="monospace"
+                        android:textIsSelectable="true" />
+                </ScrollView>
+            </LinearLayout>
+        </LinearLayout>
     </ScrollView>
 </LinearLayout>

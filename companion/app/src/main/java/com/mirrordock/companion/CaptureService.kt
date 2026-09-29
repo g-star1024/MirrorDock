@@ -112,14 +112,14 @@ class CaptureService : Service() {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("MirrorDock 伴侣")
                 .setContentText("正在与电脑共享屏幕内容")
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .build()
         } else {
             Notification.Builder(this)
                 .setContentTitle("MirrorDock 伴侣")
                 .setContentText("正在与电脑共享屏幕内容")
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .build()
         }
         if (Build.VERSION.SDK_INT >= 29) {

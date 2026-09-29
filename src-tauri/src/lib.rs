@@ -3318,6 +3318,13 @@ const LICENSE_VERIFYING_KEY: [u8; 32] = [
     0x4e, 0x99, 0x86, 0x23, 0x4a, 0x8e, 0x81, 0x6e, 0x17, 0x6a, 0xdc, 0x0b, 0xcd, 0xa2, 0x73, 0x17,
 ];
 
+/// Beta 阶段全量内置的测试许可证（key-id `beta`，永久、Pro 权益）。
+/// 存在意义：测试期所有安装默认解锁完整功能，用户无需手动激活。
+/// 生命周期：Beta 结束的正式版必须移除本常量；届时已激活的 beta 许可证
+/// 因「永久」仍然有效——如需回收，正式版改用带 expires_at 的正式许可证
+/// 并通过更新提示用户换发（v1 无远程吊销，见 docs/license-operations.md）。
+const BETA_LICENSE_KEY: &str = "MD1-AA4HWI-TQOJXW-I5LDOQ-RDUITN-NFZHE3-3SMRXW-G2ZCFQ-RGWZLZ-L5UWII-R2EJRG-K5DBEI-WCEZLE-NF2GS3-3OEI5C-E4DSN4-RH35EQ-Q775OH-EYH43H-A7A22Q-GJPIRS-S3BFU4-UJ5GAA-VP3VLI-KWFEIZ-JGOGA7-FP4HXZ-OF4WWP-MS5PB4-PJIMMR-FHPCRW-UEJ5CH-4GAL3G-ZIFA";
+
 pub mod licensing {
     use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
     use serde::{Deserialize, Serialize};
@@ -3614,12 +3621,29 @@ fn stored_license_payload(dir: &std::path::Path) -> Result<Option<licensing::Lic
 fn entitlement_status(app: AppHandle) -> Result<EntitlementView, AppError> {
     let dir = entitlement_dir(&app)?;
     let edition = licensing::current_edition(&dir, unix_now());
+    if edition != Edition::Pro && !beta_opt_out(&dir) {
+        // Beta 阶段全量内置测试许可证：未激活时静默激活，让所有用户体验完整功能。
+        // 激活失败（不可能发生：内置码与公钥同源编译）按原样返回免费版，不阻断。
+        if let Ok(view) = entitlement_activate_impl(&app, BETA_LICENSE_KEY) {
+            return Ok(view);
+        }
+    }
     let payload = if edition == Edition::Pro {
         stored_license_payload(&dir)?
     } else {
         None
     };
     Ok(entitlement_view(edition, payload.as_ref()))
+}
+
+/// 用户在 Beta 期间显式撤销授权后，不再自动激活内置测试码（尊重用户选择）。
+/// 标记文件只在本机应用数据目录，重装后随目录一起清除。
+fn beta_opt_out_file(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("beta_opt_out")
+}
+
+fn beta_opt_out(dir: &std::path::Path) -> bool {
+    beta_opt_out_file(dir).exists()
 }
 
 #[tauri::command]
@@ -3683,6 +3707,8 @@ fn entitlement_deactivate(app: AppHandle) -> Result<EntitlementView, AppError> {
             "请检查应用数据目录权限后重试。",
         )
     })?;
+    // 撤销即视为用户主动退出 Beta 全量解锁：不再自动激活内置测试码。
+    let _ = std::fs::write(beta_opt_out_file(&dir), b"");
     Ok(entitlement_view(Edition::Free, None))
 }
 
@@ -6466,6 +6492,19 @@ mod tests {
         // 大小写与空格/分隔符容错。
         let spaced = license.to_lowercase().replace('-', " ");
         assert!(licensing::verify_license(&spaced, &test_verifying_key(), now).is_ok());
+    }
+
+    /// Beta 全量内置测试码必须能通过编译进二进制的公钥验签：
+    /// 防止将来换钥或换码时只改其一导致所有安装静默失去解锁。
+    #[test]
+    fn embedded_beta_license_verifies_with_embedded_key() {
+        let verifying = ed25519_dalek::VerifyingKey::from_bytes(&LICENSE_VERIFYING_KEY).unwrap();
+        let payload = licensing::verify_license(BETA_LICENSE_KEY, &verifying, unix_now())
+            .expect("内置 Beta 许可证必须有效");
+        assert_eq!(payload.key_id, "beta");
+        assert_eq!(payload.edition, "pro");
+        assert_eq!(payload.product, "mirrordock");
+        assert_eq!(payload.expires_at, None);
     }
 
     #[test]

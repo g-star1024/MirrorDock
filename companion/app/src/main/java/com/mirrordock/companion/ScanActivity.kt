@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -64,15 +65,23 @@ class ScanActivity : AppCompatActivity() {
             setTextAppearance(android.R.style.TextAppearance_Medium)
             visibility = View.GONE
         }
-        val root = FrameLayout(this)
-        root.addView(
+        // 与主界面一致的蓝色标题条 + 相机预览。
+        val titleBar = TextView(this).apply {
+            text = getString(R.string.scan_hint)
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 15f
+            setPadding(48, 40, 48, 40)
+            setBackgroundColor(ContextCompat.getColor(context, R.color.brand_blue))
+        }
+        val cameraArea = FrameLayout(this)
+        cameraArea.addView(
             previewView,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
-        root.addView(
+        cameraArea.addView(
             hintText,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -80,8 +89,24 @@ class ScanActivity : AppCompatActivity() {
                 Gravity.CENTER,
             ),
         )
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(ContextCompat.getColor(context, R.color.screen_bg))
+        }
+        root.addView(
+            titleBar,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        root.addView(
+            cameraArea,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f,
+            ),
+        )
         setContentView(root)
-        supportActionBar?.title = getString(R.string.scan_hint)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED

@@ -197,3 +197,65 @@ jobs:
           path: |
             SHA256SUMS-*.txt
             sbom-*.json
+
+  # 发版（tag v* 或手动触发）时把伴侣 App APK 一并产出，供 Release 附件。
+  companion-apk:
+    name: 伴侣 App APK
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 构建 debug APK
+        working-directory: companion
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          gradle :app:assembleDebug --no-daemon
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MirrorDock-companion-apk
+          if-no-files-found: error
+          path: companion/app/build/outputs/apk/debug/app-debug.apk
+
+  # 打 tag 即发布：汇总全部产物（桌面安装包 + 哈希/SBOM + 伴侣 APK）创建 GitHub Release。
+  release:
+    name: 发布 GitHub Release
+    needs: [package, companion-apk]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 汇总产物
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          merge-multiple: true
+      - name: 列出待发布文件
+        run: ls -la release-files
+      - name: 创建 Release 并上传产物
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MirrorDock ${{ github.ref_name }}
+          prerelease: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-files/**/*.dmg
+            release-files/**/*.app.tar.gz
+            release-files/**/*.msi
+            release-files/**/*.exe
+            release-files/**/*.deb
+            release-files/**/*.rpm
+            release-files/**/*.AppImage
+            release-files/**/app-debug.apk
+            release-files/**/SHA256SUMS-*.txt
+            release-files/**/sbom-*.json

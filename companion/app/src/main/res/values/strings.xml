@@ -2,4 +2,15 @@
 <resources>
     <string name="app_name">MirrorDock 伴侣</string>
     <string name="scan_hint">将相机对准电脑上的配对二维码</string>
+    <string name="status_idle">未连接。点击「扫码配对」开始。</string>
+    <string name="action_scan">扫码配对</string>
+    <string name="action_manual">手动输入</string>
+    <string name="action_capture">屏幕捕获</string>
+    <string name="manual_hint">MDP1|主机|端口|配对码|指纹</string>
+    <string name="crash_title">上次运行异常退出</string>
+    <string name="action_view_detail">查看详情</string>
+    <string name="action_clear">清除</string>
+    <string name="log_title">运行日志</string>
+    <string name="action_show">查看</string>
+    <string name="action_hide">收起</string>
 </resources>
