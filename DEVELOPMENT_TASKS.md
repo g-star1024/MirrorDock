@@ -278,6 +278,14 @@
   - 侧栏底部徽标顺序：「专业版」放到「仅在本机连接」前边。
   - 验证：vitest 40、tsc、pnpm build 通过。
 
+- [x] X10-09 无线会话亮屏补偿：锁屏页来不及输密码（用户真机反馈）。
+  - 问题：无线连接下 scrcpy `--stay-awake` 无效（依赖 stay_on_while_plugged_in，仅 USB 生效），会话中设备仍按超时熄屏——锁屏页亮起后用户还没输完 PIN 屏幕就黑了；且每次点亮都要重新面对锁屏超时。
+  - 方案（不绕锁屏，只留输入时间）：会话启动后若 `keep_awake` 且序列号为无线（ip:port / mDNS 派生，`is_wireless_serial`），读系统 `screen_off_timeout` 原值备份到会话状态，写入延长值（12h，与 stay-awake「会话期间常亮」语义一致）；结束（主动停止 / 进程退出监视线程 / 应用退出）时还原原值。
+  - 幂等与安全：重启会话只重复写延长值，绝不把延长值再当原值备份；读不到原值（`null`/离线）就不写；还原失败（设备离线）时备份保留在内存与磁盘（`screen-timeout-backup.json`），下次启动 `restore_persisted_screen_timeout` 重试——应用崩溃也不会留下被延长却无人还原的熄屏时间。
+  - 实现：AdbRuntime 新增 `screen_off_timeout`/`set_screen_off_timeout`（固定参数直调 `settings get/put system screen_off_timeout`）；`SessionState.screen_timeout_backup`；`MONITOR_ADB` OnceLock 供监视线程还原（沿用 TRAY_APP 测试跳过模式）；接线点：launch_into_reserved_session（启用/关闭补偿）、stop_mirroring、tray_connect_toggle 停止分支、spawn_session_monitor 退出分支、RunEvent::Exit、setup 崩溃遗留还原。
+  - 文案同步：设置页「会话期间保持手机唤醒」说明与帮助中心「锁屏与解锁」改为「USB 与无线均生效；无线通过临时延长熄屏时间实现，结束自动恢复」。
+  - 测试：新增 8 项（无线/USB 序列号判定、超时解析严格性、补偿+备份、USB 不碰设置、重启不覆盖原值、读不到不写、还原成功/失败保留、端到端补偿还原）；Rust 129 / clippy 0 / vitest 40 / build 通过。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
