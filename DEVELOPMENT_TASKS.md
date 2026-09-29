@@ -159,9 +159,16 @@
 - [x] X7-03 Beta 全量内置激活码。**已完成**（Rust 108→109）。
   - `BETA_LICENSE_KEY`（key-id `beta`，永久）编译进二进制；`entitlement_status` 发现未激活时静默激活；用户显式撤销后写 `beta_opt_out` 标记不再自动激活。
   - 新增守卫测试：内置码必须能被内置公钥验签（防止换钥/换码不同步）。
-- [x] X7-04 版本 0.2.0 + tag 发布首个 GitHub Release。
+- [x] X7-04 版本 0.2.0 + tag 发布首个 GitHub Release。**已完成并上线。**
   - tauri.conf.json / Cargo.toml / package.json 统一 0.2.0；tag `v0.2.0-beta`。
   - build.yml 新增 companion-apk（tag 触发出 APK）与 release 任务（softprops/action-gh-release@v2，汇总桌面安装包 + SHA256SUMS + SBOM + APK，prerelease）。
+  - 发布地址 https://github.com/g-star1024/MirrorDock/releases/tag/v0.2.0-beta ，共 20 个产物：Windows exe+msi、macOS x64/arm64 dmg、Linux AppImage+deb+rpm、伴侣 APK、四平台 SHA256SUMS 与 SBOM。
+- [x] X7-05 修复 Windows 打包失败（`cfg(unix)` 段吞依赖）。**已完成**（提交 e70f0fe）。
+  - 根因：`tokio`/`rustls`/`tokio-rustls`/`rcgen`/`sha2`/`getrandom` 写在 `[target.'cfg(unix)'.dependencies]` 之后，TOML 节段延续导致全部变成「仅 Unix」依赖；macOS/Linux 门禁全绿、Windows 编译 26 个 E0433。已移回 `[dependencies]`，`libc` 留 Unix 段。
+  - 验证方式（无 Windows 工具链也可）：`cargo tree --target x86_64-pc-windows-msvc -i <crate>` 必须能看到 mirrordock。
+- [x] X7-06 修复 Release 发布失败（glob 未匹配）。**已完成**（提交 2ef4948）。
+  - 根因：`release-files/**/*.app.tar.gz` 永远不会匹配——macOS 端 `targets=all` 只产 app+dmg，`.app.tar.gz` 需启用 updater 才生成；`fail_on_unmatched_files: true` 遇未匹配即失败（六个构建 job 全绿、仅发布挂）。已移除该 glob。
+  - 发布说明改为 workflow 内置正文（下载指引 / 开始使用 / 测试版说明 / 校验与透明），版本无关写法避免过期。
 
 ## 最终成品退出条件
 

@@ -248,6 +248,33 @@ jobs:
           prerelease: true
           generate_release_notes: true
           fail_on_unmatched_files: true
+          body: |
+            MirrorDock 桌面镜像工具测试版。本地优先：画面、截图、录像与文件传输只经过你自己的数据线或局域网，不上传任何服务器。
+
+            **下载哪个文件**（文件名含版本号，按后缀识别即可）
+            - Windows：`...-setup.exe`（安装版）或 `....msi`
+            - macOS（Apple 芯片 M1 及以后）：`..._aarch64.dmg`
+            - macOS（Intel）：`..._x64.dmg`
+            - Linux：`....AppImage`（免安装）/ `.deb` / `.rpm`
+            - 手机伴侣 App：`app-debug.apk`
+
+            **安装后怎么开始**
+            1. 电脑端打开 MirrorDock → 用数据线连手机，或选「无线连接」。
+            2. 手机开启「开发者选项 → USB 调试 / 无线调试」。Android 11 及以上可直接用「无线调试 → 使用二维码配对设备」扫电脑上的二维码，自动配对连接。
+            3. 需要伴侣 App 时安装 `app-debug.apk`，与电脑在同一 Wi-Fi 下扫码建立加密连接。
+
+            **本版说明**
+            - 测试版**已内置永久激活码，无需手动激活**，录制等专业版功能直接可用；在「设置 → 版本与授权」点击撤销后可选择不再自动激活。
+            - 本版为 **debug 签名的测试版**，未做代码签名与公证；macOS 首次打开可能需要在「系统设置 → 隐私与安全性」中允许，Windows 可能提示 SmartScreen。
+            - 未做自动更新：升级请回到本页面下载新版本。
+            - 镜像画面方向默认跟随手机旋转，打开横屏游戏会自动转为横屏。
+            - 会话进行中可用全局快捷键（Ctrl/⌘ + Alt + S 截图、+ R 录制开关、+ D 轮换方向），组合可在「设置」中修改。
+
+            **校验与透明**
+            - 每个平台的 `SHA256SUMS-<平台>.txt` 为对应安装包的校验值，建议下载后核对。
+            - `sbom-cargo-*.json` / `sbom-npm-*.json` 为依赖清单（SBOM）。
+
+            测试版仍在迭代，遇到问题请在本仓库提 Issue，并附上「设置 → 诊断」导出的诊断包（已抹去序列号、配对码与文件路径）。
           files: |
             release-files/**/*.dmg
             release-files/**/*.msi
