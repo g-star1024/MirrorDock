@@ -327,6 +327,12 @@
   - 测试：新增 3 项 Rust（探测四态：激活 / 可捕获不激活 / 未锁或熄屏保守不激活 / 探测失败不激活）；Rust 145 / clippy 0 / vitest 40 / build 通过。
   - ⚠️ 待真机验证：锁屏上滑调出密码页 → 锁屏面板出现提示 → 手机解锁后提示自动消失。
 
+- [x] X10-13 README 全面重写（对齐 0.2.0 现状）。
+  - 旧版停留在 0 阶段 POC 描述（仅三条能力），与当前功能面严重脱节。
+  - 新版：徽章、版本号（桌面 0.2.0 / 伴侣 0.1.7-poc）、完整功能清单（连接 / 镜像与会话 / 工具 / 帮助四组，含屏幕唤醒智能化、保持唤醒、密码页安全表面提示、内置帮助中心、官网链接）、安全与隐私边界六条、系统要求表、本地开发与质量检查命令、伴侣 App 构建命令、文档导航。
+  - 新增「技术栈与致谢」：核心依赖表（scrcpy / adb / Tauri / React / TypeScript / Vite / Rust / Kotlin）、Rust 生态（tokio / rustls / tokio-rustls / rcgen / ed25519-dalek / serde）、前端生态（qrcode / Vitest / Testing Library / jsdom）、特别感谢（Genymobile、AOSP、Tauri 社区），并指向 THIRD_PARTY_NOTICES.md。
+  - 纯文档变更，无代码改动。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

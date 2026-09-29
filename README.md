@@ -1,35 +1,143 @@
 # MirrorDock
 
-MirrorDock 是一个本地优先的 Android 桌面镜像工具，目标是让非技术用户在 Windows、macOS 和 Linux 上安全连接自己的手机。
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#本地开发)
+[![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%7C%20React%2019%20%7C%20scrcpy%204.1-24C8D8.svg)](#技术栈与致谢)
 
-当前处于第 0 阶段 POC。画面、音频和控制仅在电脑与已授权手机之间传输；不会默认上传到云端。
+MirrorDock 是一个**本地优先**的 Android 桌面镜像与控制工具，面向非技术用户：在 Windows、macOS 和 Linux 上，用一根数据线或一次无线配对，把自己的手机安全地投到电脑屏幕上。
 
-## 当前可运行能力
+画面、音频与控制仅在电脑与已授权手机之间点对点传输。**不依赖云端、不默认上传任何数据、不收集遥测。**
 
-- 检测 ADB 设备、USB 调试授权和离线状态，并给出中文恢复说明。
-- 仅对已授权设备通过固定参数直接启动 scrcpy。
-- Android 11+ 无线调试：一次性配对码、独立连接地址、本机可信设备的重新连接与忘记。
+当前版本：`0.2.0`（桌面端）· `0.1.7-poc`（伴侣 App）。
 
-无线连接需要手机与电脑处于同一 Wi-Fi。手机“无线调试”页面中的配对地址和连接地址可能不同；配对码不会保存或写入日志。
+## 功能特性
+
+### 连接
+
+- **USB 连接**：即插即用，自动检测设备、授权与离线状态，全程中文引导与恢复建议。
+- **无线连接（Android 11+）**：一次性配对码配对、独立连接地址连接，支持可信设备一键重连与忘记；本机二维码扫码辅助。
+- **最近设备**：本地记忆最近使用过的设备（上限 8 台），可随时清除记录。
+- **伴侣 App（POC）**：随附 Android 伴侣应用，用于同网加密会话与配对引导。
+
+### 镜像与会话
+
+- 基于 **scrcpy 4.1**（固定版本、供应链哈希校验）的高帧率镜像与键鼠控制。
+- **会话状态机**：idle / unauthorized / offline / paired / connecting / streaming / failed 七态如实呈现，不把复杂问题塌缩成一句「连接失败」。
+- **能力判定**：按设备 Android 版本如实报告画面控制（SDK ≥ 26）与系统音频（SDK ≥ 30）支持情况，读不到就显示「未知」，不猜测。
+- **屏幕唤醒智能化**：读电源策略，DIM（变暗）状态用 BACK 键无损拉回，正常状态零注入。
+- **保持唤醒**：会话期间阻止手机熄屏锁屏（USB 与无线均生效；无线通过临时充电模拟与系统设置实现，结束时逐项还原）。
+- **锁屏助手**：实时报告锁屏/熄屏状态，内置「为什么需要授权」「锁屏与解锁」等说明。
+- **密码页透明提示**：检测到 PIN/图案输入页（Android 安全表面，镜像黑屏属平台级保护）时，明确提示「此画面受系统安全保护，无法镜像，请在手机上输入密码」，解锁后画面自动恢复——不绕过、不误导。
+
+### 工具
+
+- **截图**：设备当前画面一键保存，PNG 完整性校验，撞名自动顺延。
+- **录屏**：会话内录制为 MP4，运行中的录像受删除保护。
+- **文件传输**：向设备推送 / 从设备拉取文件。
+- **全局快捷键**：镜像窗口全屏时仍可触发截图 / 录制 / 旋转（仅在会话进行中注册）。
+- **托盘与窗口**：系统托盘快捷菜单、关闭窗口最小化到托盘（可配置）、macOS 隐藏 Dock 图标、开机自启。
+
+### 帮助
+
+- **内置帮助中心**：7 篇完整帮助文档随应用分发，离线可查，覆盖授权、无线连接、锁屏、保持唤醒等常见问题。
+- **官方主页**：<https://g-star1024.github.io/MirrorDock/>
+
+## 安全与隐私边界
+
+MirrorDock 的安全模型是一条明确的红线，也是产品差异化所在：
+
+- **本地优先**：所有数据（画面、音频、剪贴板、文件）仅在电脑与手机之间直接传输，无云端中转，无默认遥测。
+- **供应链校验**：随包分发的 scrcpy / adb 均按官方 SHA-256 校验（流水线强制，哈希不符即终止构建），详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+- **子进程安全**：adb / scrcpy 以固定参数数组直接调用，不经过 shell 拼接，不执行设备或网络提供的内容。
+- **最小授权**：仅对已授权设备启动镜像；对锁屏凭据界面（密码 / 图案输入页）只做检测与如实提示，**不做任何绕过**。
+- **隐私不落日志**：屏幕帧、剪贴板内容、配对码、密码等敏感数据绝不写入日志；诊断日志仅记录命令成败与设备序列号。
+- **签名验证**：发行渠道签名采用 ed25519，公钥编译进二进制，签发私钥永不进入构建环境。
+
+## 系统要求
+
+| 端 | 要求 |
+| --- | --- |
+| 电脑 | Windows 10+（x64）/ macOS 12+（Intel 或 Apple Silicon）/ 主流 Linux 发行版 |
+| 手机 | Android 7.0+（USB 镜像）；Android 11+（无线调试配对） |
+| 依赖 | 无需安装。Windows / macOS 安装包内置 scrcpy 与 adb；Linux 需发行版提供 `scrcpy` 与 `adb` |
 
 ## 本地开发
 
-前置条件：Node.js、pnpm、Rust、Tauri 桌面依赖，以及 Android Platform Tools（`adb`）。
+前置条件：Node.js ≥ 20、pnpm、Rust（stable）、Tauri 2 平台依赖、Android Platform Tools（`adb`）。
 
 ```sh
 pnpm install
 pnpm tauri dev
 ```
 
-开发检查：
+开发期 scrcpy 运行时置于忽略的 `.tools/` 目录（或通过 `MIRRORDOCK_SCRCPY_PATH` 环境变量指定）。
+
+### 质量检查
 
 ```sh
+# 前端：TypeScript 编译 + 单元测试 + 构建
 pnpm build
+pnpm test
+
+# 后端：测试 + 静态检查
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml
 ```
 
-开发期 scrcpy 运行时位于忽略的 `.tools/`；发行版打包、签名、SBOM 和三渠道验证尚未完成，详见 `DEVELOPMENT_TASKS.md`。
+### 伴侣 App
 
-## 工程约束
+Android 伴侣应用位于 `companion/`（Kotlin，minSdk 26 / targetSdk 34）：
 
-每次开发前先阅读 [AGENTS.md](AGENTS.md) 与 [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md)。产品边界、发布要求与团队协作规则以 AGENTS.md 为准；内部产品规划文档维护于仓库外、不随本仓库分发，外部贡献者请以 README 与 DEVELOPMENT_TASKS.md 为准。本项目以 [Apache-2.0](LICENSE) 许可发布。
+```sh
+gradle -p companion :app:assembleDebug
+```
+
+## 项目文档
+
+- [AGENTS.md](AGENTS.md) — 产品边界、工程铁律与协作规则（开发前必读）
+- [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md) — 迭代任务与验收记录
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — 第三方组件声明与供应链哈希
+
+## 技术栈与致谢
+
+MirrorDock 站在众多优秀开源项目的肩膀上，向以下项目与社区致谢：
+
+### 核心依赖
+
+| 项目 | 用途 | 许可证 |
+| --- | --- | --- |
+| [scrcpy](https://github.com/Genymobile/scrcpy)（Genymobile） | 设备镜像与控制的底层引擎，v4.1 随包分发 | Apache-2.0 |
+| [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools)（adb） | 设备通信、状态探测与受控注入 | Apache-2.0 |
+| [Tauri](https://tauri.app/) | 跨平台桌面应用框架（v2，含托盘、全局快捷键、自启插件） | MIT / Apache-2.0 |
+| [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) | 前端界面 | MIT / Apache-2.0 |
+| [Vite](https://vite.dev/) | 前端构建与开发服务 | MIT |
+| [Rust](https://www.rust-lang.org/) | 后端逻辑与安全边界实现 | MIT / Apache-2.0 |
+| [Kotlin](https://kotlinlang.org/)（JetBrains） | Android 伴侣 App | Apache-2.0 |
+
+### Rust 生态
+
+- [tokio](https://tokio.rs/) — 异步运行时（伴侣 App 加密会话）
+- [rustls](https://github.com/rustls/rustls) / [tokio-rustls](https://github.com/rustls/tokio-rustls) — TLS 1.3 加密通道
+- [rcgen](https://github.com/rustls/rcgen) — 自签证书生成（配对指纹校验）
+- [ed25519-dalek](https://github.com/dalek-cryptography/ed25519-dalek) — 发行签名验证
+- [serde](https://serde.rs/) — 序列化框架
+
+### 前端生态
+
+- [qrcode](https://github.com/soldair/node-qrcode) — 无线配对二维码
+- [Vitest](https://vitest.dev/) + [Testing Library](https://testing-library.com/) — 前端测试
+- [jsdom](https://github.com/jsdom/jsdom) — 测试环境
+
+### 特别感谢
+
+- **Genymobile 团队**：scrcpy 是本项目得以存在的基石，其工程质量与 Apache-2.0 授权让本地镜像工具成为可能。
+- **Android Open Source Project**：adb 与底层设备协议的开放生态。
+- **Tauri 社区**：用 Web 技术构建轻量桌面应用的工程实践与持续维护。
+
+完整的第三方许可声明与供应链哈希见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 许可证
+
+本项目以 [Apache License 2.0](LICENSE) 发布，与 scrcpy 保持一致。
+
+软件按「现状」提供，不含任何担保。使用本项目即表示您了解并同意：镜像能力受设备端安全策略约束（如 FLAG_SECURE 内容不可捕获），MirrorDock 不提供、也不会提供绕过设备安全机制的功能。
