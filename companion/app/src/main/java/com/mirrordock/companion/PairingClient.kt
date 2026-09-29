@@ -110,6 +110,9 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
                 return
             }
             // 持续读取服务端消息（POC 里服务端基本不发；断开即回调）。
+            // 读超时只服务于上面的握手回复：会话期必须解除，否则服务端
+            // 不主动发消息时，15 秒后 readLine 必然超时误报「已断开」。
+            tls.soTimeout = 0
             readerThread = Thread {
                 try {
                     while (reader.readLine() != null) { /* POC 不处理服务端主动消息 */ }

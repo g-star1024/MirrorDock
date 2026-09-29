@@ -236,6 +236,13 @@
   - 杂项：上一轮误入仓库目录的无关文件（谜页集调研，未跟踪）已移出至仓库外同级目录，空的 docs/research 一并清理。
   - 验证：vitest 40、tsc、pnpm build 通过。
 
+- [x] X10-03 伴侣会话 15 秒必断的根因修复（versionCode 4 / 0.1.3-poc）。
+  - 现象：配对成功后约 15 秒，伴侣 App 显示「会话已断开」，桌面端记录「会话结束（超时或断开）」；与切换页签无关，时间点恒为握手后 +15s。
+  - 根因：`PairingClient.tryConnectAnyHost` 设的 `soTimeout = 15000` 是给「等待 welcome 握手回复」用的，但握手成功后**没有解除**，长会话期间服务端不主动发消息，读线程 15 秒后必然 `SocketTimeoutException` → `onDisconnected`。
+  - 修法：握手完成（welcome + device_hello 发出）后 `tls.soTimeout = 0`，断开仍由 `readLine()` 返回 null / IOException 感知，语义不变。
+  - 产物：`test-runs/mirrordock-companion-debug-0.1.3-poc.apk`（本地 gradle 构建，SHA-256 c58a7456…44c61）。真机配对保持 >15s 待用户验证。
+  - 附带结论（不改代码）：手机上「撤销 USB 调试授权」只影响**下一次**连接的授权检查，已建立的 adb/scrcpy 会话（USB 或无线）不会被主动踢下线——认证发生在连接建立时；且 Android 11+ 无线调试的配对授权独立于该开关。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
