@@ -7,6 +7,7 @@ import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plug
 // 只有全局快捷键能不切回主窗口就触发截图/录制/旋转。
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
+import { helpArticles } from "./helpContent";
 import QRCode from "qrcode";
 import "./App.css";
 
@@ -234,6 +235,20 @@ export function lockSummary(report: DeviceLockReport) {
   const screen = report.screen === "awake" ? "屏幕已点亮" : report.screen === "asleep" ? "屏幕已关闭" : "屏幕状态未知";
   return `${keyguard} · ${screen}`;
 }
+
+/** 面板里只留一句「现在该做什么」；完整说明在页面底部的「关于锁屏与解锁」。 */
+export function lockActionHint(report: DeviceLockReport): string {
+  if (report.screen === "asleep") {
+    return "屏幕没亮：点「屏幕唤醒」即可点亮；解锁需要你本人在手机上输入。";
+  }
+  if (report.keyguard === "locked") {
+    return "请在手机上解锁；解锁凭据只会输入在手机或镜像窗口里，MirrorDock 不记录。";
+  }
+  if (report.keyguard === "unlocked") {
+    return "手机已解锁，可以直接开始镜像。";
+  }
+  return "锁屏状态读取不完整，不影响开始镜像；遇到异常请解锁手机后重试。";
+}
 export function errorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null && "message" in error && "recovery" in error) {
     const detail = error as AppError;
@@ -278,7 +293,7 @@ export function sessionStatus(session: MirrorSession): string | null {
     case "streaming":
       return session.first_frame === "reached"
         ? "镜像正在运行。关闭镜像窗口即可结束本次会话。"
-        : "镜像进程已启动，但尚未确认首帧到达。请查看手机画面是否已经出现。";
+        : "画面正在启动…若几秒后仍未出现，请检查手机屏幕是否亮起并确认授权。";
     case "unauthorized":
       return sessionErrorText(session, "手机尚未允许这台电脑进行调试，请解锁手机后重新允许。");
     case "offline":
@@ -1147,7 +1162,14 @@ function App() {
       .catch((error) => {
         if (!disposed) setLockError(errorMessage(error, "无法读取手机当前的锁屏状态。"));
       });
-    return () => { disposed = true; };
+    // 锁屏状态会随使用变化（点亮/解锁/熄屏），面板不能停留在旧状态：
+    // 每 5 秒轻量复查一次；「屏幕唤醒」成功后另有立即刷新。复查失败保持上一次结果。
+    const timer = window.setInterval(() => {
+      invoke<DeviceLockReport>("device_lock_report", { serial: readySerial })
+        .then((value) => { if (!disposed) setLockReport(value); })
+        .catch(() => { /* 保持上一次结果，不刷错误打断面板 */ });
+    }, 5000);
+    return () => { disposed = true; window.clearInterval(timer); };
   }, [readySerial]);
   // 探测确认这台手机不支持系统音频转发（Android < 11）时，把「转发手机声音」
   // 如实关掉并禁用：scrcpy 在这类设备上会自动禁用音频，界面必须与之一致，
@@ -1269,8 +1291,7 @@ function App() {
                     {lockReport ? (
                       <>
                         <p className="capability-summary">{lockSummary(lockReport)}</p>
-                        <p className="capability-pending">{lockReport.explanation}</p>
-                        <p className="capability-pending">{lockReport.recovery}</p>
+                        <p className="capability-pending">{lockActionHint(lockReport)}</p>
                       </>
                     ) : lockError ? (
                       <p className="capability-pending" role="alert">{lockError}</p>
@@ -1280,7 +1301,6 @@ function App() {
                     {sessionActive && lockReport?.screen === "asleep" && (
                       <p className="capability-pending" role="status">屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
                     )}
-                    <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁。设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
                   </div>
                 </div>
                 </>
@@ -1401,6 +1421,16 @@ function App() {
                 ) : (
                   <p className="capability-pending">正在读取这台手机的信息…</p>
                 )}
+              </div>
+            )}
+
+            {/* 锁屏长说明沉底：面板里只留状态与一句行动提示，想细看再到下面看。 */}
+            {readyDevice && lockReport && (
+              <div className="capability-panel" aria-live="polite">
+                <strong>关于锁屏与解锁</strong>
+                <p className="capability-pending">{lockReport.explanation}</p>
+                <p className="capability-pending">{lockReport.recovery}</p>
+                <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁；设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
               </div>
             )}
           </section>
@@ -1831,8 +1861,19 @@ function App() {
           <section className={`tab-panel ${tab === "help" ? "" : "panel-hidden"}`} aria-label="帮助">
             <div className="page-head">
               <h1>帮助与诊断</h1>
-              <p className="intro">联系支持时先在这里预览诊断内容，确认无误后再导出。</p>
+              <p className="intro">常用问题都在下面的帮助主题里；联系支持时先在这里预览诊断内容，确认无误后再导出。</p>
             </div>
+
+            {/* 内置帮助文档：随应用分发、离线可读。 */}
+            {helpArticles.map((article) => (
+              <div className="capability-panel help-article" key={article.id} aria-live="polite">
+                <strong>{article.title}</strong>
+                {article.paragraphs.map((paragraph, index) => (
+                  <p className="capability-pending" key={index}>{paragraph}</p>
+                ))}
+              </div>
+            ))}
+
             <section className="connection-card" aria-live="polite">
               <strong>诊断包</strong>
               <p className="capability-pending">仅含版本、系统与最近操作结果（已抹去序列号、配对码与路径）。先预览，确认后才保存；不会自动上传任何内容。</p>

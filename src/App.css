@@ -166,6 +166,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .ready-panel .ready-wake { margin-left: auto; }
 .ready-panel .primary-button { margin-left: 0; }
 .device-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+/* 帮助中心内置文档：正文行距放宽，利于连续阅读。 */
+.help-article .capability-pending { line-height: 1.6; }
 
 /* -- 设置页：每张卡一个主题，行式布局（名称+说明居左，控件居右） ---------- */
 

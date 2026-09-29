@@ -118,7 +118,7 @@ describe("sessionStatus", () => {
       [{ ...idleSession(), phase: "connecting" }, "正在启动镜像窗口…"],
       [
         { ...idleSession(), phase: "streaming", first_frame: "unknown" },
-        "镜像进程已启动，但尚未确认首帧到达。请查看手机画面是否已经出现。",
+        "画面正在启动…若几秒后仍未出现，请检查手机屏幕是否亮起并确认授权。",
       ],
       [
         { ...idleSession(), phase: "streaming", first_frame: "reached" },
