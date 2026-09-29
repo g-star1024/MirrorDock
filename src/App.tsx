@@ -1221,8 +1221,8 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          <span className="local-pill">仅在本机连接</span>
           <span className="edition-pill">{editionLabel(entitlement?.edition)}</span>
+          <span className="local-pill">仅在本机连接</span>
         </div>
       </aside>
 
@@ -1445,7 +1445,7 @@ function App() {
               <div className="panel-grid">
                 <div className="capability-panel screenshot-panel" aria-live="polite">
                   <strong>截图</strong>
-                  <p className="capability-pending">保存到本机「图片 / MirrorDock」。受保护页面（支付、密码）系统会屏蔽为黑屏，不是故障。</p>
+                  <p className="capability-pending">保存到本机「图片 / MirrorDock」。受保护页面（支付、密码）会截成黑屏，是系统限制，不是故障。</p>
                   <button className="secondary-button" type="button" disabled={screenshotBusy} onClick={() => void captureScreen(readyDevice.serial)}>
                     {screenshotBusy ? "正在处理…" : "截取当前画面"}
                   </button>
@@ -1476,10 +1476,9 @@ function App() {
                       {recording.active && <p className="screenshot-path">录像正在写入，结束镜像后才会定型；录制中无法删除。</p>}
                     </div>
                   ) : (
-                    <p className="capability-pending">当前没有录像。在「设置」打开「录制这一会话的画面」后开始镜像。</p>
+                    <p className="capability-pending">在「设置」打开「录制这一会话的画面」后开始镜像；文件保存在「视频 / MirrorDock」，结束镜像即结束录制，可直接播放。</p>
                   )}
                   {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
-                  <p className="capability-pending">录像保存在本机视频目录的 MirrorDock 文件夹。结束镜像即结束录制，文件可直接播放。</p>
                 </div>
                 <div className="capability-panel transfer-panel" aria-live="polite">
                   <strong>文件传输</strong>
@@ -1516,7 +1515,7 @@ function App() {
                 </div>
                 <div className="capability-panel apk-panel" aria-live="polite">
                   <strong>安装 APK</strong>
-                  <p className="capability-pending">选择本机的 .apk 安装包，一键装到手机上（覆盖安装，保留应用数据）。</p>
+                  <p className="capability-pending">选择本机的 .apk 安装包，一键装到手机（覆盖安装、保留应用数据）。</p>
                   <span>
                     <button className="secondary-button" type="button" disabled={apkBusy} onClick={() => void pickApk()}>
                       {apkPath ? "重新选择安装包" : "选择 APK 安装包"}
@@ -1533,7 +1532,7 @@ function App() {
                   )}
                   {apkMessage && <p className="apply-notice" role="status">{apkMessage}</p>}
                   {apkError && <p className="capability-pending" role="alert">{apkError}</p>}
-                  <p className="capability-pending">安装由手机上的系统安装器完成；需要你在手机上确认（如「安装未知应用」）。安装包只在你选中的文件与手机之间传输，不经过任何服务器。</p>
+                  <p className="capability-pending">安装由手机系统完成，需你在手机上确认（如「安装未知应用」）；安装包只在电脑与手机之间传输。</p>
                 </div>
               </div>
             ) : (
@@ -1747,7 +1746,7 @@ function App() {
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">会话期间保持手机唤醒</span>
-                    <span className="setting-desc">镜像进行中手机不会自动熄屏锁屏。</span>
+                    <span className="setting-desc">USB（数据线）连接时，镜像进行中手机不会自动熄屏；无线连接下该系统开关不生效，熄屏后可用「屏幕唤醒」点亮。</span>
                   </div>
                   <label className="setting-toggle"><input type="checkbox" aria-label="会话期间保持手机唤醒" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})} /></label>
                 </div>
@@ -1865,14 +1864,16 @@ function App() {
             </div>
 
             {/* 内置帮助文档：随应用分发、离线可读。 */}
-            {helpArticles.map((article) => (
-              <div className="capability-panel help-article" key={article.id} aria-live="polite">
-                <strong>{article.title}</strong>
-                {article.paragraphs.map((paragraph, index) => (
-                  <p className="capability-pending" key={index}>{paragraph}</p>
-                ))}
-              </div>
-            ))}
+            <div className="help-list">
+              {helpArticles.map((article) => (
+                <div className="capability-panel help-article" key={article.id} aria-live="polite">
+                  <strong>{article.title}</strong>
+                  {article.paragraphs.map((paragraph, index) => (
+                    <p className="capability-pending" key={index}>{paragraph}</p>
+                  ))}
+                </div>
+              ))}
+            </div>
 
             <section className="connection-card" aria-live="polite">
               <strong>诊断包</strong>
