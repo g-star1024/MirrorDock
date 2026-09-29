@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MirrorDock",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "identifier": "com.mirrordock.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build && bash scripts/prepare-runtime.sh",
     "frontendDist": "../dist"
   },
   "app": {

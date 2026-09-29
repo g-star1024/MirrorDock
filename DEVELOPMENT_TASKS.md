@@ -357,6 +357,17 @@
   - 门禁：Rust 148 / clippy 0 / vitest 40 / build 全绿。
   - ⚠️ 待真机验证：镜像运行时 Dock 应显示「MirrorDock 镜像」蓝橙环图标；微信输入框点击后不再弹全屏键盘（底部小候选条直接打字）。
 
+- [x] X10-18 主图标按 Apple 规范留边（修复 Dock 中偏大）。
+  - 用户截图反馈：Dock 上 MirrorDock 图标比系统其他图标大一圈。根因：v2 图标 1024 满幅绘制，违反 Apple 模板（主图形 824×824 居中 + 100px 透明边距）。修复：设计缩至 824 渲染后居中贴 1024（圆角 224→180 等比），设计不变；镜像 bundle 图标运行时复制主 icon.icns 自动同步。commit ec535e8。
+  - ⚠️ 引入回归：本条目实现有误——设计层仍在 1024 画布渲染再贴入 824 画布，右下 200px 被裁掉，图标只剩左上角圆角（用户 X10-19 截图证实）。v4 修复见 X10-19。
+
+- [x] X10-19 本地打包缺 scrcpy 运行时致全部连接功能失效（用户反馈「USB 调试、无线调试全部挂掉」）+ 图标圆角回归修复 + v0.2.3。
+  - **连接全挂根因**：装好的 .app 内无 scrcpy/adb。A1-08 的运行时下载校验步骤只存在于 CI 打包作业（build.yml package job），本地 `pnpm tauri build` 不会执行——此前 X10-16～X10-18 均为本机构建装机，发行模式查找链（显式 env → 随包资源 → PATH）全部落空退回裸 `scrcpy`（PATH 无）→ 镜像/连接/无线全不可用。adb 因 /usr/local/bin/adb 存在仍可用，故设备列表表现掩盖了镜像侧缺失。
+  - **修复**：新增 `scripts/prepare-runtime.sh`——把本地已校验的 `.tools/scrcpy/<平台>/` 运行时全量复制进 `src-tauri/resources/scrcpy/`（布局与 CI 一致），挂入 tauri.conf.json `beforeBuildCommand`；`src-tauri/resources/scrcpy/` 进 .gitignore（二进制永不入库，供应链校验只在 CI/准备阶段做）。
+  - **图标圆角回归修复（v4）**：设计直接在 824 画布渲染（环半径 242/宽 119/点 47 等比缩放），四角圆润经像素级断言验证（四角 alpha=0、边中点 255）；`tauri icon` 重生成全平台尺寸。
+  - 版本号三处同步 0.2.2 → 0.2.3；tag `v0.2.3-beta` 发布（用户已明确授权「修复并重新推送打包 tag 发布新版本」）。
+  - 铁律沉淀：①本地打包装机前必须先跑 prepare-runtime 并核验 .app 内含 scrcpy；②图标改版必须像素断言四角透明；③bash grep 会静默返回空——工作流核查一律用 Grep 工具。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
