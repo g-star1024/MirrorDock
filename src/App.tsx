@@ -1221,7 +1221,7 @@ function App() {
             <section className="connection-card" aria-live="polite">
               <div className="connection-heading">
                 <div>
-                  <p className="eyebrow">第一步：连接手机</p>
+                  <p className="eyebrow">{sessionActive ? "镜像运行中" : "第一步：连接手机"}</p>
                   <h2>{isChecking ? "正在检查 USB 连接…" : readyDevice ? "手机已准备就绪" : "等待连接手机"}</h2>
                 </div>
                 <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
@@ -1229,11 +1229,14 @@ function App() {
                 </button>
               </div>
 
-              {check?.diagnostic && <p className="diagnostic">{check.diagnostic}</p>}
-              {launchError && <p className="diagnostic">{launchError}</p>}
-              {sessionError && <p className="diagnostic" role="alert">{sessionError}</p>}
-              {statusMessage && <p className="diagnostic" role={statusRole}>{statusMessage}</p>}
-              {settingsNotice && <p className="diagnostic">{settingsNotice}</p>}
+              {/* 状态/错误提示集中在一处，纵向紧凑排列；容器为空时不占位。 */}
+              <div className="status-stack">
+                {check?.diagnostic && <p className="diagnostic">{check.diagnostic}</p>}
+                {launchError && <p className="diagnostic">{launchError}</p>}
+                {sessionError && <p className="diagnostic" role="alert">{sessionError}</p>}
+                {statusMessage && <p className="diagnostic" role={statusRole}>{statusMessage}</p>}
+                {settingsNotice && <p className="diagnostic">{settingsNotice}</p>}
+              </div>
 
               {readyDevice ? (
                 <>

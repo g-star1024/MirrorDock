@@ -70,14 +70,16 @@ h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.01em; }
 .nav-item.active { color: #1f4fc4; background: #e8effc; }
 
 .sidebar-foot {
-  display: grid;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
   padding: 0 4px;
   font-size: 12px;
 }
-.local-pill { justify-self: start; padding: 4px 9px; border-radius: 999px; background: #e9f7ef; color: #1f7a46; font-size: 12px; font-weight: 650; }
-.edition-pill { justify-self: start; padding: 4px 9px; border-radius: 999px; background: #eef1f6; color: #5a6675; font-size: 12px; font-weight: 650; }
+.local-pill { padding: 4px 9px; border-radius: 999px; background: #e9f7ef; color: #1f7a46; font-size: 12px; font-weight: 650; }
+.edition-pill { padding: 4px 9px; border-radius: 999px; background: #eef1f6; color: #5a6675; font-size: 12px; font-weight: 650; }
 
 .main-area { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
 
@@ -132,7 +134,12 @@ h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.01em; }
   box-shadow: 0 10px 30px rgba(28, 45, 80, .06);
   margin-bottom: 18px;
 }
-.connection-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid #eef1f6; margin-bottom: 16px; }
+.connection-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid #eef1f6; margin-bottom: 12px; }
+
+/* 连接页的状态与错误横幅：集中一处、紧凑排列，避免把主内容挤到屏幕外。 */
+.status-stack { display: grid; gap: 8px; }
+.status-stack:empty { display: none; }
+.status-stack .diagnostic { margin: 0; padding: 10px 13px; font-size: 13.5px; line-height: 1.5; }
 
 .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
 .panel-grid .capability-panel { margin-top: 0; }
@@ -154,7 +161,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .setup-steps strong, .device-row strong, .ready-panel strong { display: block; margin-top: 2px; }
 .setup-steps p, .device-row p, .ready-panel p { margin: 4px 0 0; color: #6b7686; font-size: 13.5px; line-height: 1.45; }
 
-.ready-panel { display: flex; align-items: center; gap: 13px; margin-top: 20px; padding: 16px; border: 1px solid #d9ecdf; border-radius: 14px; background: #f2faf5; }
+.ready-panel { display: flex; align-items: center; gap: 13px; margin-top: 14px; padding: 15px 16px; border: 1px solid #d9ecdf; border-radius: 14px; background: #f2faf5; }
 .device-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 
 /* -- 设置页：每张卡一个主题，行式布局（名称+说明居左，控件居右） ---------- */
@@ -206,15 +213,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status-dot.offline { background: #d2504a; }
 .status-label { margin-left: auto; color: #5d6878; font-size: 13px; font-weight: 650; text-align: right; }
 
-.capability-panel { display: grid; gap: 10px; align-content: start; margin-top: 14px; padding: 16px; border: 1px solid #e6eaf2; border-radius: 14px; background: #fbfcfe; }
-.capability-summary { margin: 0; color: #3c4654; font-size: 13.5px; font-weight: 650; overflow-wrap: anywhere; }
-.capability-pending { margin: 0; color: #6b7686; font-size: 13.5px; }
-.capability-notices { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.capability-notices li { padding: 11px 13px; border-left: 3px solid #d4dae4; border-radius: 8px; background: #fff; }
+.capability-panel { display: grid; gap: 8px; align-content: start; margin-top: 14px; padding: 14px 16px; border: 1px solid #e6eaf2; border-radius: 14px; background: #fbfcfe; }
+.capability-panel > strong { color: #253041; font-size: 14px; }
+.capability-panel > button { justify-self: start; }
+.capability-summary { margin: 0; color: #3c4654; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.capability-pending { margin: 0; color: #6b7686; font-size: 13px; line-height: 1.5; }
+.capability-notices { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.capability-notices li { padding: 9px 12px; border-left: 3px solid #d4dae4; border-radius: 8px; background: #fff; }
 .capability-notices li.notice-limitation { border-left-color: #e0940f; background: #fffaf0; }
 .capability-notices li.notice-info { border-left-color: #22a35c; background: #f2faf5; }
-.capability-notices strong { display: block; font-size: 13.5px; }
-.capability-notices p { margin: 3px 0 0; color: #6b7686; font-size: 13px; line-height: 1.5; }
+.capability-notices strong { display: block; font-size: 13px; }
+.capability-notices p { margin: 3px 0 0; color: #6b7686; font-size: 12.5px; line-height: 1.5; }
 /* 截图结果：文件名与大小一行给结论，完整路径单独一行便于核对与复制。 */
 .screenshot-result { display: grid; gap: 6px; padding: 12px 13px; border-left: 3px solid #22a35c; border-radius: 8px; background: #f2faf5; }
 .screenshot-path { margin: 0; color: #5d6878; font-size: 12px; overflow-wrap: anywhere; }
