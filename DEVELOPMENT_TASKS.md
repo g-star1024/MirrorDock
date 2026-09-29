@@ -208,7 +208,7 @@
   - Rust：`on_window_event` 拦截主窗口 `CloseRequested` → `prevent_close` + `hide`；退出只能走菜单栏/托盘菜单「退出 MirrorDock」。
   - 托盘（`tauri` `tray-icon` feature）：图标用默认应用图标，菜单 = 打开 MirrorDock / 唤醒手机屏幕 / 手机截图 / 退出。唤醒与截图复用命令侧逻辑（`wake_screen_for_serial` 提取共用）；无会话时弹系统对话框如实说明。截图文件名用 Unix 时间戳（纯 ASCII 过白名单），**不猜时区**——与前端本地时间命名的截图并存是刻意取舍。
   - 开机自启：`tauri-plugin-autostart`（macOS 用 LaunchAgent）；capabilities 新增 `autostart:allow-enable/disable/is-enabled`。
-  - 新命令 `get_app_settings` / `set_app_settings`（命令面 31→33），应用级设置落 `app-settings.json`；读取**容错**（缺失/损坏/缺字段一律回默认，设置坏了不挡启动）。Rust 111（+2：缺失/损坏回默认、落盘往返）。
+  - 新命令 `get_app_settings` / `set_app_settings`（命令面 33→35，X9-02 初稿误写为 31→33，此处勘误），应用级设置落 `app-settings.json`；读取**容错**（缺失/损坏/缺字段一律回默认，设置坏了不挡启动）。Rust 111（+2：缺失/损坏回默认、落盘往返）。
 - [x] X9-03 镜像黑屏免开客户端唤醒。**已定案：右键手势（scrcpy 内置）+ 界面提示；左键唤醒做不到，原因如实记录。**
   - 依据 scrcpy v4.1 官方文档（doc/mouse.md）：SDK 鼠标默认「右键触发 BACK（熄屏时改为 POWER 点亮屏幕）」；`--mouse-bind` 只能配置**次级**按键（右/中/4/5），**左键（primary）永远转发触控**——「左键点击唤醒」在 scrcpy 4.1 配置层面不存在，不虚报。
   - 落地：镜像窗口内右键即可点亮（无需打开客户端，天然满足诉求）；设置页「通用」与锁屏面板（会话中且屏幕关闭时）两处明示该手势。
