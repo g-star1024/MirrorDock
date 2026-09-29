@@ -71,7 +71,7 @@ class ScanActivity : AppCompatActivity() {
             setTextColor(android.graphics.Color.WHITE)
             textSize = 15f
             setPadding(48, 40, 48, 40)
-            setBackgroundColor(ContextCompat.getColor(context, R.color.brand_blue))
+            setBackgroundColor(ContextCompat.getColor(context, R.color.accent))
         }
         val cameraArea = FrameLayout(this)
         cameraArea.addView(

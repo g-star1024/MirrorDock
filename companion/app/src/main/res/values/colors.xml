@@ -1,21 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 与桌面客户端同一套视觉：蓝色主色 + 浅灰底 + 白卡片。 -->
+<!-- 视觉体系：石墨墨色主色 + 中性浅灰底 + 白卡片（无彩现代风）。 -->
 <resources>
-    <color name="brand_blue">#2563EB</color>
-    <color name="brand_blue_dark">#1D4ED8</color>
-    <color name="screen_bg">#F5F6FA</color>
+    <!-- 强调色：墨色（文字按钮、徽标、主按钮文字）。 -->
+    <color name="accent">#1A1D24</color>
+    <!-- hero 卡渐变：石墨黑。 -->
+    <color name="hero_start">#2A2D35</color>
+    <color name="hero_end">#15171C</color>
+    <color name="screen_bg">#F5F5F7</color>
     <color name="card_bg">#FFFFFF</color>
-    <color name="text_primary">#111827</color>
+    <color name="text_primary">#16181D</color>
     <color name="text_secondary">#6B7280</color>
     <color name="text_tertiary">#9CA3AF</color>
     <color name="danger_text">#B91C1C</color>
     <color name="danger_bg">#FEF2F2</color>
     <color name="danger_border">#FECACA</color>
-    <color name="input_border">#E5E9F0</color>
-    <color name="input_bg">#F8F9FC</color>
-    <color name="hero_text_secondary">#C7D7FE</color>
-    <color name="dot_idle">#C3CAD6</color>
+    <color name="input_border">#E7E7EA</color>
+    <color name="input_bg">#F7F7F9</color>
+    <color name="hero_text_secondary">#A2A7B0</color>
+    <color name="dot_idle">#9AA1AD</color>
     <color name="dot_ready">#22C55E</color>
-    <color name="file_badge_bg">#EAF1FE</color>
-    <color name="divider">#F0F2F7</color>
+    <color name="file_badge_bg">#F0F1F4</color>
+    <color name="divider">#F0F0F2</color>
 </resources>

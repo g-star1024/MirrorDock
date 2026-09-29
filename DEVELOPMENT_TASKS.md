@@ -249,6 +249,12 @@
   - 存储访问逐级降级（如实呈现，不假成功）：API ≤ 32 运行时 READ_EXTERNAL_STORAGE；API 30+ 先试直读/MediaStore 兜底，都不行时空状态给「授权文件访问」按钮（MANAGE_EXTERNAL_STORAGE，侧载 POC 可接受）；Manifest 加 requestLegacyExternalStorage + FileProvider（file_paths 仅 Download/MirrorDock）。
   - 验证：本地 gradle assembleDebug 通过，APK 落 `test-runs/mirrordock-companion-debug-0.1.4-poc.apk`（SHA-256 c7ba8f96…a88e）。真机视觉与文件列表（Android 13 Redmi）待用户验证。
 
+- [x] X10-05 伴侣 UI 三项真机反馈修复（versionCode 6 / 0.1.5-poc）。
+  - 顶部不适配：主题加 `android:statusBarColor=screen_bg` + `windowLightStatusBar=true`（minSdk 26 可直用），状态栏与页面同底色、深色图标，不再压一条系统默认深灰。
+  - 去蓝色改「石墨墨色」体系：hero 卡改近黑渐变（#2A2D35→#15171C），强调色 accent=#1A1D24（文字按钮/徽标/主按钮文字/「安装·查看」），`brand_blue` 全部移除（colors.xml、styles.xml、MainActivity、ScanActivity 顶栏），徽标底改中性浅灰。
+  - 按钮灰色圆角边框：三个按钮样式统一 `android:stateListAnimator=@null`，去掉系统给 Button 默认挂的 Z 抬升投影（浅色底上呈灰边感）；白胶囊按下色同步去蓝（#E9EAEE）。
+  - 产物：`test-runs/mirrordock-companion-debug-0.1.5-poc.apk`（SHA-256 b98d38d1…ef922）；已 adb 安装到真机（M2104K10AC）并启动，效果待用户确认。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

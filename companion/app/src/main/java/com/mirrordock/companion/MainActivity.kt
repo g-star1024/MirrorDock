@@ -309,7 +309,7 @@ class MainActivity : AppCompatActivity() {
         }
         val badge = TextView(this).apply {
             text = getString(if (entry.isApk) R.string.badge_apk else R.string.badge_file)
-            setTextColor(ContextCompat.getColor(context, R.color.brand_blue))
+            setTextColor(ContextCompat.getColor(context, R.color.accent))
             textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
             background = ContextCompat.getDrawable(context, R.drawable.bg_file_badge)
@@ -338,7 +338,7 @@ class MainActivity : AppCompatActivity() {
         row.addView(info)
         row.addView(TextView(this).apply {
             text = if (entry.isApk) "安装" else "查看"
-            setTextColor(ContextCompat.getColor(context, R.color.brand_blue))
+            setTextColor(ContextCompat.getColor(context, R.color.accent))
             textSize = 13f
             setTypeface(typeface, Typeface.BOLD)
         })
