@@ -302,6 +302,11 @@ trait AdbRuntime: Send + Sync {
     /// 发送一个按键码。`keycode` 只允许来自代码内常量（如 `KEYCODE_BACK`），
     /// 绝不接受用户输入——按键注入属于输入类操作，参数必须可审计。
     fn press_key(&self, serial: &str, keycode: &str) -> Result<(), std::io::Error>;
+    /// 截屏探测：返回 `screencap` 输出的字节数。像素内容就地丢弃，不落盘、不回传。
+    ///
+    /// 密码输入页是安全表面：系统对截屏与镜像同时拒绝输出（实测返回 0 字节，
+    /// 正常锁屏壁纸页约 3.7 MB）。这个字节数就是「密码页是否在屏」的可靠信号。
+    fn screencap_probe_bytes(&self, serial: &str) -> Result<u64, std::io::Error>;
     /// 读取设备当前屏幕的 PNG 快照（原始字节）。
     ///
     /// 返回值是**屏幕内容**，属于最敏感的数据类别：只允许写入用户可见的本地文件，
@@ -666,6 +671,18 @@ impl AdbRuntime for SystemAdbRuntime {
     fn press_key(&self, serial: &str, keycode: &str) -> Result<(), std::io::Error> {
         // keycode 来自代码内常量，作为单个 argv 传入，不做任何 shell 拼接。
         Self::run(&["-s", serial, "shell", "input", "keyevent", keycode])
+    }
+
+    fn screencap_probe_bytes(&self, serial: &str) -> Result<u64, std::io::Error> {
+        // 与 screenshot_png 同一条 exec-out 二进制安全通道，但只统计字节数：
+        // 屏幕像素就地丢弃，不落盘、不回传、绝不入日志。
+        let output = Command::new(adb_binary())
+            .args(["-s", serial, "exec-out", "screencap", "-p"])
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other("adb returned a failing status"));
+        }
+        Ok(output.stdout.len() as u64)
     }
 
     fn power_state(&self, serial: &str) -> Result<String, std::io::Error> {
@@ -2251,6 +2268,65 @@ fn lock_report_with(
         explanation,
         recovery,
     })
+}
+
+// ---------------------------------------------------------------------------
+// 密码输入页（安全表面）探测
+//
+// 真机定案（2026-09-29，双路取证）：锁屏壁纸页可以镜像；用户上滑调出密码输入页
+// （PIN / 图案凭据界面）后，系统对 screencap 与虚拟显示器镜像**同时**拒绝输出——
+// 截屏返回 0 字节、scrcpy 流帧全黑，而物理屏亮着、照常可输入。这是平台级安全
+// 保护：不可绕过，也不应绕过（各机型屏幕与布局差异大，映射点击代输也不通用）。
+//
+// 产品上只做一件事：检测到密码页 → 明确告知用户「此画面受系统安全保护，无法
+// 镜像，请在手机上直接输入密码解锁」，密码页退出后提示自动消失。
+// ---------------------------------------------------------------------------
+
+/// screencap 输出低于该字节数即判定为「安全表面挡住了截屏」。
+/// 实测（1080×2400）：正常锁屏壁纸页约 3.4~3.7 MB；密码页实测 0 字节；
+/// 个别设备可能输出近乎纯黑的 PNG（压缩后同样远小于真实内容）。
+const SECURE_SURFACE_MAX_CAPTURE_BYTES: u64 = 100_000;
+
+/// 一次密码页探测的结论。`detail` 是稳定标记，供诊断与前端区分原因，不是错误文案。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PinPadProbe {
+    active: bool,
+    detail: &'static str,
+}
+
+fn pin_pad_probe_with(runtimes: &AppRuntimes, serial: String) -> Result<PinPadProbe, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    // 三个前置条件任一不满足都如实返回「未激活」：不在锁屏 / 读不到 / 屏幕没点亮
+    // 时，镜像黑屏另有原因（熄屏、DIM 等），不该误报成密码页。
+    let (keyguard, _) = runtimes
+        .adb
+        .window_policy(&serial)
+        .map(|dump| parse_keyguard_state(&dump))
+        .unwrap_or((KeyguardState::Unknown, None));
+    if keyguard != KeyguardState::Locked {
+        return Ok(PinPadProbe { active: false, detail: "keyguard_not_showing" });
+    }
+    let screen = runtimes
+        .adb
+        .power_state(&serial)
+        .map(|dump| parse_screen_state(&dump))
+        .unwrap_or(ScreenState::Unknown);
+    if screen != ScreenState::Awake {
+        return Ok(PinPadProbe { active: false, detail: "screen_not_awake" });
+    }
+    // 截屏探测本身不保存、不回传任何像素——只看字节数。
+    match runtimes.adb.screencap_probe_bytes(&serial) {
+        Ok(bytes) if bytes <= SECURE_SURFACE_MAX_CAPTURE_BYTES => Ok(PinPadProbe {
+            active: true,
+            detail: "secure_surface_blocked_capture",
+        }),
+        Ok(_) => Ok(PinPadProbe { active: false, detail: "capture_ok" }),
+        // 探测失败不等于密码页激活：宁可少提示，不可误报。
+        Err(_) => Ok(PinPadProbe { active: false, detail: "capture_failed" }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4260,6 +4336,19 @@ fn device_lock_report(
     lock_report_with(&runtimes, serial)
 }
 
+/// 探测「密码输入页（安全表面）」是否正在屏上。
+///
+/// 判据来自真机双路取证：锁屏中 + 屏幕点亮 + screencap 输出异常小（实测 0 字节）。
+/// 只读状态与字节数，不保存、不回传任何屏幕像素。前端据此在锁屏面板显示
+/// 「请在手机上输入密码解锁」的提示，密码页退出后自动消失。
+#[tauri::command]
+fn probe_pin_pad_state(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+) -> Result<PinPadProbe, AppError> {
+    pin_pad_probe_with(&runtimes, serial)
+}
+
 #[tauri::command]
 fn list_recent_devices(app: AppHandle) -> Result<Vec<RecentDevice>, AppError> {
     load_recent_devices(&recent_devices_path(&app)?)
@@ -4937,6 +5026,7 @@ pub fn run() {
             update_session_options,
             wake_device,
             device_lock_report,
+            probe_pin_pad_state,
             list_recent_devices,
             forget_recent_device,
             capture_screenshot,
@@ -5009,6 +5099,8 @@ mod tests {
         policy_after_key: Option<DisplayPolicy>,
         /// `screencap -p` 返回的字节流；`None` 表示读取失败。
         screenshot: Option<Vec<u8>>,
+        /// `screencap_probe_bytes` 返回的字节数；`None` 表示探测失败。
+        probe_bytes: Option<u64>,
         /// 设备传输目录的 `ls -1` 输出；`None` 表示读取失败。
         device_listing: Option<String>,
         /// 为真时传输类调用（mkdir/push/pull）一律失败。
@@ -5258,6 +5350,17 @@ mod tests {
             match &self.screenshot {
                 Some(bytes) => Ok(bytes.clone()),
                 None => Err(std::io::Error::other("screenshot unavailable")),
+            }
+        }
+
+        fn screencap_probe_bytes(&self, serial: &str) -> Result<u64, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("probe {serial}"));
+            match self.probe_bytes {
+                Some(bytes) => Ok(bytes),
+                None => Err(std::io::Error::other("probe unavailable")),
             }
         }
 
@@ -6902,6 +7005,79 @@ mod tests {
         let (explanation, _) =
             describe_lock_state(KeyguardState::Unknown, None, ScreenState::Unknown);
         assert!(explanation.contains("无法确认"));
+    }
+
+    // -- 密码输入页（安全表面）探测与远程解锁键盘 --
+
+    #[test]
+    fn pin_pad_probe_activates_only_when_lockscreen_capture_is_blocked() {
+        // 真机定案的判据：锁屏中 + 屏幕点亮 + screencap 输出异常小（实测 0 字节）。
+        let adb = FakeAdb {
+            probe_bytes: Some(0),
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Awake\n",
+            )
+        };
+        let runtimes = runtimes(adb, FakeMirror::running());
+        let report = pin_pad_probe_with(&runtimes, "phone".into()).unwrap();
+        assert!(report.active, "密码页在屏时必须激活：{report:?}");
+        assert_eq!(report.detail, "secure_surface_blocked_capture");
+    }
+
+    #[test]
+    fn pin_pad_probe_stays_inactive_when_capture_looks_normal() {
+        // 正常锁屏壁纸页约 3.4~3.7 MB：可捕获 ⇒ 不是密码页，镜像黑屏另有原因。
+        let adb = FakeAdb {
+            probe_bytes: Some(3_700_000),
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Awake\n",
+            )
+        };
+        let runtimes = runtimes(adb, FakeMirror::running());
+        let report = pin_pad_probe_with(&runtimes, "phone".into()).unwrap();
+        assert!(!report.active);
+        assert_eq!(report.detail, "capture_ok");
+    }
+
+    #[test]
+    fn pin_pad_probe_requires_locked_and_awake_device() {
+        // 熄屏时截屏也可能是黑的，但那不是密码页：绝不激活。
+        let asleep = FakeAdb {
+            probe_bytes: Some(0),
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Asleep\n",
+            )
+        };
+        let report = pin_pad_probe_with(&runtimes(asleep, FakeMirror::running()), "phone".into()).unwrap();
+        assert!(!report.active);
+        assert_eq!(report.detail, "screen_not_awake");
+
+        // 读不到锁屏状态（dumpsys 失败）时保持保守：不激活。
+        let unknown = FakeAdb {
+            probe_bytes: Some(0),
+            ..FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)])
+        };
+        let report = pin_pad_probe_with(&runtimes(unknown, FakeMirror::running()), "phone".into()).unwrap();
+        assert!(!report.active);
+        assert_eq!(report.detail, "keyguard_not_showing");
+
+        // 探测本身失败 ≠ 密码页激活：宁可少弹键盘，不可误报。
+        let broken = FakeAdb {
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Awake\n",
+            )
+        };
+        let report = pin_pad_probe_with(&runtimes(broken, FakeMirror::running()), "phone".into()).unwrap();
+        assert!(!report.active);
+        assert_eq!(report.detail, "capture_failed");
     }
 
     #[test]

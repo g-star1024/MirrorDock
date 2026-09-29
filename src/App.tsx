@@ -436,6 +436,32 @@ function App() {
   }, []);
   const [options, setOptions] = useState<SessionOptions>(readOptions);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [pinPadActive, setPinPadActive] = useState(false);
+  const sessionSerial = session?.serial ?? null;
+  // 密码页守护：会话进行中时周期探测「安全表面（密码输入页）」。
+  // 真机定案：密码页是 Android 安全表面，截屏与镜像同时被拒（镜像黑屏）——
+  // 不可绕过也不应绕过。检测到时在锁屏面板明确告知用户「请在手机上解锁」，
+  // 密码页退出后提示自动消失。探测只读状态与截屏字节数，像素不落盘、不回传。
+  useEffect(() => {
+    if (!sessionActive || !sessionSerial) {
+      setPinPadActive(false);
+      return;
+    }
+    const serial = sessionSerial;
+    let disposed = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const probe = await invoke<{ active: boolean }>("probe_pin_pad_state", { serial });
+        if (!disposed) setPinPadActive(probe.active);
+      } catch {
+        // 读不到（设备离线等）保持现状，不闪烁。
+      }
+    }, 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionActive, sessionSerial]);
   // 通用设置：开机自启（autostart 插件持久化）与 macOS 隐藏 Dock（后端持久化）。
   const [appSettings, setAppSettings] = useState<AppSettingsView>({ hide_dock_icon: false });
   const [autostartEnabled, setAutostartEnabled] = useState(false);
@@ -1300,6 +1326,9 @@ function App() {
                     )}
                     {sessionActive && lockReport?.screen === "asleep" && (
                       <p className="capability-pending" role="status">屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
+                    )}
+                    {sessionActive && pinPadActive && (
+                      <p className="capability-pending" role="status">🔒 此画面受系统安全保护，无法镜像。请在手机上直接输入密码解锁，解锁后画面自动恢复。</p>
                     )}
                   </div>
                 </div>
