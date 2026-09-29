@@ -276,6 +276,19 @@ trait AdbRuntime: Send + Sync {
     fn screen_off_timeout(&self, serial: &str) -> Result<Option<u64>, std::io::Error>;
     /// 写入系统熄屏时间 `screen_off_timeout`（毫秒）。
     fn set_screen_off_timeout(&self, serial: &str, millis: u64) -> Result<(), std::io::Error>;
+    /// 读取系统「充电时保持唤醒」设置 `stay_on_while_plugged_in`（位掩码）。
+    ///
+    /// 这是 scrcpy `--stay-awake` 真正依赖的开关：位掩码命中且设备处于「已插电」时，
+    /// 系统不会因超时熄屏——**锁屏页也一样**。读不到返回 `Ok(None)`。
+    fn stay_on_while_plugged_in(&self, serial: &str) -> Result<Option<u64>, std::io::Error>;
+    /// 写入 `stay_on_while_plugged_in`（位掩码）。
+    fn set_stay_on_while_plugged_in(&self, serial: &str, bits: u64) -> Result<(), std::io::Error>;
+    /// 伪造 / 撤销「正在通过 USB 充电」的电源状态（`dumpsys battery`）。
+    ///
+    /// 无线连接下设备并未插电，`stay_on_while_plugged_in` 不会生效；无线会话期间
+    /// 用这个 shell 测试钩子让系统认为已插电，从而让上面那个开关真正起作用。
+    /// 这是**会话级临时状态**，结束必须撤销——否则手机会一直显示「充电中」。
+    fn set_charging_override(&self, serial: &str, fake_charging: bool) -> Result<(), std::io::Error>;
     /// 读取 `dumpsys window policy` 原始输出，用于判断钥匙锁状态。
     fn window_policy(&self, serial: &str) -> Result<String, std::io::Error>;
     /// 读取 `dumpsys power` 原始输出，用于判断屏幕是否点亮。
@@ -578,7 +591,7 @@ impl AdbRuntime for SystemAdbRuntime {
             "system",
             "screen_off_timeout",
         ])?;
-        Ok(parse_screen_timeout_millis(&raw))
+        Ok(parse_settings_number(&raw))
     }
 
     fn set_screen_off_timeout(&self, serial: &str, millis: u64) -> Result<(), std::io::Error> {
@@ -594,6 +607,43 @@ impl AdbRuntime for SystemAdbRuntime {
             "screen_off_timeout",
             &value,
         ])
+    }
+
+    fn stay_on_while_plugged_in(&self, serial: &str) -> Result<Option<u64>, std::io::Error> {
+        let raw = Self::capture(&[
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "get",
+            "global",
+            "stay_on_while_plugged_in",
+        ])?;
+        Ok(parse_settings_number(&raw))
+    }
+
+    fn set_stay_on_while_plugged_in(&self, serial: &str, bits: u64) -> Result<(), std::io::Error> {
+        let value = bits.to_string();
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "stay_on_while_plugged_in",
+            &value,
+        ])
+    }
+
+    fn set_charging_override(&self, serial: &str, fake_charging: bool) -> Result<(), std::io::Error> {
+        // 固定参数直调。`dumpsys battery` 是系统提供的 shell 测试钩子（uid 2000 可用，
+        // 不需要 root）：`set usb 1` 伪装「USB 已插电」，`reset` 撤销全部覆盖值。
+        if fake_charging {
+            Self::run(&["-s", serial, "shell", "dumpsys", "battery", "set", "usb", "1"])
+        } else {
+            Self::run(&["-s", serial, "shell", "dumpsys", "battery", "reset"])
+        }
     }
 
     fn window_policy(&self, serial: &str) -> Result<String, std::io::Error> {
@@ -818,7 +868,7 @@ struct SessionState {
     ///
     /// 会话进行中存在 ⇒ 设备的 `screen_off_timeout` 当前是 MirrorDock 延长后的值；
     /// 为 `None` 表示未做过补偿。还原成功或从未补偿时清空。
-    screen_timeout_backup: Option<ScreenTimeoutBackup>,
+    keep_awake_backup: Option<KeepAwakeBackup>,
     /// 当前会话**实际使用**的启动参数。
     ///
     /// 保存在这里的原因是：镜像窗口是独立进程，窗口形态（全屏、置顶、旋转、画质）
@@ -840,7 +890,7 @@ impl Default for SessionStore {
             session: MirrorSession::idle(),
             process: None,
             epoch: 0,
-            screen_timeout_backup: None,
+            keep_awake_backup: None,
             options: SessionOptions::default(),
             record_path: None,
         })))
@@ -1352,21 +1402,52 @@ fn wake_screen_for_serial(runtimes: &AppRuntimes, serial: &str) -> Result<(), Ap
 // ---------------------------------------------------------------------------
 // 无线会话的亮屏补偿
 //
-// scrcpy 的 `--stay-awake` 依赖系统的「充电时保持唤醒」，只在 USB 连接下生效；
-// 无线连接时设备仍按超时熄屏，用户在锁屏页来不及输入密码屏幕就黑了。对策：
-// 会话期间把系统的 `screen_off_timeout` 临时延长，会话结束还原原值。这不是
-// 绕过锁屏——锁还在，密码还得用户本人输；只是给用户留出输入的时间。
+// 为什么需要补偿（真机实测的根因链，逐条都有证据）：
+//   1. scrcpy `--stay-awake` 的实现在 server 侧改两个系统设置
+//      （`screen_off_timeout` 与 `stay_on_while_plugged_in`），但手册写明前提是
+//      "when the device is plugged in"——无线连接下设备并未插电，前者的延长值
+//      会被钥匙锁窗口覆盖，后者根本不满足生效条件。
+//   2. 锁屏页由 WindowManager 强制覆盖熄屏超时（实测
+//      `mUserActivityTimeoutOverrideFromWindowManager=10000`），所以唤醒后约
+//      10~13 秒屏幕必灭（`mLastSleepReason=timeout`），与 `screen_off_timeout`
+//      设成多大都无关。
+//   3. 屏幕一灭，scrcpy 镜像的画面就是黑的，用户来不及在镜像里输入解锁密码；
+//      熄屏久了无线链路还会整条掉线（实测 ping 与 mDNS 全无响应）。
+//
+// 对策（仍不绕过锁屏——锁还在，密码还得用户本人输，这里只负责让屏幕别灭）：
+//   会话期间（仅无线、且用户开了「保持唤醒」）把系统置于「充电时保持唤醒」：
+//     ① 备份并写长 `screen_off_timeout`；
+//     ② 备份并写 `stay_on_while_plugged_in = 7`；
+//     ③ 用 `dumpsys battery set usb 1` 让系统认为已插电，使 ② 真正生效。
+//   会话结束（正常停止 / 进程退出 / 应用退出）逐项还原 ③②①。崩溃时靠落盘账本
+//   在下次启动还原，绝不把「假充电」这种临时状态留在用户手机上。
 // ---------------------------------------------------------------------------
 
 /// 补偿期间写入的熄屏时间（12 小时）。取大值的语义与 `--stay-awake` 一致：
 /// 会话期间屏幕不再因超时熄灭；会话结束即还原，不靠这个值省电。
 const WIRELESS_KEEP_AWAKE_TIMEOUT_MS: u64 = 12 * 60 * 60 * 1000;
 
-/// 一次熄屏时间补偿的备份：哪台设备、原来的熄屏时间是多少毫秒。
+/// 「充电时保持唤醒」的位掩码：AC(1) | USB(2) | WIRELESS(4)。
+///
+/// 与 scrcpy `--stay-awake` 写入的值同一语义（`BatteryManager.BATTERY_PLUGGED_*`）。
+const STAY_ON_WHILE_PLUGGED_IN_ALL: u64 = 7;
+
+/// 一次亮屏补偿的账本：哪台设备、被我们改动了什么、原值分别是多少。
+///
+/// 名字里的 `millis` 沿用最初只备份熄屏时间时的字段名（磁盘备份文件靠它保持兼容，
+/// 老版本崩溃残留的文件仍能被解析并还原）。现在账本同时覆盖三把杠杆：
+/// 熄屏时间、充电时保持唤醒、以及「伪造充电中」这一临时电源状态。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ScreenTimeoutBackup {
+struct KeepAwakeBackup {
     serial: String,
+    /// 原 `screen_off_timeout`（毫秒）。
     millis: u64,
+    /// 原 `stay_on_while_plugged_in`；`None` 表示没读到，因而也没有改它。
+    #[serde(default)]
+    stay_on_while_plugged_in: Option<u64>,
+    /// 是否由我们伪造了「充电中」。撤销顺序上它必须最先还原。
+    #[serde(default)]
+    faked_charging: bool,
 }
 
 /// 判断序列号是否为无线传输（决定要不要做亮屏补偿）。
@@ -1377,108 +1458,137 @@ fn is_wireless_serial(serial: &str) -> bool {
     serial.contains(':') || serial.contains(".tcp") || serial.starts_with("adb-")
 }
 
-/// 解析 `settings get system screen_off_timeout` 的输出。
+/// 解析 `settings get` 返回的单个十进制数值（毫秒、位掩码通用）。
 ///
-/// 合法输出是单独一行十进制毫秒数；`null`（键不存在）或任何非数字都返回 `None`。
-fn parse_screen_timeout_millis(raw: &str) -> Option<u64> {
+/// 合法输出是单独一行十进制整数；`null`（键不存在）或任何非数字都返回 `None`。
+fn parse_settings_number(raw: &str) -> Option<u64> {
     raw.trim().parse::<u64>().ok()
 }
 
-/// 无线会话开始（或重启）时补偿熄屏时间。
+/// 无线会话开始（或重启）时拉满三把亮屏补偿杠杆。
 ///
-/// 幂等约定：若备份已存在（重启场景），**只重复写延长值**，绝不把「已延长的当前值」
-/// 再当一次原值备份——那会让原值丢失。读取原值失败（设备刚离线等）时静默跳过：
+/// 幂等约定：若账本已存在（重启场景），**只重复写延长值**，绝不把「已被我们改过的
+/// 当前值」再当一次原值记账——那会让原值丢失。读原值失败（设备刚离线等）时静默跳过：
 /// 少一次补偿只是回到「熄屏偏快」的旧体验，不值得为它打断会话启动。
-fn enable_wireless_keep_awake(
-    adb: &dyn AdbRuntime,
-    store: &SessionStore,
-    serial: &str,
-) {
+fn enable_wireless_keep_awake(adb: &dyn AdbRuntime, store: &SessionStore, serial: &str) {
     // 门禁收在函数内部而不是只靠调用方：任何路径传进 USB 序列号都碰不到设备设置。
     if !is_wireless_serial(serial) {
         return;
     }
-    let existing = store
+    if let Some(existing) = store
         .lock()
         .ok()
-        .and_then(|state| state.screen_timeout_backup.clone());
-    if existing.is_some() {
+        .and_then(|state| state.keep_awake_backup.clone())
+    {
+        // 重启：严格按账本记下的「当初改过哪几项」原样重写，读都不读，账本不动。
         let _ = adb.set_screen_off_timeout(serial, WIRELESS_KEEP_AWAKE_TIMEOUT_MS);
+        if existing.stay_on_while_plugged_in.is_some() {
+            let _ = adb.set_stay_on_while_plugged_in(serial, STAY_ON_WHILE_PLUGGED_IN_ALL);
+        }
+        if existing.faked_charging {
+            let _ = adb.set_charging_override(serial, true);
+        }
         return;
     }
-    let Ok(Some(original)) = adb.screen_off_timeout(serial) else {
+    // 首轮：熄屏时间读不到就整体跳过——它是最保底的一把杠杆，连它都拿不到原值，
+    // 说明设备状态不明，此时不宜再往系统里写任何东西。
+    let Ok(Some(original_timeout)) = adb.screen_off_timeout(serial) else {
         return;
     };
     if adb
         .set_screen_off_timeout(serial, WIRELESS_KEEP_AWAKE_TIMEOUT_MS)
-        .is_ok()
+        .is_err()
     {
-        let backup = ScreenTimeoutBackup {
-            serial: serial.to_owned(),
-            millis: original,
-        };
-        if let Ok(mut state) = store.0.lock() {
-            state.screen_timeout_backup = Some(backup.clone());
-        }
-        // 落盘兜底：应用在会话中崩溃/被强杀时，内存备份随之丢失，靠这个文件在
-        // 下次启动时还原。写入失败只影响崩溃场景的还原，不阻断会话。
-        if let Some(app) = TRAY_APP.get() {
-            if let Ok(path) = screen_timeout_backup_path(app) {
-                let _ = save_screen_timeout_backup(&path, &backup);
-            }
+        return;
+    }
+    // 后两把杠杆逐级降级：读不到原值就不改它。宁可不生效，也绝不留下无法还原的改动。
+    let original_stay_on = adb.stay_on_while_plugged_in(serial).ok().flatten();
+    let stay_on_armed = original_stay_on.is_some()
+        && adb
+            .set_stay_on_while_plugged_in(serial, STAY_ON_WHILE_PLUGGED_IN_ALL)
+            .is_ok();
+    let faked_charging = stay_on_armed && adb.set_charging_override(serial, true).is_ok();
+    let backup = KeepAwakeBackup {
+        serial: serial.to_owned(),
+        millis: original_timeout,
+        stay_on_while_plugged_in: if stay_on_armed { original_stay_on } else { None },
+        faked_charging,
+    };
+    if let Ok(mut state) = store.0.lock() {
+        state.keep_awake_backup = Some(backup.clone());
+    }
+    // 落盘兜底：应用在会话中崩溃/被强杀时内存账本随之丢失，靠这个文件在下次启动
+    // 还原——尤其是别把「假充电」这种临时状态留在用户手机上。写入失败不阻断会话。
+    if let Some(app) = TRAY_APP.get() {
+        if let Ok(path) = keep_awake_backup_path(app) {
+            let _ = save_keep_awake_backup(&path, &backup);
         }
     }
 }
 
-/// 会话结束（正常停止、进程退出、应用退出）时还原熄屏时间。
+/// 逐项撤销一次亮屏补偿。返回是否**全部**还原成功。
 ///
-/// 返回是否已彻底还原。设备离线时还原会失败：备份**保留**在内存与磁盘上，
-/// 交给下次会话开始或下次应用启动重试，绝不悄悄丢弃原值。
+/// 撤销顺序与施加顺序相反，且「假充电」排在最前：它是唯一会改变用户可见状态的一项
+/// （状态栏会显示充电中），只要设备可达就该第一时间撤掉。三项都尝试，不短路。
+fn restore_keep_awake(adb: &dyn AdbRuntime, backup: &KeepAwakeBackup) -> bool {
+    let mut restored = true;
+    if backup.faked_charging {
+        restored &= adb.set_charging_override(&backup.serial, false).is_ok();
+    }
+    if let Some(original) = backup.stay_on_while_plugged_in {
+        restored &= adb
+            .set_stay_on_while_plugged_in(&backup.serial, original)
+            .is_ok();
+    }
+    restored & adb
+        .set_screen_off_timeout(&backup.serial, backup.millis)
+        .is_ok()
+}
+
+/// 会话结束（正常停止、进程退出、应用退出）时还原全部亮屏补偿。
+///
+/// 返回是否已彻底还原。设备离线时还原会失败：账本**保留**在内存与磁盘上，
+/// 交给下次会话开始或下次应用启动重试，绝不悄悄丢弃原值、更不会把「假充电」留下。
 fn disable_wireless_keep_awake(adb: &dyn AdbRuntime, store: &SessionStore) -> bool {
     let backup = store
         .lock()
         .ok()
-        .and_then(|mut state| state.screen_timeout_backup.take());
+        .and_then(|mut state| state.keep_awake_backup.take());
     let Some(backup) = backup else {
         return true;
     };
-    if adb
-        .set_screen_off_timeout(&backup.serial, backup.millis)
-        .is_ok()
-    {
+    if restore_keep_awake(adb, &backup) {
         if let Some(app) = TRAY_APP.get() {
-            if let Ok(path) = screen_timeout_backup_path(app) {
+            if let Ok(path) = keep_awake_backup_path(app) {
                 let _ = fs::remove_file(path);
             }
         }
         true
     } else {
-        // 还原失败：把备份放回（若期间没有新的补偿写入），等待下次机会。
+        // 还原失败：把账本放回（若期间没有新的补偿写入），等待下次机会。
         if let Ok(mut state) = store.0.lock() {
-            if state.screen_timeout_backup.is_none() {
-                state.screen_timeout_backup = Some(backup);
+            if state.keep_awake_backup.is_none() {
+                state.keep_awake_backup = Some(backup);
             }
         }
         false
     }
 }
 
-/// 应用启动时检查崩溃遗留的备份文件并尝试还原（best-effort）。
+/// 应用启动时检查崩溃遗留的账本文件并尝试还原（best-effort）。
 ///
-/// 设备未连接时还原会失败，文件保留，下次启动再试。
-fn restore_persisted_screen_timeout(adb: &dyn AdbRuntime, path: &Path) {
-    let Some(backup) = load_screen_timeout_backup(path) else {
+/// 设备未连接时还原会失败，文件保留，下次启动再试。这条路径最重要的作用是兜住
+/// 「应用在会话中崩溃，手机被留在假充电状态」这种情况。
+fn restore_persisted_keep_awake(adb: &dyn AdbRuntime, path: &Path) {
+    let Some(backup) = load_keep_awake_backup(path) else {
         return;
     };
-    if adb
-        .set_screen_off_timeout(&backup.serial, backup.millis)
-        .is_ok()
-    {
+    if restore_keep_awake(adb, &backup) {
         let _ = fs::remove_file(path);
     }
 }
 
-fn screen_timeout_backup_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+fn keep_awake_backup_path(app: &AppHandle) -> Result<PathBuf, AppError> {
     app.path()
         .app_data_dir()
         .map(|directory| directory.join("screen-timeout-backup.json"))
@@ -1491,7 +1601,7 @@ fn screen_timeout_backup_path(app: &AppHandle) -> Result<PathBuf, AppError> {
         })
 }
 
-fn save_screen_timeout_backup(path: &Path, backup: &ScreenTimeoutBackup) -> Result<(), AppError> {
+fn save_keep_awake_backup(path: &Path, backup: &KeepAwakeBackup) -> Result<(), AppError> {
     let directory = path.parent().ok_or_else(|| {
         AppError::new("settings_write_failed", "无法保存本机设置。", "请检查本机文件权限。")
     })?;
@@ -1506,7 +1616,7 @@ fn save_screen_timeout_backup(path: &Path, backup: &ScreenTimeoutBackup) -> Resu
     })
 }
 
-fn load_screen_timeout_backup(path: &Path) -> Option<ScreenTimeoutBackup> {
+fn load_keep_awake_backup(path: &Path) -> Option<KeepAwakeBackup> {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -4630,8 +4740,8 @@ pub fn run() {
             let _ = MONITOR_ADB.set(Box::new(SystemAdbRuntime));
             // 上次会话若因应用被强杀而没来得及还原熄屏时间，这里补上。
             // 设备未连接时还原失败，备份文件保留，下次启动再试。
-            if let Ok(backup_path) = screen_timeout_backup_path(app.handle()) {
-                restore_persisted_screen_timeout(&SystemAdbRuntime, &backup_path);
+            if let Ok(backup_path) = keep_awake_backup_path(app.handle()) {
+                restore_persisted_keep_awake(&SystemAdbRuntime, &backup_path);
             }
             Ok(())
         })
@@ -4730,9 +4840,13 @@ mod tests {
         install_output: Option<String>,
         /// 设备当前的熄屏时间（毫秒）；`None` 表示读取失败或返回 `null`。
         screen_timeout: Arc<Mutex<Option<u64>>>,
-        /// 为真时写入熄屏时间一律失败（模拟设备离线）。用互斥包一层，测试可在
+        /// 设备当前的「充电时保持唤醒」位掩码；`None` 表示读取失败或返回 `null`。
+        stay_on_bits: Arc<Mutex<Option<u64>>>,
+        /// 设备当前是否被伪造成「充电中」。
+        fake_charging: Arc<Mutex<bool>>,
+        /// 为真时一切设备侧写入失败（模拟设备离线）。用互斥包一层，测试可在
         /// 会话中途翻转（先成功补偿、再模拟离线还原失败）。
-        set_timeout_fails: Arc<Mutex<bool>>,
+        device_writes_fail: Arc<Mutex<bool>>,
         /// `pull_file` 成功时写进本机文件的内容，用于验证回执字节数。
         pulled_contents: Vec<u8>,
         calls: Arc<Mutex<Vec<String>>>,
@@ -4846,10 +4960,52 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("set_timeout {serial} {millis}"));
-            if *self.set_timeout_fails.lock().unwrap() {
+            if *self.device_writes_fail.lock().unwrap() {
                 Err(std::io::Error::other("device offline"))
             } else {
                 *self.screen_timeout.lock().unwrap() = Some(millis);
+                Ok(())
+            }
+        }
+
+        fn stay_on_while_plugged_in(&self, serial: &str) -> Result<Option<u64>, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("get_stay_on {serial}"));
+            Ok(*self.stay_on_bits.lock().unwrap())
+        }
+
+        fn set_stay_on_while_plugged_in(
+            &self,
+            serial: &str,
+            bits: u64,
+        ) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("set_stay_on {serial} {bits}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                Err(std::io::Error::other("device offline"))
+            } else {
+                *self.stay_on_bits.lock().unwrap() = Some(bits);
+                Ok(())
+            }
+        }
+
+        fn set_charging_override(
+            &self,
+            serial: &str,
+            fake_charging: bool,
+        ) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("set_charging {serial} {fake_charging}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                Err(std::io::Error::other("device offline"))
+            } else {
+                *self.fake_charging.lock().unwrap() = fake_charging;
                 Ok(())
             }
         }
@@ -5894,14 +6050,14 @@ mod tests {
 
     #[test]
     fn screen_timeout_output_is_parsed_strictly() {
-        assert_eq!(parse_screen_timeout_millis("30000\n"), Some(30000));
-        assert_eq!(parse_screen_timeout_millis("  60000  "), Some(60000));
-        assert_eq!(parse_screen_timeout_millis("0"), Some(0));
+        assert_eq!(parse_settings_number("30000\n"), Some(30000));
+        assert_eq!(parse_settings_number("  60000  "), Some(60000));
+        assert_eq!(parse_settings_number("0"), Some(0));
         // `null`（键不存在）与垃圾输出一律视为读不到。
-        assert_eq!(parse_screen_timeout_millis("null\n"), None);
-        assert_eq!(parse_screen_timeout_millis(""), None);
-        assert_eq!(parse_screen_timeout_millis("-1\n"), None);
-        assert_eq!(parse_screen_timeout_millis("not-a-number\n"), None);
+        assert_eq!(parse_settings_number("null\n"), None);
+        assert_eq!(parse_settings_number(""), None);
+        assert_eq!(parse_settings_number("-1\n"), None);
+        assert_eq!(parse_settings_number("not-a-number\n"), None);
     }
 
     #[test]
@@ -5916,9 +6072,126 @@ mod tests {
 
         // 设备侧被写成延长值；内存备份保存的是原值 30000。
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
-        let backup = store.lock().unwrap().screen_timeout_backup.clone().expect("backup must exist");
+        let backup = store.lock().unwrap().keep_awake_backup.clone().expect("backup must exist");
         assert_eq!(backup.serial, "192.168.1.9:33739");
         assert_eq!(backup.millis, 30000);
+    }
+
+    #[test]
+    fn wireless_keep_awake_arms_all_three_levers() {
+        // 真机根因：只延长熄屏时间对锁屏无效（钥匙锁窗口强制覆盖超时），必须同时打开
+        // 「充电时保持唤醒」并让系统以为已插电，屏幕才会真正不再因超时熄灭。
+        let adb = FakeAdb {
+            screen_timeout: Arc::new(Mutex::new(Some(30000))),
+            stay_on_bits: Arc::new(Mutex::new(Some(0))),
+            ..FakeAdb::default()
+        };
+        let store = SessionStore::default();
+
+        enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
+
+        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
+        assert_eq!(*adb.stay_on_bits.lock().unwrap(), Some(STAY_ON_WHILE_PLUGGED_IN_ALL));
+        assert!(*adb.fake_charging.lock().unwrap());
+        let backup = store.lock().unwrap().keep_awake_backup.clone().expect("backup must exist");
+        assert_eq!(backup.millis, 30000);
+        assert_eq!(backup.stay_on_while_plugged_in, Some(0));
+        assert!(backup.faked_charging);
+    }
+
+    #[test]
+    fn wireless_keep_awake_skips_levers_whose_original_value_is_unreadable() {
+        // 读不到原值就不改它：宁可不生效，也绝不留下无法还原的改动。
+        let adb = FakeAdb {
+            screen_timeout: Arc::new(Mutex::new(Some(30000))),
+            ..FakeAdb::default()
+        };
+        let store = SessionStore::default();
+
+        enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
+
+        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
+        assert_eq!(*adb.stay_on_bits.lock().unwrap(), None);
+        assert!(!*adb.fake_charging.lock().unwrap());
+        let calls = adb.calls.lock().unwrap().clone();
+        assert!(!calls.iter().any(|call| call.starts_with("set_stay_on")), "{calls:?}");
+        assert!(!calls.iter().any(|call| call.starts_with("set_charging")), "{calls:?}");
+        let backup = store.lock().unwrap().keep_awake_backup.clone().unwrap();
+        assert_eq!(backup.stay_on_while_plugged_in, None);
+        assert!(!backup.faked_charging);
+    }
+
+    #[test]
+    fn disabling_restores_all_three_levers_with_fake_charging_first() {
+        let adb = FakeAdb {
+            screen_timeout: Arc::new(Mutex::new(Some(30000))),
+            stay_on_bits: Arc::new(Mutex::new(Some(0))),
+            ..FakeAdb::default()
+        };
+        let store = SessionStore::default();
+        enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
+        adb.calls.lock().unwrap().clear();
+
+        assert!(disable_wireless_keep_awake(&adb, &store));
+
+        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(30000));
+        assert_eq!(*adb.stay_on_bits.lock().unwrap(), Some(0));
+        assert!(!*adb.fake_charging.lock().unwrap());
+        assert!(store.lock().unwrap().keep_awake_backup.is_none());
+        // 假充电是唯一影响用户可见状态的一项（状态栏会显示充电中），撤销必须排最前。
+        let calls = adb.calls.lock().unwrap().clone();
+        assert!(calls[0].starts_with("set_charging"), "撤销顺序：{calls:?}");
+    }
+
+    #[test]
+    fn session_restart_re_arms_every_lever_without_touching_the_backup() {
+        let adb = FakeAdb {
+            screen_timeout: Arc::new(Mutex::new(Some(30000))),
+            stay_on_bits: Arc::new(Mutex::new(Some(0))),
+            ..FakeAdb::default()
+        };
+        let store = SessionStore::default();
+        enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
+        // 模拟设备在会话重启期间被外部复位。
+        *adb.stay_on_bits.lock().unwrap() = Some(0);
+        *adb.fake_charging.lock().unwrap() = false;
+        let before = adb.calls.lock().unwrap().len();
+
+        enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
+
+        assert_eq!(*adb.stay_on_bits.lock().unwrap(), Some(STAY_ON_WHILE_PLUGGED_IN_ALL));
+        assert!(*adb.fake_charging.lock().unwrap());
+        let backup = store.lock().unwrap().keep_awake_backup.clone().unwrap();
+        assert_eq!(backup.millis, 30000, "重启不得覆盖原值账本");
+        assert_eq!(backup.stay_on_while_plugged_in, Some(0), "重启不得覆盖原值账本");
+        let calls = adb.calls.lock().unwrap().clone();
+        let restarted = &calls[before..];
+        assert!(
+            restarted.iter().all(|call| !call.starts_with("get_")),
+            "重启分支只写不读：{restarted:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_backup_file_without_the_new_levers_still_loads() {
+        // 兼容老版本崩溃残留的账本（只记了 serial + millis）：新字段取默认值，
+        // 因而只还原熄屏时间，绝不凭空写回一个猜测出来的「充电时保持唤醒」。
+        let path = std::env::temp_dir().join("mirrordock-legacy-keep-awake.json");
+        fs::write(&path, br#"{"serial":"192.168.1.9:33739","millis":15000}"#).unwrap();
+
+        let backup = load_keep_awake_backup(&path).expect("legacy file must parse");
+        assert_eq!(backup.millis, 15000);
+        assert_eq!(backup.stay_on_while_plugged_in, None);
+        assert!(!backup.faked_charging);
+
+        let adb = FakeAdb::default();
+        restore_persisted_keep_awake(&adb, &path);
+
+        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(15000));
+        let calls = adb.calls.lock().unwrap().clone();
+        assert!(!calls.iter().any(|call| call.starts_with("set_stay_on")), "{calls:?}");
+        assert!(!calls.iter().any(|call| call.starts_with("set_charging")), "{calls:?}");
+        assert!(!path.exists(), "还原成功后账本文件必须删除");
     }
 
     #[test]
@@ -5933,7 +6206,7 @@ mod tests {
 
         // USB 序列号不做补偿：不读也不写，设备设置保持原样。
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(30000));
-        assert!(store.lock().unwrap().screen_timeout_backup.is_none());
+        assert!(store.lock().unwrap().keep_awake_backup.is_none());
         assert!(adb.calls.lock().unwrap().is_empty());
     }
 
@@ -5950,7 +6223,7 @@ mod tests {
         // 而不能把延长值当新原值备份——那会让真正的原值 30000 永久丢失。
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
-        let backup = store.lock().unwrap().screen_timeout_backup.clone().unwrap();
+        let backup = store.lock().unwrap().keep_awake_backup.clone().unwrap();
         assert_eq!(backup.millis, 30000, "重启不得覆盖原值备份");
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
         // 第二次启用只写不读。
@@ -5970,7 +6243,7 @@ mod tests {
 
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
-        assert!(store.lock().unwrap().screen_timeout_backup.is_none());
+        assert!(store.lock().unwrap().keep_awake_backup.is_none());
         // 读不到原值就不写：绝不瞎猜一个"默认值"当原值。
         assert!(adb.calls.lock().unwrap().iter().all(|call| !call.starts_with("set_timeout")));
     }
@@ -5987,7 +6260,7 @@ mod tests {
         assert!(disable_wireless_keep_awake(&adb, &store));
 
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(30000));
-        assert!(store.lock().unwrap().screen_timeout_backup.is_none());
+        assert!(store.lock().unwrap().keep_awake_backup.is_none());
     }
 
     #[test]
@@ -6000,21 +6273,24 @@ mod tests {
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
         // 补偿成功后设备离线：写入原值必然失败。
-        *adb.set_timeout_fails.lock().unwrap() = true;
+        *adb.device_writes_fail.lock().unwrap() = true;
         assert!(!disable_wireless_keep_awake(&adb, &store));
         // 设备离线导致还原失败：备份必须保留，等下次会话或下次启动重试。
-        assert!(store.lock().unwrap().screen_timeout_backup.is_some());
+        assert!(store.lock().unwrap().keep_awake_backup.is_some());
     }
 
     #[test]
     fn full_wireless_session_compensates_and_restores_screen_timeout() {
-        // 端到端：无线序列号 + 保持唤醒 ⇒ 启动后延长、停止后还原。
+        // 端到端：无线序列号 + 保持唤醒 ⇒ 启动后三把杠杆全部拉满、停止后逐项还原。
         let adb = FakeAdb {
             devices: vec![device("192.168.1.9:33739", DeviceState::Ready)],
             screen_timeout: Arc::new(Mutex::new(Some(30000))),
+            stay_on_bits: Arc::new(Mutex::new(Some(4))),
             ..FakeAdb::default()
         };
         let device_timeout = adb.screen_timeout.clone();
+        let device_stay_on = adb.stay_on_bits.clone();
+        let device_charging = adb.fake_charging.clone();
         let runtimes = runtimes(adb, FakeMirror::running());
         let store = SessionStore::default();
 
@@ -6027,11 +6303,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(*device_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
+        assert_eq!(*device_stay_on.lock().unwrap(), Some(STAY_ON_WHILE_PLUGGED_IN_ALL));
+        assert!(*device_charging.lock().unwrap());
 
         stop_mirroring_with(&store).unwrap();
         disable_wireless_keep_awake(runtimes.adb.as_ref(), &store);
         assert_eq!(*device_timeout.lock().unwrap(), Some(30000));
-        assert!(store.lock().unwrap().screen_timeout_backup.is_none());
+        assert_eq!(*device_stay_on.lock().unwrap(), Some(4));
+        assert!(!*device_charging.lock().unwrap());
+        assert!(store.lock().unwrap().keep_awake_backup.is_none());
     }
 
     #[test]

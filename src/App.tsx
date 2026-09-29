@@ -1431,6 +1431,8 @@ function App() {
                 <p className="capability-pending">{lockReport.explanation}</p>
                 <p className="capability-pending">{lockReport.recovery}</p>
                 <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁；设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
+                <p className="capability-pending">开了「会话期间保持手机唤醒」后，镜像进行中屏幕不会自动熄灭，锁屏页可以慢慢输入密码。无线连接时这一项会临时把手机置为「充电时保持唤醒」，因此手机状态栏可能显示充电中——这只是为了让系统不熄屏，会话结束后会自动恢复原设置。</p>
+                <p className="capability-pending">反过来，如果没开这一项：无线连接下手机熄屏十几秒后屏幕就会熄灭，镜像窗口随之变黑无法点击；熄屏时间过长，无线连接还可能整条掉线，需要重新配对。</p>
               </div>
             )}
           </section>
@@ -1746,7 +1748,7 @@ function App() {
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">会话期间保持手机唤醒</span>
-                    <span className="setting-desc">镜像进行中手机不会自动熄屏，锁屏页有充足时间输入解锁密码。USB 与无线均生效；无线连接通过临时延长手机的熄屏时间实现，会话结束后自动恢复原设置。</span>
+                    <span className="setting-desc">镜像进行中手机不会自动熄屏，锁屏页有充足时间输入解锁密码。USB 与无线均生效：无线连接时会临时把手机置为「充电时保持唤醒」，所以状态栏可能显示充电中；会话结束即恢复原设置。</span>
                   </div>
                   <label className="setting-toggle"><input type="checkbox" aria-label="会话期间保持手机唤醒" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})} /></label>
                 </div>

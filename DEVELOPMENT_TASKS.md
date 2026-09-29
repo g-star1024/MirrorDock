@@ -286,6 +286,24 @@
   - 文案同步：设置页「会话期间保持手机唤醒」说明与帮助中心「锁屏与解锁」改为「USB 与无线均生效；无线通过临时延长熄屏时间实现，结束自动恢复」。
   - 测试：新增 8 项（无线/USB 序列号判定、超时解析严格性、补偿+备份、USB 不碰设置、重启不覆盖原值、读不到不写、还原成功/失败保留、端到端补偿还原）；Rust 129 / clippy 0 / vitest 40 / build 通过。
 
+- [x] X10-10 X10-09 无效的定案与真正修复：锁屏页 10 秒必灭的真因是钥匙锁窗口覆盖超时（真机取证）。
+  - 真机证据链（Redmi M2104K10AC / Android 13 / MIUI，无线会话）：
+    - `mScreenOffTimeoutSetting=43200000` —— X10-09 写入的 12h 延长**确实生效了**；
+    - `mUserActivityTimeoutOverrideFromWindowManager=10000` —— 锁屏页由 WindowManager 把用户活动超时强制覆盖成 10 秒；
+    - `mLastSleepReason=timeout` —— 唤醒后约 13 秒屏幕又被系统按超时熄灭。
+    ⇒ 结论：**锁屏页上 `screen_off_timeout` 被钥匙锁窗口覆盖，设多大都没用**；X10-09 只对这一把杠杆下药，因此在锁屏场景无效。
+  - 供应链证据：scrcpy 4.1 的 `scrcpy-server` 内部同时改 `screen_off_timeout` 与 `stay_on_while_plugged_in`（均带 restore），而 `scrcpy.1` 手册对 `-w/--stay-awake` 的定义是「Keep the device on while scrcpy is running, **when the device is plugged in**」⇒ 无线下设备未插电，`stay_on_while_plugged_in` 不满足生效条件，这是 X10-09 无效的根因。
+  - 另外实测到一条独立故障：手机熄屏十余分钟后**整台从网络消失**（ping 100% 丢包、无 mDNS 广播、ADB transport 变 offline/消失），即「镜像窗口点不动」并非点击被拒，而是无线链路整条断了。
+  - 真正修复（仍不绕锁屏，只负责让屏幕别灭）——会话期间把系统置于「充电时保持唤醒」三把杠杆：
+    ① 备份并写长 `screen_off_timeout`（沿用 X10-09）；
+    ② 备份并写 `stay_on_while_plugged_in = 7`（AC|USB|WIRELESS，与 scrcpy 同语义）；
+    ③ `dumpsys battery set usb 1` 让系统认为已插电，使 ② 真正生效（系统自带 shell 测试钩子，uid 2000 可用，不需 root）。
+    结束后按 ③→②→① 逐项还原，崩溃时由落盘账本在下次启动还原。
+  - 安全边界与副作用（如实告知）：假充电是**会话级临时状态**，无线会话期间手机状态栏可能显示「充电中」（唯一用户可见副作用，因此撤销顺序上它排最前）；不注入任何解锁凭据、不解除钥匙锁。设置页与帮助中心已同步说明，避免用户误判为故障。
+  - 实现：AdbRuntime 新增 `stay_on_while_plugged_in`/`set_stay_on_while_plugged_in`/`set_charging_override` 三方法（SystemAdbRuntime 固定参数直调）；`KeepAwakeBackup` 由「只备份熄屏时间」扩展为三杠杆账本（新增字段带 `#[serde(default)]`，磁盘文件仍是 `screen-timeout-backup.json`，**老版本崩溃残留的账本仍可解析并还原**）；新增 `restore_keep_awake` 统一撤销，`disable_wireless_keep_awake` 与启动还原共用；后两把杠杆逐级降级（读不到原值就不改它，宁可不生效也不留无法还原的改动）。
+  - 测试：新增 5 项（三杠杆全拉满、读不到原值则跳过该杠杆、撤销顺序且假充电最前、会话重启只重写不覆盖账本、老版本账本文件兼容）；Rust 134 / clippy 0 / vitest 40 / build 通过。
+  - ⚠️ **待真机验证**（手机在排查过程中掉线，无法当场实测）：需重连后确认三杠杆生效、锁屏页可持续亮、会话结束后手机状态栏充电指示消失。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
