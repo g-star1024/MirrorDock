@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 主视觉卡：石墨墨色渐变 + 大圆角。 -->
+<!-- 主视觉卡：墨色底（带青碧冷调）渐变 + 大圆角。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <gradient
         android:angle="315"
