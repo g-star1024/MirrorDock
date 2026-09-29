@@ -404,6 +404,10 @@ fn keep_awake_by_default() -> bool {
     true
 }
 
+fn keyboard_uhid_by_default() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct SessionOptions {
@@ -455,6 +459,17 @@ struct SessionOptions {
     /// 主动选择。scrcpy 文档明确：只显示物理触摸，不显示 scrcpy 自己注入的点击。
     #[serde(default)]
     show_touches: bool,
+    /// 键盘输入模式（scrcpy `--keyboard`）。
+    ///
+    /// `true`（默认）＝ UHID 物理键盘模式：手机把电脑当作外接硬件键盘，
+    /// 输入文本框时**全屏软键盘收起为小候选条**，直接用电脑键盘打字（中文候选
+    /// 由手机输入法的小候选条完成）。`false` ＝ scrcpy 默认注入模式：电脑输入法
+    /// 组好的文字直接注入手机，但手机软键盘会照常弹出、遮住下半屏。
+    ///
+    /// 默认取 UHID：用户反馈「微信发送时唤起手机自带输入法，不方便输入」——
+    /// 软键盘遮挡是镜像控制场景的主要痛点；UHID 不影响点击、剪贴板与快捷键。
+    #[serde(default = "keyboard_uhid_by_default")]
+    keyboard_uhid: bool,
     /// 只读演示模式（scrcpy `--no-control`）：电脑键鼠不控制手机，只观看画面。
     ///
     /// **默认关闭**。这是「隐私遮罩」的诚实替代：scrcpy 没有任何遮盖画面内容的
@@ -478,6 +493,7 @@ impl Default for SessionOptions {
             audio: true,
             shortcut_mod: None,
             show_touches: false,
+            keyboard_uhid: true,
             read_only: false,
         }
     }
@@ -511,6 +527,12 @@ impl SessionOptions {
         if self.keep_awake {
             args.push("--stay-awake".into());
         }
+        // 键盘模式二选一，显式传参不依赖 scrcpy 默认值（见 SessionOptions 文档）。
+        args.push(if self.keyboard_uhid {
+            "--keyboard=uhid".into()
+        } else {
+            "--keyboard=scrcpy".into()
+        });
         if !self.clipboard_autosync {
             args.push("--no-clipboard-autosync".into());
         }
@@ -870,7 +892,14 @@ impl MirrorRuntime for ScrcpyRuntime {
         options: &SessionOptions,
         record_path: Option<&Path>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
-        let mut command = Command::new(scrcpy_binary());
+        // macOS：经带图标的 bundle 启动（Dock 显示「MirrorDock 镜像」）；
+        // 失败或非 macOS 时回退为直接启动 scrcpy。显式传 ADB 指向随包 adb，
+        // bundle 与裸二进制两种形态都能找到它。
+        let scrcpy = scrcpy_binary();
+        let adb = adb_binary();
+        let launch = macos_mirror_bundle_exec(&scrcpy, &adb).unwrap_or_else(|| scrcpy.clone());
+        let mut command = Command::new(launch);
+        command.env("ADB", &adb);
         command
             .arg("--serial")
             .arg(serial)
@@ -3172,6 +3201,93 @@ fn bundled_binary(resource_roots: &[PathBuf], sub: &str, binary: &str) -> Option
         .iter()
         .map(|root| root.join(sub).join(binary))
         .find(|path| path.is_file())
+}
+
+/// 镜像窗口的 Dock 图标包装（仅 macOS 生效）。
+///
+/// 直接运行 scrcpy 裸二进制时，SDL 会把 scrcpy 自带的绿色安卓机器人图标挂到
+/// Dock 上（用户反馈：与主客户端风格割裂）。把 scrcpy 包进一个带
+/// `CFBundleIconFile` 的最小 `.app` bundle 再启动，LaunchServices 会按 bundle
+/// 注册，Dock 显示「MirrorDock 镜像」与主客户端同款图标。
+///
+/// bundle 放在 scrcpy 同目录下（与真实文件同卷，内容直接复制）；任何一步失败
+/// 都返回 `None`，调用方回退为直接启动 scrcpy 原始二进制——包装只是外观增强，
+/// 绝不能挡住镜像本身。
+fn macos_mirror_bundle_exec(scrcpy: &Path, adb: &Path) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let dir = scrcpy.parent()?;
+    let bundle = dir.join("MirrorDock Mirror.app");
+    let contents = bundle.join("Contents");
+    let macos_dir = contents.join("MacOS");
+    let resources_dir = contents.join("Resources");
+    std::fs::create_dir_all(&macos_dir).ok()?;
+    std::fs::create_dir_all(&resources_dir).ok()?;
+    mirror_copy(scrcpy, &macos_dir.join("scrcpy"))?;
+    if let Some(server) = Some(dir.join("scrcpy-server")).filter(|path| path.is_file()) {
+        let _ = mirror_copy(&server, &macos_dir.join("scrcpy-server"));
+    }
+    // adb 也放进 bundle：scrcpy 启动时会在自己的目录里找 adb。
+    let _ = mirror_copy(adb, &macos_dir.join("adb"));
+    if let Some(icon) = app_icon_icns() {
+        let _ = mirror_copy(&icon, &resources_dir.join("AppIcon.icns"));
+    }
+    std::fs::write(contents.join("Info.plist"), mirror_bundle_plist()).ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        // 临时签名（ad-hoc）：保证 LaunchServices 干净地接受这个 bundle；失败不致命。
+        let _ = std::process::Command::new("codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&bundle)
+            .output();
+    }
+    let _ = bundle;
+    Some(macos_dir.join("scrcpy"))
+}
+
+/// Info.plist 内容：名字显示为「MirrorDock 镜像」，图标取 Resources/AppIcon.icns。
+fn mirror_bundle_plist() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>scrcpy</string>
+  <key>CFBundleIdentifier</key><string>com.mirrordock.mirror</string>
+  <key>CFBundleName</key><string>MirrorDock 镜像</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleShortVersionString</key><string>0.2.1</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+"#
+    .into()
+}
+
+/// 复制单个文件到 bundle（内容始终以源为准）；失败返回 None 让上层回退。
+fn mirror_copy(src: &Path, dst: &Path) -> Option<()> {
+    if !src.is_file() {
+        return None;
+    }
+    let _ = std::fs::remove_file(dst);
+    std::fs::copy(src, dst).ok().map(|_| ())
+}
+
+/// 主客户端的应用图标（icns）：发行包里在 Contents/Resources/icon.icns，
+/// 开发模式退回仓库内 src-tauri/icons/icon.icns。
+fn app_icon_icns() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        // <...>/MirrorDock.app/Contents/MacOS/mirrordock → Contents/Resources
+        if let Some(contents) = exe.parent().and_then(|macos| macos.parent()) {
+            let icon = contents.join("Resources").join("icon.icns");
+            if icon.is_file() {
+                return Some(icon);
+            }
+        }
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("icons").join("icon.icns");
+    dev.is_file().then_some(dev)
 }
 
 fn adb_binary() -> PathBuf {
@@ -5800,6 +5916,7 @@ mod tests {
                 audio: true,
                 shortcut_mod: None,
                 show_touches: false,
+                keyboard_uhid: true,
                 read_only: false,
             };
             let args = options.arguments().unwrap();
@@ -5807,6 +5924,7 @@ mod tests {
             assert!(args.contains(&format!("--video-bit-rate={bitrate}")));
             assert!(args.contains(&"--video-codec=h264".into()));
             assert!(args.contains(&"--stay-awake".into()));
+            assert!(args.contains(&"--keyboard=uhid".into()));
             assert!(args.contains(&"--fullscreen".into()));
             assert!(args.contains(&"--always-on-top".into()));
             assert!(args.contains(&"--display-orientation=90".into()));
@@ -7668,6 +7786,67 @@ mod tests {
         assert!(!parsed.show_touches);
         assert!(!parsed.read_only);
         assert!(parsed.shortcut_mod.is_none());
+    }
+
+    #[test]
+    fn keyboard_mode_defaults_to_uhid_and_falls_back_to_scrcpy_injection() {
+        // 默认 UHID 物理键盘：软键盘收起，电脑键盘直接打字。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(args.contains(&"--keyboard=uhid".into()));
+
+        // 显式关闭：回到 scrcpy 注入模式，仍是显式传参不依赖 scrcpy 默认。
+        let injected = SessionOptions {
+            keyboard_uhid: false,
+            ..Default::default()
+        };
+        let args = injected.arguments().unwrap();
+        assert!(args.contains(&"--keyboard=scrcpy".into()));
+        assert!(!args.iter().any(|argument| argument.contains("uhid")));
+
+        // 旧配置（缺字段）经 serde 默认走 UHID。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
+        assert!(parsed.keyboard_uhid);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mirror_bundle_wraps_scrcpy_with_icon_and_plist() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrordock-bundle-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        let runtime = directory.join("runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        // 假的 scrcpy / adb / scrcpy-server / 图标源。
+        let scrcpy = runtime.join("scrcpy");
+        std::fs::write(&scrcpy, b"fake-scrcpy").unwrap();
+        let adb = directory.join("adb");
+        std::fs::write(&adb, b"fake-adb").unwrap();
+        std::fs::write(runtime.join("scrcpy-server"), b"fake-server").unwrap();
+        let icon = directory.join("icon.icns");
+        std::fs::write(&icon, b"fake-icns").unwrap();
+
+        let exec = macos_mirror_bundle_exec(&scrcpy, &adb).expect("bundle 构建应成功");
+        assert!(exec.ends_with("MirrorDock Mirror.app/Contents/MacOS/scrcpy"));
+        let contents = exec.parent().unwrap().parent().unwrap();
+        assert_eq!(
+            std::fs::read(contents.join("MacOS/scrcpy")).unwrap(),
+            b"fake-scrcpy"
+        );
+        assert_eq!(
+            std::fs::read(contents.join("MacOS/adb")).unwrap(),
+            b"fake-adb"
+        );
+        assert!(contents.join("MacOS/scrcpy-server").is_file());
+        // 图标由 app_icon_icns() 解析（发行包/仓库内），这里只验证已复制到位。
+        assert!(contents.join("Resources/AppIcon.icns").is_file());
+        let plist = std::fs::read_to_string(contents.join("Info.plist")).unwrap();
+        assert!(plist.contains("com.mirrordock.mirror"));
+        assert!(plist.contains("MirrorDock 镜像"));
+        assert!(plist.contains("AppIcon"));
+
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     // -- 截图：可见、可撤销、失败必须能被发现 --

@@ -342,6 +342,14 @@
   - 定制应用图标：此前 Dock/任务栏图标是 Tauri 框架默认图标（蓝橙环），无定制。新图标与产品视觉体系一致（石墨墨色 #101A1C~#2A4145 渐变底 + 青碧 #50B0B8 系描边，「显示器 + 手机」投屏母题 + 连接光点），PIL 绘制 1024×1024 源文件经 `tauri icon` 生成全平台尺寸（icns/ico/ Square*/android mipmap）。验证 scrcpy 镜像窗口不会在 Dock 增加图标（lsappinfo 仅 MirrorDock 注册），用户所见即应用图标本身。
   - ⚠️ 交付说明：本条目随本地 `tauri build` 装机验证；正式 tag 发布（v0.2.2-beta）待用户确认后执行。
 
+- [x] X10-16 镜像窗口 Dock 图标包装 + 键盘直输（UHID）+ 主客户端图标按用户裁定重做。
+  - 用户裁定澄清：主客户端 Dock 图标应保持 Tauri 蓝橙环风格（X10-15 的「显示器+手机」设计被否，git 恢复后重做）；要改的其实是**镜像窗口（scrcpy）在 Dock 里的绿色安卓机器人图标**。
+  - 镜像窗口图标包装（macOS）：直接运行 scrcpy 裸二进制时 SDL 把 scrcpy 自带图标挂上 Dock。新增 `macos_mirror_bundle_exec`：在 scrcpy 同目录构建最小 `MirrorDock Mirror.app` bundle（Info.plist com.mirrordock.mirror + 主客户端同款 icon.icns + scrcpy/adb/scrcpy-server 复制件），经 bundle 启动后 LaunchServices 按 bundle 注册，Dock 显示「MirrorDock 镜像」与主客户端同款图标；任何失败回退裸二进制，绝不挡镜像。真机实验先行（/tmp 测试 bundle 经 lsappinfo 证实注册为「MirrorDock 镜像」）。启动点显式 `env("ADB", adb_binary)` 保证 bundle 内也能找到 adb。Rust 测试 +1。
+  - 键盘直输（UHID）：用户反馈「微信发送时唤起手机自带输入法，不方便输入」。SessionOptions 新增 `keyboard_uhid`（serde 默认 true）：开启传 `--keyboard=uhid`（手机把电脑当外接键盘，全屏软键盘收起为小候选条，电脑键盘直接打字），关闭传 `--keyboard=scrcpy`（注入模式，软键盘照常弹出）。前端设置页新开关「键盘直输（手机不弹全屏键盘）」，旧配置无缝回填。Rust 测试 +1、vitest 断言同步。
+  - 主客户端图标 v2（用户指定 Tauri 蓝橙环配色+风格）：PIL 绘制海军蓝渐变圆角方底 + 蓝橙双色粗环（蓝 340° 渐变环 + 橙 150° 呼应弧 + 中心橙点），经 tauri icon 生成全平台尺寸；镜像 bundle 的 AppIcon.icns 自动同款，两图标风格一致。
+  - 门禁：Rust 148 / clippy 0 / vitest 40 / build 全绿。
+  - ⚠️ 待真机验证：镜像运行时 Dock 应显示「MirrorDock 镜像」蓝橙环图标；微信输入框点击后不再弹全屏键盘（底部小候选条直接打字）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

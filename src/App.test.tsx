@@ -250,6 +250,7 @@ describe("readOptions", () => {
       audio: true,
       shortcut_mod: null,
       show_touches: false,
+      keyboard_uhid: true,
       read_only: false,
     });
   });
@@ -264,6 +265,7 @@ describe("readOptions", () => {
     expect(options.shortcut_mod).toBeNull();
     expect(options.show_touches).toBe(true);
     expect(options.read_only).toBe(true);
+    expect(options.keyboard_uhid).toBe(true);
   });
 
   it("rejects_invalid_stored_values_and_returns_defaults", () => {

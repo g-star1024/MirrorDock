@@ -73,7 +73,7 @@ export type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; read_only: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
@@ -140,7 +140,7 @@ type Screenshot = { file_name: string; path: string; bytes: number };
 type TransferReceipt = { file_name: string; path: string; bytes: number };
 // 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
 type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, read_only: false };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false };
 export function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
@@ -158,6 +158,7 @@ export function readOptions(): SessionOptions {
         audio: typeof value.audio === "boolean" ? value.audio : true,
         shortcut_mod: ["lctrl", "rctrl", "lalt", "ralt", "lsuper", "rsuper"].includes(value.shortcut_mod) ? value.shortcut_mod : null,
         show_touches: typeof value.show_touches === "boolean" ? value.show_touches : false,
+        keyboard_uhid: typeof value.keyboard_uhid === "boolean" ? value.keyboard_uhid : true,
         read_only: typeof value.read_only === "boolean" ? value.read_only : false,
       };
     }
@@ -1794,6 +1795,13 @@ function App() {
                     <span className="setting-desc">在电脑和手机之间直接复制粘贴。</span>
                   </div>
                   <label className="setting-toggle"><input type="checkbox" aria-label="双向同步剪贴板" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">键盘直输（手机不弹全屏键盘）</span>
+                    <span className="setting-desc">开启后手机把电脑当作外接键盘：点输入框不再弹出全屏软键盘，只在屏幕底部留一条小候选栏，直接用电脑键盘打字即可。关闭则由电脑把组好的文字直接注入手机，手机软键盘照常弹出。更改后重启会话生效。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="键盘直输（手机不弹全屏键盘）" checked={options.keyboard_uhid} onChange={e => updateOptions({...options, keyboard_uhid: e.target.checked})} /></label>
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
