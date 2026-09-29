@@ -333,6 +333,10 @@
   - 新增「技术栈与致谢」：核心依赖表（scrcpy / adb / Tauri / React / TypeScript / Vite / Rust / Kotlin）、Rust 生态（tokio / rustls / tokio-rustls / rcgen / ed25519-dalek / serde）、前端生态（qrcode / Vitest / Testing Library / jsdom）、特别感谢（Genymobile、AOSP、Tauri 社区），并指向 THIRD_PARTY_NOTICES.md。
   - 纯文档变更，无代码改动。
 
+- [x] X10-14 发布 v0.2.1-beta（tag `v0.2.1-beta`，commit `5de74bb`）。
+  - 版本号 0.2.0 → 0.2.1（tauri.conf.json / package.json / Cargo.toml 三处同步）；首版带出 X10-05～X10-13：伴侣 0.1.7-poc、屏幕唤醒智能化（DIM→BACK）、会话期 20s 变暗守护、无线三杠杆保活、密码页安全表面检测提示、内置帮助中心 7 篇、GitHub Pages 官网。
+  - 本地门禁：Rust 145 / clippy 0 / vitest 40 / build 全绿；推送后 tag 触发 build.yml（verify → 四平台打包 + 伴侣 APK → release）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
