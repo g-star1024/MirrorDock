@@ -23,6 +23,7 @@ description: MirrorDock（Android 桌面镜像工具）全部工程工作的入�
 | 伴侣 App 的协程作用域、StateFlow/SharedFlow、Channel、取消与生命周期 | `kotlin-concurrency-and-flow` |
 | Compose UI 测试、截图测试、语义断言、baseline 录制 | `compose-ui-testing-patterns` |
 | Android 测试策略、测试框架接入、覆盖率与测试脚手架 | `testing-setup` |
+| 设备会话期间保持亮屏、排查镜像黑屏/屏幕自动熄灭/无线调试掉线 | `android-screen-awake-forensics` |
 | Google Play 政策、Data Safety、账号删除、Accessibility API 申报 | `play-policy-insights` |
 | 浏览器 / WebView 端到端 UI 流程自动化 | `playwright` |
 | 某个模块或功能的语言/框架级安全审查（Python / JS-TS / Go） | `security-best-practices` |
