@@ -254,12 +254,19 @@ export function capabilitySummary(capabilities: DeviceCapabilities) {
   const system = capabilities.android_release
     ? `Android ${capabilities.android_release}`
     : "系统版本未知";
-  return [
-    capabilities.label,
-    system,
-    supportText(capabilities.mirroring_supported, "可以镜像", "可能无法镜像", "镜像支持情况未知"),
-    supportText(capabilities.audio_forwarding_supported, "可转发声音", "不能转发声音", "声音能力未知"),
-  ].join(" · ");
+  const mirror = supportText(
+    capabilities.mirroring_supported,
+    "画面可以镜像到电脑",
+    "系统较旧，画面镜像可能不稳定",
+    "画面能否镜像还无法确认",
+  );
+  const audio = supportText(
+    capabilities.audio_forwarding_supported,
+    "手机声音会一起传到电脑",
+    "手机声音无法传到电脑",
+    "手机声音能否转发还无法确认",
+  );
+  return `${capabilities.label}（${system}）：${mirror}，${audio}。`;
 }
 
 export function sessionStatus(session: MirrorSession): string | null {
@@ -1249,31 +1256,14 @@ function App() {
                     <strong>{readyDevice.label}</strong>
                     <p>已授权，可以开始镜像。</p>
                   </div>
+                  <button className="secondary-button ready-wake" type="button" disabled={lockBusy} onClick={() => void wakeDevice(readyDevice.serial)}>
+                    {lockBusy ? "正在唤醒…" : "屏幕唤醒"}
+                  </button>
                   <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || sessionActive} onClick={() => void startMirroring(readyDevice.serial)}>
                     {sessionActive ? "会话进行中" : isLaunching ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
                   </button>
                 </div>
                 <div className="panel-grid">
-                  <div className="capability-panel" aria-live="polite">
-                    <strong>这台手机的能力</strong>
-                    {capabilities ? (
-                      <>
-                        <p className="capability-summary">{capabilitySummary(capabilities)}</p>
-                        <ul className="capability-notices">
-                          {capabilities.notices.map((notice) => (
-                            <li key={notice.code} className={`notice-${notice.level}`}>
-                              <strong>{notice.title}</strong>
-                              <p>{notice.detail}</p>
-                            </li>
-                          ))}
-                        </ul>
-                      </>
-                    ) : capabilitiesError ? (
-                      <p className="capability-pending" role="alert">{capabilitiesError}</p>
-                    ) : (
-                      <p className="capability-pending">正在读取这台手机的能力信息…</p>
-                    )}
-                  </div>
                   <div className="capability-panel" aria-live="polite">
                     <strong>手机当前的锁屏状态</strong>
                     {lockReport ? (
@@ -1287,9 +1277,6 @@ function App() {
                     ) : (
                       <p className="capability-pending">正在读取手机当前的锁屏状态…</p>
                     )}
-                    <button className="secondary-button" type="button" disabled={lockBusy} onClick={() => void wakeDevice(readyDevice.serial)}>
-                      {lockBusy ? "正在唤醒…" : "屏幕唤醒"}
-                    </button>
                     {sessionActive && lockReport?.screen === "asleep" && (
                       <p className="capability-pending" role="status">屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
                     )}
@@ -1392,6 +1379,30 @@ function App() {
               <strong>为什么需要授权？</strong>
               <p>画面与控制经由 Android 官方调试机制，只授予你确认过的电脑，可随时在手机开发者选项中撤销。</p>
             </aside>
+
+            {/* 能力说明属于「了解性内容」：沉到底部授权说明之下，占满整幅，不抢占操作动线。 */}
+            {readyDevice && (
+              <div className="capability-panel capability-foot" aria-live="polite">
+                <strong>这台手机能做什么</strong>
+                {capabilities ? (
+                  <>
+                    <p className="capability-summary">{capabilitySummary(capabilities)}</p>
+                    <ul className="capability-notices">
+                      {capabilities.notices.map((notice) => (
+                        <li key={notice.code} className={`notice-${notice.level}`}>
+                          <strong>{notice.title}</strong>
+                          <p>{notice.detail}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : capabilitiesError ? (
+                  <p className="capability-pending" role="alert">{capabilitiesError}</p>
+                ) : (
+                  <p className="capability-pending">正在读取这台手机的信息…</p>
+                )}
+              </div>
+            )}
           </section>
 
           {/* -- 工具 -------------------------------------------------------- */}

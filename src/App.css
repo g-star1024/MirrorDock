@@ -162,6 +162,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .setup-steps p, .device-row p, .ready-panel p { margin: 4px 0 0; color: #6b7686; font-size: 13.5px; line-height: 1.45; }
 
 .ready-panel { display: flex; align-items: center; gap: 13px; margin-top: 14px; padding: 15px 16px; border: 1px solid #d9ecdf; border-radius: 14px; background: #f2faf5; }
+/* 屏幕唤醒贴着主按钮右侧排列（主按钮的 margin-left:auto 移交给唤醒按钮）。 */
+.ready-panel .ready-wake { margin-left: auto; }
+.ready-panel .primary-button { margin-left: 0; }
 .device-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 
 /* -- 设置页：每张卡一个主题，行式布局（名称+说明居左，控件居右） ---------- */

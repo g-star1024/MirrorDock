@@ -167,8 +167,8 @@ describe("supportText and capabilitySummary", () => {
     const summary = capabilitySummary(capabilities);
     expect(summary).toContain("Xiaomi M2104K10AC");
     expect(summary).toContain("Android 13");
-    expect(summary).toContain("可以镜像");
-    expect(summary).toContain("声音能力未知");
+    expect(summary).toContain("画面可以镜像到电脑");
+    expect(summary).toContain("手机声音能否转发还无法确认");
   });
 });
 
