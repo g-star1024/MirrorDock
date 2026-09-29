@@ -241,6 +241,19 @@ jobs:
           merge-multiple: true
       - name: 列出待发布文件
         run: ls -la release-files
+      # 重发（删 tag→重推 tag）会让旧 Release 变成「孤立 Release」，其上传地址失效：
+      # 表现为正文更新成功、资产被清空后上传失败。发布前先删掉同 tag 的历史 Release
+      # （保留 tag 本身），让下面这步总是「全新创建」，彻底消除该不稳定路径。
+      - name: 清理同 tag 的历史 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release delete "${GITHUB_REF_NAME}" --yes --cleanup-tag=false
+            echo "已删除历史 Release：${GITHUB_REF_NAME}（tag 保留）"
+          else
+            echo "无历史 Release，将直接创建：${GITHUB_REF_NAME}"
+          fi
       - name: 创建 Release 并上传产物
         uses: softprops/action-gh-release@v2
         with:
@@ -285,3 +298,14 @@ jobs:
             release-files/**/app-debug.apk
             release-files/**/SHA256SUMS-*.txt
             release-files/**/sbom-*.json
+      # 发布后自校验：至少要有「四平台安装包 + APK + 校验文件」，防止发空包却显示成功。
+      - name: 校验 Release 资产生效
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          count=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets | length')
+          echo "Release 资产数：${count}"
+          gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
+          if [ "${count}" -lt 10 ]; then
+            echo "资产数不足（期望至少 10 个：四平台安装包 + 伴侣 APK + SHA256SUMS）"; exit 1
+          fi

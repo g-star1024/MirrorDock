@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MirrorDock — 把 Android 手机画面接到电脑上</title>
+<meta name="description" content="MirrorDock 通过数据线或同一 Wi-Fi，把 Android 手机的屏幕、声音与键鼠控制接到你的电脑。本地优先，画面不过服务器。支持 Windows / macOS / Linux。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A1020'/%3E%3Crect x='9' y='6' width='14' height='20' rx='3' fill='none' stroke='%2360A5FA' stroke-width='2'/%3E%3Crect x='13' y='22' width='6' height='1.6' rx='.8' fill='%2360A5FA'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --ink-950:#070C18;
+    --ink-900:#0A1020;
+    --ink-800:#131C31;
+    --ink-700:#1E2A44;
+    --blue-700:#1D4ED8;
+    --blue-600:#2563EB;
+    --blue-400:#60A5FA;
+    --blue-100:#E4EDFF;
+    --paper:#FFFFFF;
+    --paper-2:#F3F6FA;
+    --line:#D9E0EB;
+    --line-soft:#E8EDF4;
+    --text:#141E2E;
+    --muted:#5B6B82;
+    --ok:#0E9F6E;
+    --warn:#B4530A;
+
+    --font-ui:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Source Han Sans SC",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+
+    --w:1080px;
+    --pad:24px;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--text);
+    font-family:var(--font-ui);
+    font-size:16px;
+    line-height:1.72;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue-700);text-decoration:none}
+  a:hover{text-decoration:underline}
+  :focus-visible{outline:2px solid var(--blue-600);outline-offset:3px;border-radius:3px}
+
+  .skip{
+    position:absolute;left:-9999px;top:0;background:var(--paper);padding:12px 16px;z-index:99
+  }
+  .skip:focus{left:12px;top:12px}
+
+  .wrap{width:100%;max-width:var(--w);margin:0 auto;padding:0 var(--pad)}
+
+  /* ---------- 顶部导航 ---------- */
+  .site-head{
+    position:sticky;top:0;z-index:50;
+    background:rgba(10,16,32,.92);
+    backdrop-filter:saturate(140%) blur(10px);
+    border-bottom:1px solid rgba(255,255,255,.08);
+  }
+  .site-head .wrap{
+    display:flex;align-items:center;gap:28px;height:64px
+  }
+  .brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em}
+  .brand:hover{text-decoration:none}
+  .brand svg{display:block}
+  .nav{display:flex;gap:22px;margin-left:auto}
+  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500}
+  .nav a:hover{color:#fff;text-decoration:none}
+  .head-cta{
+    display:inline-flex;align-items:center;height:36px;padding:0 16px;border-radius:8px;
+    background:var(--blue-600);color:#fff;font-size:14.5px;font-weight:600
+  }
+  .head-cta:hover{background:var(--blue-700);text-decoration:none}
+
+  /* ---------- Hero ---------- */
+  .hero{
+    background:
+      radial-gradient(1200px 420px at 78% -10%, rgba(37,99,235,.30), transparent 62%),
+      linear-gradient(180deg,var(--ink-900) 0%, var(--ink-950) 100%);
+    color:#fff;
+    padding:64px 0 76px;
+    position:relative;
+    overflow:hidden;
+  }
+  .hero::after{
+    /* 像素点阵：手机屏幕的最小单位 */
+    content:"";position:absolute;inset:0;
+    background-image:radial-gradient(rgba(255,255,255,.10) 1px, transparent 1.4px);
+    background-size:22px 22px;
+    opacity:.55;
+    mask-image:linear-gradient(180deg,rgba(0,0,0,.9),transparent 78%);
+    -webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,.9),transparent 78%);
+    pointer-events:none;
+  }
+  .hero .wrap{
+    position:relative;z-index:1;
+    display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,.94fr);
+    gap:56px;align-items:center;
+  }
+  .kicker{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:13.5px;color:#9FC0F5;border:1px solid rgba(96,165,250,.34);
+    background:rgba(37,99,235,.14);
+    padding:4px 12px;border-radius:999px;margin-bottom:22px
+  }
+  .kicker .dot{width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 0 3px rgba(74,222,128,.2)}
+  h1{
+    margin:0 0 18px;
+    font-size:clamp(30px,4.5vw,50px);
+    line-height:1.2;font-weight:650;letter-spacing:-.015em
+  }
+  h1 .dim{color:#8FA6C6;font-weight:500}
+  .lede{
+    margin:0 0 30px;font-size:17px;line-height:1.8;color:#C3CFE2;max-width:34em
+  }
+  .cta-row{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:26px}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    height:48px;padding:0 22px;border-radius:10px;
+    font-size:15.5px;font-weight:600;border:1px solid transparent;cursor:pointer
+  }
+  .btn-primary{background:var(--blue-600);color:#fff}
+  .btn-primary:hover{background:var(--blue-700);text-decoration:none}
+  .btn-ghost{background:rgba(255,255,255,.06);color:#E6EDF8;border-color:rgba(255,255,255,.22)}
+  .btn-ghost:hover{background:rgba(255,255,255,.12);text-decoration:none}
+  .plat-row{display:flex;flex-wrap:wrap;gap:10px 18px;font-size:13.5px;color:#9FB0C8}
+  .plat-row span{display:inline-flex;align-items:center;gap:7px}
+  .plat-row svg{opacity:.9}
+  .hero-note{
+    margin:22px 0 0;padding-left:14px;border-left:2px solid rgba(96,165,250,.5);
+    font-size:13.5px;color:#93A5BE;line-height:1.7;max-width:40em
+  }
+
+  /* ---------- 实测数据条 ---------- */
+  .measured{
+    background:var(--ink-800);border-top:1px solid rgba(255,255,255,.07);
+    color:#C9D6E9;padding:20px 0
+  }
+  .measured .wrap{
+    display:flex;flex-wrap:wrap;gap:14px 34px;align-items:baseline;
+    font-size:13.5px
+  }
+  .measured b{color:#fff;font-weight:650;font-variant-numeric:tabular-nums;font-size:15px}
+  .measured .sep{color:#54637C}
+
+  /* ---------- 通用区块 ---------- */
+  section{padding:84px 0}
+  .band{background:var(--paper-2);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
+  h2{
+    margin:0 0 14px;font-size:clamp(23px,2.6vw,31px);line-height:1.3;font-weight:650;letter-spacing:-.01em
+  }
+  .sec-lede{margin:0 0 40px;color:var(--muted);max-width:44em;font-size:16px}
+
+  /* 功能区：一个主面板 + 一组发丝分隔的条目（不做等大卡片阵列） */
+  .features{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:48px;align-items:start}
+  .panel{
+    background:var(--paper);border:1px solid var(--line);border-radius:14px;
+    padding:26px 26px 22px
+  }
+  .panel h3{margin:0 0 10px;font-size:18.5px;font-weight:650}
+  .panel p{margin:0 0 16px;color:var(--muted);font-size:15px}
+  .keys{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  kbd{
+    font-family:var(--font-mono);font-size:12.5px;line-height:1;
+    padding:7px 9px;border-radius:6px;border:1px solid var(--line);
+    background:var(--paper-2);color:#2C3A50;white-space:nowrap
+  }
+  .keys-note{font-size:13px;color:var(--muted);margin-top:12px}
+  .rows{list-style:none;margin:0;padding:0}
+  .rows li{padding:17px 0;border-bottom:1px solid var(--line-soft)}
+  .rows li:first-child{padding-top:0}
+  .rows li:last-child{border-bottom:0;padding-bottom:0}
+  .rows h4{margin:0 0 5px;font-size:15.5px;font-weight:650}
+  .rows p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.66}
+
+  /* 三步：内容本身是序列，用编号 */
+  .steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px}
+  .steps li{position:relative;padding-top:26px;border-top:2px solid var(--blue-600)}
+  .steps .n{
+    position:absolute;top:-2px;left:0;transform:translateY(-50%);
+    background:var(--blue-600);color:#fff;font-family:var(--font-mono);
+    font-size:12px;width:26px;height:20px;border-radius:999px;
+    display:flex;align-items:center;justify-content:center
+  }
+  .steps h3{margin:0 0 8px;font-size:16.5px;font-weight:650}
+  .steps p{margin:0;color:var(--muted);font-size:14.5px}
+  .steps code{
+    font-family:var(--font-mono);font-size:13px;background:var(--paper);
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px
+  }
+
+  /* 边界：本页的记忆点 */
+  .boundary{
+    display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:48px;align-items:start
+  }
+  .boundary h2{margin-bottom:12px}
+  .boundary .note{
+    font-size:14.5px;color:var(--muted);border-left:2px solid var(--line);padding-left:16px
+  }
+  .bound{list-style:none;margin:0;padding:0}
+  .bound li{
+    display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--line-soft);font-size:15px
+  }
+  .bound li:last-child{border-bottom:0}
+  .bound .x{
+    flex:0 0 auto;width:20px;height:20px;border-radius:50%;margin-top:4px;
+    background:#FDECEC;color:#C0392B;font-size:13px;line-height:20px;text-align:center;font-weight:700
+  }
+  .bound .y{
+    flex:0 0 auto;width:20px;height:20px;border-radius:50%;margin-top:4px;
+    background:#E6F6EF;color:var(--ok);font-size:13px;line-height:20px;text-align:center;font-weight:700
+  }
+  .bound b{font-weight:650}
+  .bound span.t{color:var(--muted);display:block;font-size:14px;margin-top:3px}
+
+  /* 下载 */
+  .dl-table{width:100%;border-collapse:collapse;font-size:14.5px}
+  .dl-table caption{
+    text-align:left;color:var(--muted);font-size:13.5px;padding-bottom:14px
+  }
+  .dl-table th,.dl-table td{
+    text-align:left;padding:15px 14px 15px 0;border-bottom:1px solid var(--line-soft);vertical-align:top
+  }
+  .dl-table th{font-weight:600;color:#38465C;font-size:13.5px;border-bottom:1px solid var(--line)}
+  .dl-table td:first-child{white-space:nowrap;font-weight:600}
+  .dl-table .fname{font-family:var(--font-mono);font-size:12.5px;color:var(--muted);display:block;margin-top:3px}
+  .dl-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:26px}
+  .btn-line{
+    display:inline-flex;align-items:center;height:42px;padding:0 18px;border-radius:9px;
+    border:1px solid var(--line);background:var(--paper);color:var(--text);font-size:14.5px;font-weight:600
+  }
+  .btn-line:hover{border-color:var(--blue-400);color:var(--blue-700);text-decoration:none}
+  .dl-hint{font-size:13.5px;color:var(--muted);margin-top:16px;line-height:1.7}
+
+  /* FAQ */
+  details{
+    border-bottom:1px solid var(--line-soft);padding:4px 0
+  }
+  details[open]{padding-bottom:10px}
+  summary{
+    cursor:pointer;padding:16px 30px 16px 0;font-size:15.5px;font-weight:600;position:relative;list-style:none
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::after{
+    content:"";position:absolute;right:6px;top:26px;width:9px;height:9px;
+    border-right:1.8px solid var(--muted);border-bottom:1.8px solid var(--muted);
+    transform:rotate(45deg);transition:transform .18s ease
+  }
+  details[open] summary::after{transform:rotate(-135deg);top:28px}
+  details p{margin:0 0 4px;color:var(--muted);font-size:14.5px;max-width:62em}
+
+  footer{
+    background:var(--ink-900);color:#93A5BE;padding:44px 0 40px;font-size:13.5px;
+    border-top:1px solid rgba(255,255,255,.08)
+  }
+  footer .wrap{display:flex;flex-wrap:wrap;gap:18px 32px;align-items:center}
+  footer a{color:#C4D0E4}
+  footer .spacer{margin-left:auto}
+  footer .lic{color:#6E7E97}
+
+  @media (max-width:900px){
+    .hero .wrap{grid-template-columns:1fr;gap:44px}
+    .features{grid-template-columns:1fr;gap:36px}
+    .boundary{grid-template-columns:1fr;gap:28px}
+    .steps{grid-template-columns:1fr;gap:22px}
+    section{padding:64px 0}
+    .nav{display:none}
+  }
+  @media (max-width:560px){
+    .hero{padding:44px 0 56px}
+    .head-cta{height:34px;padding:0 12px;font-size:14px}
+    .dl-table th:nth-child(3),.dl-table td:nth-child(3){display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    *{animation:none !important;transition:none !important}
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+        <rect width="22" height="22" rx="5" fill="#131C31"/>
+        <rect x="6" y="4" width="10" height="14" rx="2.4" fill="none" stroke="#60A5FA" stroke-width="1.6"/>
+        <rect x="9.2" y="15.2" width="3.6" height="1.2" rx=".6" fill="#60A5FA"/>
+      </svg>
+      MirrorDock
+    </a>
+    <nav class="nav" aria-label="页面导航">
+      <a href="#features">功能</a>
+      <a href="#start">开始使用</a>
+      <a href="#limits">隐私与边界</a>
+      <a href="#download">下载</a>
+      <a href="#faq">常见问题</a>
+    </nav>
+    <a class="head-cta" href="#download">下载测试版</a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="wrap">
+      <div>
+        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.2.0 测试版已发布</p>
+        <h1>把手机放到<br><span class="dim">这台电脑的桌面上。</span></h1>
+        <p class="lede">
+          MirrorDock 用一根数据线或同一个 Wi-Fi，把 Android 手机的屏幕、声音和键鼠控制接到电脑上。
+          画面只在你自己的设备之间流动，不经过任何服务器。
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#download">下载测试版</a>
+          <a class="btn btn-ghost" href="#features">看看它能做什么</a>
+        </div>
+        <div class="plat-row">
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="2" width="14" height="9" rx="1.2" fill="#60A5FA"/><rect x="4.5" y="12" width="7" height="1.6" rx=".8" fill="#9FC0F5"/></svg>
+            Windows
+          </span>
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="1.5" width="12" height="9" rx="1.2" fill="#60A5FA"/><rect x="6" y="12" width="4" height="1.6" rx=".8" fill="#9FC0F5"/></svg>
+            macOS（Intel 与 Apple 芯片）
+          </span>
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4" fill="none" stroke="#60A5FA" stroke-width="1.5"/><ellipse cx="8" cy="8" rx="2.6" ry="6.4" fill="none" stroke="#9FC0F5" stroke-width="1"/></svg>
+            Linux
+          </span>
+          <span>
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="1.5" width="7" height="13" rx="1.6" fill="none" stroke="#60A5FA" stroke-width="1.5"/></svg>
+            Android 伴侣 App
+          </span>
+        </div>
+        <p class="hero-note">
+          这是测试版：安装包为 debug 签名、暂不提供自动更新，专业版功能已内置激活码无需手动激活。
+        </p>
+      </div>
+
+      <!-- 视觉：镜像窗口 —— 电脑上的窗口里，是手机屏幕，下面带一层倒影 -->
+      <div aria-hidden="true">
+        <svg viewBox="0 0 560 470" width="100%" style="display:block;max-width:560px">
+          <defs>
+            <linearGradient id="glass" x1="0" y1="0" x2="0.6" y2="1">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity=".10"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#0F172C"/>
+              <stop offset="1" stop-color="#152039"/>
+            </linearGradient>
+            <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#60A5FA" stop-opacity="0"/>
+              <stop offset=".5" stop-color="#93C5FD" stop-opacity=".55"/>
+              <stop offset="1" stop-color="#60A5FA" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#fff" stop-opacity=".16"/>
+              <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+            </linearGradient>
+            <clipPath id="phoneClip"><rect x="212" y="88" width="136" height="304" rx="16"/></clipPath>
+          </defs>
+
+          <!-- 桌面窗口 -->
+          <rect x="24" y="20" width="512" height="392" rx="14" fill="url(#glass)" stroke="rgba(255,255,255,.22)"/>
+          <rect x="24" y="20" width="512" height="42" rx="14" fill="rgba(255,255,255,.05)"/>
+          <g fill="rgba(255,255,255,.34)">
+            <circle cx="52" cy="41" r="4"/><circle cx="68" cy="41" r="4"/><circle cx="84" cy="41" r="4"/>
+          </g>
+          <text x="110" y="46" fill="#B9C7DC" font-family="PingFang SC, system-ui, sans-serif" font-size="12.5">MirrorDock — 正在镜像 Redmi（1072 × 2400）</text>
+
+          <!-- 手机屏（竖屏） -->
+          <rect x="212" y="88" width="136" height="304" rx="16" fill="url(#screen)" stroke="rgba(255,255,255,.28)"/>
+          <g clip-path="url(#phoneClip)">
+            <rect x="212" y="88" width="136" height="304" fill="url(#screen)"/>
+            <!-- 状态栏 -->
+            <rect x="222" y="98" width="34" height="6" rx="3" fill="rgba(255,255,255,.30)"/>
+            <rect x="318" y="98" width="20" height="6" rx="3" fill="rgba(255,255,255,.22)"/>
+            <!-- 应用图标网格 -->
+            <g fill="rgba(147,197,253,.85)">
+              <rect x="228" y="126" width="26" height="26" rx="7"/>
+              <rect x="267" y="126" width="26" height="26" rx="7" fill="rgba(96,165,250,.7)"/>
+              <rect x="306" y="126" width="26" height="26" rx="7" fill="rgba(191,219,254,.55)"/>
+              <rect x="228" y="167" width="26" height="26" rx="7" fill="rgba(96,165,250,.55)"/>
+              <rect x="267" y="167" width="26" height="26" rx="7" fill="rgba(191,219,254,.7)"/>
+              <rect x="306" y="167" width="26" height="26" rx="7" fill="rgba(147,197,253,.6)"/>
+              <rect x="228" y="208" width="26" height="26" rx="7" fill="rgba(191,219,254,.5)"/>
+              <rect x="267" y="208" width="26" height="26" rx="7" fill="rgba(147,197,253,.7)"/>
+              <rect x="306" y="208" width="26" height="26" rx="7" fill="rgba(96,165,250,.65)"/>
+            </g>
+            <!-- 底部导航条 -->
+            <rect x="244" y="368" width="72" height="5" rx="2.5" fill="rgba(255,255,255,.28)"/>
+            <!-- 一次性的「点亮」光带 -->
+            <rect x="196" y="88" width="60" height="304" fill="url(#sweep)" opacity=".9">
+              <animate attributeName="x" from="196" to="352" dur="1.5s" begin=".25s" fill="freeze"/>
+              <animate attributeName="opacity" from="0" to="0.9" dur=".3s" begin=".25s" fill="freeze"/>
+              <animate attributeName="opacity" from="0.9" to="0" dur=".5s" begin="1.6s" fill="freeze"/>
+            </rect>
+          </g>
+
+          <!-- 倒影（镜像母题） -->
+          <g opacity=".16" transform="translate(0,560) scale(1,-1)">
+            <rect x="212" y="88" width="136" height="80" rx="14" fill="url(#fade)"/>
+          </g>
+
+          <!-- 数据浮标 -->
+          <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5">
+            <rect x="366" y="146" width="118" height="30" rx="8" fill="rgba(10,16,32,.72)" stroke="rgba(96,165,250,.45)"/>
+            <circle cx="382" cy="161" r="3.4" fill="#4ADE80"/>
+            <text x="392" y="165" fill="#DBE7F8">首帧 0.99s · P95</text>
+            <rect x="366" y="186" width="118" height="30" rx="8" fill="rgba(10,16,32,.72)" stroke="rgba(96,165,250,.3)"/>
+            <text x="380" y="205" fill="#B9C7DC">峰值约 35 FPS</text>
+            <rect x="76" y="146" width="112" height="30" rx="8" fill="rgba(10,16,32,.72)" stroke="rgba(96,165,250,.3)"/>
+            <text x="90" y="165" fill="#B9C7DC">1072 × 2400</text>
+            <rect x="76" y="186" width="112" height="30" rx="8" fill="rgba(10,16,32,.72)" stroke="rgba(96,165,250,.3)"/>
+            <text x="90" y="205" fill="#B9C7DC">局域网直连</text>
+          </g>
+
+          <!-- 键鼠反向控制提示 -->
+          <path d="M150 262 L206 262" stroke="rgba(96,165,250,.55)" stroke-width="1.2" stroke-dasharray="4 4"/>
+          <path d="M206 262 l-7 -4 v8 z" fill="rgba(96,165,250,.75)"/>
+          <text x="46" y="266" fill="#9FB0C8" font-family="PingFang SC, system-ui, sans-serif" font-size="12">鼠标键盘控制手机</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <div class="measured">
+    <div class="wrap">
+      <span>真机实测（Android 13 手机 + macOS Intel）</span>
+      <span class="sep" aria-hidden="true">|</span>
+      <span>首帧延迟 <b>0.99 秒</b>（P95）</span>
+      <span class="sep" aria-hidden="true">|</span>
+      <span>连续镜像 <b>60 / 60 分钟</b>无中断，录像文件可正常播放</span>
+      <span class="sep" aria-hidden="true">|</span>
+      <span>画面峰值约 <b>35 FPS</b> @ 1072 × 2400</span>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>在电脑上做手机上的一切</h2>
+      <p class="sec-lede">
+        镜像、控制、声音、截图、录像、传文件都在同一个窗口里完成，不用在手机和电脑之间来回换手。
+      </p>
+
+      <div class="features">
+        <div class="panel">
+          <h3>镜像与操控，带一整套快捷键</h3>
+          <p>
+            手机画面实时显示在电脑窗口里，鼠标和键盘反向控制手机。窗口获得焦点时也能直接按快捷键操作，
+            不必回到主界面。
+          </p>
+          <div class="keys">
+            <kbd>⌃ / ⌘ + Alt + S</kbd>
+            <kbd>⌃ / ⌘ + Alt + R</kbd>
+            <kbd>⌃ / ⌘ + Alt + D</kbd>
+          </div>
+          <p class="keys-note">
+            默认分别是截图、开关录像、轮换显示方向；组合键可在「设置 → 全局快捷键」里改成自己习惯的。
+          </p>
+          <p style="margin-top:18px;margin-bottom:10px">镜像窗口内还有一整套：</p>
+          <div class="keys">
+            <kbd>修饰键 + H 主屏幕</kbd>
+            <kbd>+ B 返回</kbd>
+            <kbd>+ S 最近任务</kbd>
+            <kbd>+ N 通知栏</kbd>
+            <kbd>+ P 电源键</kbd>
+            <kbd>+ O 关闭手机屏幕</kbd>
+            <kbd>+ ↑ ↓ 音量</kbd>
+            <kbd>+ F 全屏</kbd>
+            <kbd>+ Q 退出镜像</kbd>
+          </div>
+          <p class="keys-note">修饰键同样可以自定义。</p>
+        </div>
+
+        <ul class="rows">
+          <li>
+            <h4>有线或无线都能连</h4>
+            <p>数据线插上即用；同一 Wi-Fi 下也能连接。Android 11 及以上支持系统原生的「使用二维码配对设备」——电脑出码，手机扫一下自动完成配对与连接。</p>
+          </li>
+          <li>
+            <h4>画面方向自动跟随手机</h4>
+            <p>默认不锁定方向。打开横屏游戏或视频，画面自动转横，窗口跟着调整大小；也可以手动锁定某个角度。</p>
+          </li>
+          <li>
+            <h4>把手机声音放到电脑上</h4>
+            <p>Android 11 及以上可转发系统播放的声音，手机本地自动静音，只用电脑的扬声器。</p>
+          </li>
+          <li>
+            <h4>截图与录像</h4>
+            <p>截图存到「图片 / MirrorDock」，录像存到「视频 / MirrorDock」。录像由镜像窗口直接写文件，结束时等收尾完成再退出，保证文件能正常播放。</p>
+          </li>
+          <li>
+            <h4>电脑与手机互传文件</h4>
+            <p>发送的文件进入手机「下载 / MirrorDock」，取回的文件存到电脑的下载目录，只经过数据线或局域网。</p>
+          </li>
+          <li>
+            <h4>伴侣 App，加密配对</h4>
+            <p>手机端安装伴侣 App 后，与电脑建立 TLS 1.3 加密连接并锁定证书指纹，用于屏幕捕获等能力。</p>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="start">
+    <div class="wrap">
+      <h2>三步开始镜像</h2>
+      <p class="sec-lede">手机端只需要一次设置，之后连上就能用。</p>
+      <ol class="steps">
+        <li>
+          <span class="n" aria-hidden="true">1</span>
+          <h3>在手机上打开调试入口</h3>
+          <p>进入「开发者选项」打开 <code>USB 调试</code>；想无线连接就再打开 <code>无线调试</code>。软件里有各品牌的路径指引，菜单名称以手机实际显示为准。</p>
+        </li>
+        <li>
+          <span class="n" aria-hidden="true">2</span>
+          <h3>让电脑连上手机</h3>
+          <p>插上数据线后在电脑端点「重新检查」；无线则在「无线连接」里生成配对二维码，用手机的「使用二维码配对设备」扫一下。</p>
+        </li>
+        <li>
+          <span class="n" aria-hidden="true">3</span>
+          <h3>开始镜像</h3>
+          <p>点「开始镜像」，手机画面出现在窗口里。截图、录像、传文件、轮换方向都能在这个窗口里完成。</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="wrap boundary">
+      <div>
+        <h2>它做不到什么</h2>
+        <p class="note">
+          这段比功能列表更重要。远程控制类工具最容易含糊其辞的地方就在这里，我们把边界写清楚，
+          免得你在关键时刻才发现。
+        </p>
+      </div>
+      <ul class="bound">
+        <li>
+          <span class="x" aria-hidden="true">×</span>
+          <span>
+            <b>不绕过锁屏，也不解锁</b>
+            <span class="t">手机在锁屏状态下，MirrorDock 无法点亮并进入系统。它只能在你解锁后接管画面；防止镜像过程中自动锁屏需要你提前把这项打开。</span>
+          </span>
+        </li>
+        <li>
+          <span class="x" aria-hidden="true">×</span>
+          <span>
+            <b>受保护内容显示为黑屏</b>
+            <span class="t">支付页面、密码输入、银行与流媒体等应用会由 Android 自行屏蔽，显示和截图都是黑屏。这是系统行为，不是故障。</span>
+          </span>
+        </li>
+        <li>
+          <span class="x" aria-hidden="true">×</span>
+          <span>
+            <b>没有无人值守的远控</b>
+            <span class="t">不存在后台静默连接、不存在绕过授权常驻。断开数据线或撤销调试授权，连接就结束。</span>
+          </span>
+        </li>
+        <li>
+          <span class="y" aria-hidden="true">✓</span>
+          <span>
+            <b>画面、剪贴板和口令不写进日志</b>
+            <span class="t">诊断包在导出前先给你预览，内容已抹去设备序列号、配对码与文件路径，且不会自动上传。</span>
+          </span>
+        </li>
+        <li>
+          <span class="y" aria-hidden="true">✓</span>
+          <span>
+            <b>免费版包含全部镜像功能</b>
+            <span class="t">截图、文件传输、声音转发、快捷键全部免费；专业版只额外解锁 MP4 录制。测试版已内置激活码，不需要你手动输入。</span>
+          </span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="band" id="download">
+    <div class="wrap">
+      <h2>下载 v0.2.0 测试版</h2>
+      <p class="sec-lede">
+        安装包和校验值都发布在 GitHub Releases 上。不确定该下哪个，按你的系统对照下面的表。
+      </p>
+
+      <table class="dl-table">
+        <caption>桌面端安装包</caption>
+        <thead>
+          <tr><th scope="col">你的系统</th><th scope="col">下载</th><th scope="col">说明</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Windows</td>
+            <td>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock_0.2.0_x64-setup.exe">安装程序（exe）</a>
+              <span class="fname">MirrorDock_0.2.0_x64-setup.exe</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock_0.2.0_x64_en-US.msi" style="display:block;margin-top:8px">MSI 安装包</a>
+              <span class="fname">MirrorDock_0.2.0_x64_en-US.msi</span>
+            </td>
+            <td>64 位。首次运行可能被 SmartScreen 提示，选择「仍要运行」。</td>
+          </tr>
+          <tr>
+            <td>macOS<br>Apple 芯片</td>
+            <td>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock_0.2.0_aarch64.dmg">磁盘映像</a>
+              <span class="fname">MirrorDock_0.2.0_aarch64.dmg</span>
+            </td>
+            <td>适用于 M1 及之后的所有芯片。</td>
+          </tr>
+          <tr>
+            <td>macOS<br>Intel</td>
+            <td>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock_0.2.0_x64.dmg">磁盘映像</a>
+              <span class="fname">MirrorDock_0.2.0_x64.dmg</span>
+            </td>
+            <td>未签名版本，首次打开需在「系统设置 → 隐私与安全性」中允许。</td>
+          </tr>
+          <tr>
+            <td>Linux</td>
+            <td>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock_0.2.0_amd64.AppImage">AppImage（免安装）</a>
+              <span class="fname">MirrorDock_0.2.0_amd64.AppImage</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock_0.2.0_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
+              <span class="fname">MirrorDock_0.2.0_amd64.deb</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/MirrorDock-0.2.0-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
+              <span class="fname">MirrorDock-0.2.0-1.x86_64.rpm</span>
+            </td>
+            <td>AppImage 下载后加执行权限即可运行：<span style="font-family:var(--font-mono);font-size:12.5px">chmod +x 文件名</span></td>
+          </tr>
+          <tr>
+            <td>Android 伴侣 App</td>
+            <td>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/app-debug.apk">APK</a>
+              <span class="fname">app-debug.apk</span>
+            </td>
+            <td>需要 Android 8.0 及以上。安装后在手机与电脑同一 Wi-Fi 下扫码配对。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="dl-actions">
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.2.0-beta">打开发布页</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.2.0-beta/SHA256SUMS-macos-x64.txt">校验值（SHA256SUMS）</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock">查看源代码</a>
+      </div>
+      <p class="dl-hint">
+        下载后建议核对校验值：发布页里每个平台都有一份 SHA256SUMS 文件，与安装包一一对应。
+        另外发布页附带了依赖清单（SBOM），方便安全审查。本版本不提供自动更新，升级时请回到发布页下载新版本。
+      </p>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <h2>常见问题</h2>
+      <p class="sec-lede">按下话题整理，遇到问题先看这里。</p>
+
+      <details>
+        <summary>为什么要打开 USB 调试，安全吗？</summary>
+        <p>这是 Android 官方给开发者用的调试通道，MirrorDock 靠它获得画面与控制权限。授权只对你确认过的这台电脑生效，手机上「开发者选项 → 撤销 USB 调试授权」可以随时收回，收回后连接立刻失效。跳过锁屏、破解应用这类事情它做不到，也不会尝试。</p>
+      </details>
+      <details>
+        <summary>无线连接隔一段时间就断了，或者连不上？</summary>
+        <p>手机每次重新打开「无线调试」，端口都会变化，需要重新配对，这不是故障。连接前确认手机与电脑在同一个 Wi-Fi、且该网络没有开启客户端隔离。Android 11 及以上建议直接用扫码配对，电脑会自动发现地址，不用手动抄写。</p>
+      </details>
+      <details>
+        <summary>电脑上没有声音，或手机还在响？</summary>
+        <p>声音转发需要 Android 11 及以上。通话、部分应用与受版权保护的内容受系统捕获策略限制，可能无法转发。另外，开始镜像时手机需处于解锁状态，否则系统不允许捕获音频。开启后声音只在电脑播放，手机本地静音。</p>
+      </details>
+      <details>
+        <summary>打开游戏没有自动变成横屏？</summary>
+        <p>确认「设置 → 显示方向」保持「自动（跟随手机）」。选定了具体角度就会锁定画面方向，只改变电脑上的显示角度，不再跟随手机旋转。</p>
+      </details>
+      <details>
+        <summary>macOS 提示「无法验证开发者」，Windows 弹 SmartScreen？</summary>
+        <p>测试版尚未做代码签名与公证，两个系统都会给出提示。macOS 在「系统设置 → 隐私与安全性」里选择仍要打开；Windows 点「更多信息 → 仍要运行」。正式版会补齐签名。</p>
+      </details>
+      <details>
+        <summary>伴侣 App 扫码时会闪退吗？</summary>
+        <p>v0.1.2 起已修复会导致扫码页闪退的问题。如果仍然异常，App 主界面会出现一张红色卡片，写着上次退出的原因与堆栈，把它截图发到 Issue 即可定位。</p>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>MirrorDock v0.2.0 测试版</span>
+    <a href="https://github.com/g-star1024/MirrorDock">源代码</a>
+    <a href="https://github.com/g-star1024/MirrorDock/releases">全部版本</a>
+    <a href="https://github.com/g-star1024/MirrorDock/issues">反馈问题</a>
+    <span class="spacer lic">Apache-2.0 许可 · 镜像引擎基于 scrcpy · 画面与文件不经过任何服务器</span>
+  </div>
+</footer>
+</body>
+</html>
