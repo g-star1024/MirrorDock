@@ -233,7 +233,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
     steps:
+      # 需要读仓库内的发版说明 docs/release-notes-beta.md（与 Release 正文单一来源）。
+      - uses: actions/checkout@v4
+
       - name: 汇总产物
         uses: actions/download-artifact@v4
         with:
@@ -241,71 +247,83 @@ jobs:
           merge-multiple: true
       - name: 列出待发布文件
         run: ls -la release-files
-      # 重发（删 tag→重推 tag）会让旧 Release 变成「孤立 Release」，其上传地址失效：
-      # 表现为正文更新成功、资产被清空后上传失败。发布前先删掉同 tag 的历史 Release
-      # （保留 tag 本身），让下面这步总是「全新创建」，彻底消除该不稳定路径。
-      - name: 清理同 tag 的历史 Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 为什么不再用 softprops/action-gh-release@v2（2026-09-29 实测根因）：
+      #   1) 它在 prerelease 场景下先建「草稿」再 finalize 发布；finalize 是
+      #      updateRelease(draft:false)。而 GitHub **允许同一 tag 下同时存在一个草稿
+      #      与一个正式 Release**，一旦该 tag 已有正式 Release，发布草稿即失败：
+      #      Validation Failed: already_exists, field=tag_name。
+      #   2) 它按 tag 查找已有 Release 复用，但草稿在「按 tag 查询」的接口里不可见
+      #      （`gh release view` 同样看不到），于是每轮都新建一个，同 tag 越积越多。
+      #      实测该 tag 下同时存在 id=398740537「草稿(20 资产)」与 id=398762605
+      #      「正式(0 资产)」——资产全落在草稿上，对外可见的那个却是空的。
+      #   3) 曾出现上传全部成功、仅 finalize 失败，整个 job 判失败但资产已落盘的
+      #      「半成功」状态，人工判断成本极高。
+      # 改为 gh CLI：先按 id 删净该 tag 下的**全部** Release（含草稿），再一次性直接
+      # 创建正式 prerelease，最后显式上传资产——没有草稿/发布两步，没有按 tag 查找
+      # 的歧义，失败点全部是显式命令，日志可读。
+      - name: 清理该 tag 下的全部历史 Release（含草稿）
         run: |
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release delete "${GITHUB_REF_NAME}" --yes --cleanup-tag=false
-            echo "已删除历史 Release：${GITHUB_REF_NAME}（tag 保留）"
+          set -euo pipefail
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                  --jq ".[] | select(.tag_name == \"${TAG}\") | .id")
+          if [ -z "${ids}" ]; then
+            echo "该 tag 下无历史 Release，将直接创建：${TAG}"
           else
-            echo "无历史 Release，将直接创建：${GITHUB_REF_NAME}"
+            for id in ${ids}; do
+              echo "删除历史 Release id=${id}（tag 本身保留）"
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${id}"
+            done
           fi
-      - name: 创建 Release 并上传产物
-        uses: softprops/action-gh-release@v2
-        with:
-          name: MirrorDock ${{ github.ref_name }}
-          prerelease: true
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          body: |
-            MirrorDock 桌面镜像工具测试版。本地优先：画面、截图、录像与文件传输只经过你自己的数据线或局域网，不上传任何服务器。
-
-            **下载哪个文件**（文件名含版本号，按后缀识别即可）
-            - Windows：`...-setup.exe`（安装版）或 `....msi`
-            - macOS（Apple 芯片 M1 及以后）：`..._aarch64.dmg`
-            - macOS（Intel）：`..._x64.dmg`
-            - Linux：`....AppImage`（免安装）/ `.deb` / `.rpm`
-            - 手机伴侣 App：`app-debug.apk`
-
-            **安装后怎么开始**
-            1. 电脑端打开 MirrorDock → 用数据线连手机，或选「无线连接」。
-            2. 手机开启「开发者选项 → USB 调试 / 无线调试」。Android 11 及以上可直接用「无线调试 → 使用二维码配对设备」扫电脑上的二维码，自动配对连接。
-            3. 需要伴侣 App 时安装 `app-debug.apk`，与电脑在同一 Wi-Fi 下扫码建立加密连接。
-
-            **本版说明**
-            - 测试版**已内置永久激活码，无需手动激活**，录制等专业版功能直接可用；在「设置 → 版本与授权」点击撤销后可选择不再自动激活。
-            - 本版为 **debug 签名的测试版**，未做代码签名与公证；macOS 首次打开可能需要在「系统设置 → 隐私与安全性」中允许，Windows 可能提示 SmartScreen。
-            - 未做自动更新：升级请回到本页面下载新版本。
-            - 镜像画面方向默认跟随手机旋转，打开横屏游戏会自动转为横屏。
-            - 会话进行中可用全局快捷键（Ctrl/⌘ + Alt + S 截图、+ R 录制开关、+ D 轮换方向），组合可在「设置」中修改。
-
-            **校验与透明**
-            - 每个平台的 `SHA256SUMS-<平台>.txt` 为对应安装包的校验值，建议下载后核对。
-            - `sbom-cargo-*.json` / `sbom-npm-*.json` 为依赖清单（SBOM）。
-
-            测试版仍在迭代，遇到问题请在本仓库提 Issue，并附上「设置 → 诊断」导出的诊断包（已抹去序列号、配对码与文件路径）。
-          files: |
-            release-files/**/*.dmg
-            release-files/**/*.msi
-            release-files/**/*.exe
-            release-files/**/*.deb
-            release-files/**/*.rpm
-            release-files/**/*.AppImage
-            release-files/**/app-debug.apk
-            release-files/**/SHA256SUMS-*.txt
-            release-files/**/sbom-*.json
-      # 发布后自校验：至少要有「四平台安装包 + APK + 校验文件」，防止发空包却显示成功。
-      - name: 校验 Release 资产生效
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 正文单一来源：docs/release-notes-beta.md（版本无关写法，避免过期）；
+      # 末尾追加一条随 tag 变化的「完整变更记录」链接，补回原先自动生成的 Changelog 入口。
+      - name: 创建 Release
         run: |
-          count=$(gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets | length')
+          set -euo pipefail
+          {
+            cat docs/release-notes-beta.md
+            echo
+            echo "**完整变更记录**：https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"
+          } > /tmp/release-notes.md
+          gh release create "${TAG}" \
+            --title "MirrorDock ${TAG}" \
+            --prerelease \
+            --notes-file /tmp/release-notes.md
+
+      # 用 find 收集真实文件列表（不依赖 glob 层级），上传前先卡产物数量，
+      # 避免「构建成功但产物没汇总进来」导致发空包。
+      - name: 上传产物
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find release-files -type f | sort)
+          echo "待上传 ${#files[@]} 个文件："
+          printf '  %s\n' "${files[@]}"
+          if [ "${#files[@]}" -lt 10 ]; then
+            echo "产物数量异常：期望至少 10 个（四平台安装包 + 伴侣 APK + SHA256SUMS + SBOM）"
+            exit 1
+          fi
+          gh release upload "${TAG}" "${files[@]}" --clobber
+
+      # 发布后自校验：既查「该 tag 下 Release 唯一且已对外发布」，也查资产数量，
+      # 同时防住两类历史故障——同 tag 多 Release（草稿偷藏资产）、发空包显示成功。
+      - name: 校验 Release
+        run: |
+          set -euo pipefail
+          released=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                       --jq "[.[] | select(.tag_name == \"${TAG}\")] | length")
+          echo "该 tag 下 Release 数量：${released}"
+          [ "${released}" -eq 1 ] || { echo "期望恰好 1 个 Release，实际 ${released} 个"; exit 1; }
+
+          # 「按 tag 查 Release」这个接口不会返回草稿：能查到 ⇔ 已对外发布。
+          # 用它替代 isDraft 字段，免得依赖不同 runner 上 gh 版本的 JSON 字段差异。
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Release 已对外发布（非草稿）"
+          else
+            echo "按 tag 查不到已发布的 Release：它可能仍是草稿，未对外可见"; exit 1
+          fi
+
+          count=$(gh release view "${TAG}" --json assets --jq '.assets | length')
           echo "Release 资产数：${count}"
-          gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'
+          gh release view "${TAG}" --json assets --jq '.assets[].name'
           if [ "${count}" -lt 10 ]; then
             echo "资产数不足（期望至少 10 个：四平台安装包 + 伴侣 APK + SHA256SUMS）"; exit 1
           fi

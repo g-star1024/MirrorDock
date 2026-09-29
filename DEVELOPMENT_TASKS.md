@@ -169,6 +169,36 @@
 - [x] X7-06 修复 Release 发布失败（glob 未匹配）。**已完成**（提交 2ef4948）。
   - 根因：`release-files/**/*.app.tar.gz` 永远不会匹配——macOS 端 `targets=all` 只产 app+dmg，`.app.tar.gz` 需启用 updater 才生成；`fail_on_unmatched_files: true` 遇未匹配即失败（六个构建 job 全绿、仅发布挂）。已移除该 glob。
   - 发布说明改为 workflow 内置正文（下载指引 / 开始使用 / 测试版说明 / 校验与透明），版本无关写法避免过期。
+- [x] X7-07 修复 Release 发布失败（孤立 Release 复用）。**已完成**（提交 697c534）。
+  - 场景：删 tag → 重推 tag 会让旧 Release 变成「孤立 Release」，其上传地址失效，表现为正文更新成功而资产清空、上传失败。
+  - 修法：发布前按 tag 删掉历史 Release（`--cleanup-tag=false`，保留 tag）。**该修法不完整**——按 tag 查不到草稿，见 X7-08。
+- [x] X7-08 修复 Release 发布「同 tag 多 Release」根因（softprops 草稿/发布两段式）。**已完成，线上状态已修复并核验。**
+  - **现象**：日志里 20 个资产全部 `✅ Uploaded`，紧接最后一步 `Finalizing release...` 连错三次
+    `Validation Failed: already_exists, field=tag_name`，job 判失败；但 Release 页面上资产数为 0。
+  - **根因（本轮按 API 实测定案，非推测）**：
+    1. `softprops/action-gh-release@v2` 在 prerelease 场景下先建**草稿** → 上传资产 → 再 `updateRelease(draft:false)` 发布；
+    2. **GitHub 允许同一 tag 下并存「一个草稿 + 一个正式 Release」**，而草稿在「按 tag 查 Release」的接口
+       （`gh release view`、`/releases/tags/{tag}`）里**不可见**；
+    3. 于是每轮 run 都新建一个 Release。实测同 tag 下并存 id=398740537「草稿，20 资产」与 id=398762605
+       「正式，0 资产」——**资产全落在草稿上，对外可见的那个反而是空的**；
+    4. 最后把草稿发布出去时 tag 已被另一个正式 Release 占用 → `already_exists, field=tag_name`。
+    X7-07 的按 tag 清理步骤因看不到草稿而**完全没生效**：实测该 tag 下按 tag 匹配到 0 个、按 id 列全部匹配到 **2** 个。
+  - **反证**：删掉那个空的正式 Release 后，用同一条 PATCH 立即把草稿发布成功——确证是 tag 占用，而非资产损坏或权限不足。
+  - **修法**：发布 job 弃用 softprops，改 `gh` CLI 三步全显式——
+    ① 列出该仓库全部 Release（含草稿）并按 **id** 删净该 tag 下的所有 Release；
+    ② `gh release create --prerelease --notes-file`（一次性直接建正式版，无「草稿→发布」两段）；
+    ③ `gh release upload`（用 `find` 收集文件，上传前卡数量 ≥10）。
+    自校验由「资产数 ≥10」升级为「**同 tag Release 数 == 1 且非草稿 且资产 ≥10**」。
+  - 正文抽出为 `docs/release-notes-beta.md`（单一来源），workflow 末尾追加随 tag 变化的「完整变更记录」链接。
+  - 线上修复：删除空 Release 398762605 → 发布草稿 398740537（正文 1016 字，版本无关）。核验（**匿名视角**）：1 个 Release、非草稿、20 资产齐全。
+  - 教训：**「按 tag 查」的接口看不到草稿**，凡涉及 Release 清理/复用一律改「列全部 + 按 id 操作」；且「日志说成功」≠「对外状态正确」，必须查匿名视角的最终状态。
+
+## X8 产品主页与发布链收口（2026-09-29）
+
+- [x] X8-01 客户端产品主页（静态 HTML）。**已完成**（提交 697c534，site/index.html）。
+  - 单文件、内联 CSS/JS、无外部资源；含真机实测数据条（首帧 P95 0.99s / 60 分钟无中断 / ~35 FPS）、功能区、三步开始、隐私与边界（含「它做不到什么」）、下载表、FAQ。
+  - 诚实边界：主页上的性能数字全部来自 test-runs/ 已归档的真机报告，不以宣传话术替代证据。
+- [x] X8-02 发布链稳定性收口。**已完成**（见 X7-08）。当前 Release 状态与「同 tag 唯一、非草稿、资产齐全」三项判据一致。
 
 ## 最终成品退出条件
 

@@ -28,6 +28,9 @@ dist-ssr
 # Agent working memory（本地连续性笔记，不作为团队共享内容入库）
 .workbuddy/memory/
 
+# 浏览器自动化（Playwright MCP）本地抓取数据，非项目内容
+.playwright-mcp/
+
 # Rust / Tauri 构建产物（src-tauri/.gitignore 已单独声明 /target/）
 
 # 内部产品规划文档（维护于仓库外，不入库）
