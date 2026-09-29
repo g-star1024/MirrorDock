@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MirrorDock 伴侣</string>
+    <string name="app_tagline">与电脑建立加密连接，画面与文件只经过同一 Wi-Fi。</string>
     <string name="scan_hint">将相机对准电脑上的配对二维码</string>
-    <string name="status_idle">未连接。点击「扫码配对」开始。</string>
-    <string name="action_scan">扫码配对</string>
+    <string name="status_idle">未连接电脑</string>
+    <string name="action_scan">扫码连接电脑</string>
     <string name="action_manual">手动输入</string>
     <string name="action_capture">屏幕捕获</string>
     <string name="manual_hint">MDP1|主机|端口|配对码|指纹</string>
@@ -13,4 +14,12 @@
     <string name="log_title">运行日志</string>
     <string name="action_show">查看</string>
     <string name="action_hide">收起</string>
+    <string name="files_title">电脑发来的文件</string>
+    <string name="files_note">电脑端「发送到手机」的文件都在这里；APK 可以直接再次安装。</string>
+    <string name="files_empty">还没有收到文件。</string>
+    <string name="files_need_permission">看不到文件：需要授予文件访问权限。</string>
+    <string name="action_grant_files">授权文件访问</string>
+    <string name="action_refresh">刷新</string>
+    <string name="badge_apk">APK</string>
+    <string name="badge_file">文件</string>
 </resources>

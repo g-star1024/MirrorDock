@@ -3,17 +3,24 @@ package com.mirrordock.companion
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
- * 主界面：配对入口 + 捕获入口 + 日志展示（C4-01/C4-02 POC）。
+ * 主界面：配对入口 + 捕获入口 + 电脑发来的文件 + 日志展示（C4-01/C4-02 POC）。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -22,17 +29,23 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_CAMERA = 42
         private const val REQUEST_CAPTURE = 43
         private const val REQUEST_NOTIFICATION = 44
+        private const val REQUEST_READ_FILES = 45
         /** 上一次崩溃堆栈的落盘文件名（见 CrashGuard）。 */
         const val CRASH_FILE = "last_crash.txt"
     }
 
     private lateinit var statusText: TextView
+    private lateinit var statusDot: View
     private lateinit var logText: TextView
     private lateinit var manualInput: EditText
     private lateinit var crashCard: View
     private lateinit var crashDetail: TextView
     private lateinit var logScroller: View
     private lateinit var logToggle: Button
+    private lateinit var fileList: LinearLayout
+    private lateinit var fileEmpty: View
+    private lateinit var fileEmptyText: TextView
+    private lateinit var grantFilesButton: Button
 
     private val logLines = StringBuilder()
     private var client: PairingClient? = null
@@ -42,12 +55,19 @@ class MainActivity : AppCompatActivity() {
         CrashGuard.install(applicationContext)
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.status_text)
+        statusDot = findViewById(R.id.status_dot)
         logText = findViewById(R.id.log_text)
         manualInput = findViewById(R.id.manual_input)
         crashCard = findViewById(R.id.crash_card)
         crashDetail = findViewById(R.id.crash_detail)
         logScroller = findViewById(R.id.log_scroller)
         logToggle = findViewById(R.id.button_log_toggle)
+        fileList = findViewById(R.id.file_list)
+        fileEmpty = findViewById(R.id.file_empty)
+        fileEmptyText = findViewById(R.id.file_empty_text)
+        grantFilesButton = findViewById(R.id.button_grant_files)
+
+        setStatusConnected(false)
 
         findViewById<Button>(R.id.button_scan).setOnClickListener {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -67,6 +87,15 @@ class MainActivity : AppCompatActivity() {
             true
         }
         findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
+
+        // 文件卡：刷新按钮 + 空状态里的「授权文件访问」。
+        findViewById<Button>(R.id.button_files_refresh).setOnClickListener { refreshFiles() }
+        grantFilesButton.setOnClickListener {
+            ReceivedFiles.allFilesAccessIntent(this)?.let { intent ->
+                runCatching { startActivity(intent) }
+                    .onFailure { Toast.makeText(this, "无法打开系统设置", Toast.LENGTH_SHORT).show() }
+            }
+        }
 
         // 运行日志默认收起：正常使用时不需要看；点「查看」展开、再点「收起」。
         logToggle.setOnClickListener {
@@ -94,6 +123,12 @@ class MainActivity : AppCompatActivity() {
         log("伴侣 App 已启动。")
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 从系统设置（授权文件访问）或安装器返回时刷新列表。
+        refreshFiles()
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
     ) {
@@ -108,6 +143,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             REQUEST_NOTIFICATION -> if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) requestCaptureConsent()
+            REQUEST_READ_FILES -> refreshFiles()
         }
     }
 
@@ -171,6 +207,7 @@ class MainActivity : AppCompatActivity() {
     private fun connect(payload: PairingPayload) {
         client?.close()
         statusText.text = "正在连接 ${payload.hosts.first()}:${payload.port} …"
+        setStatusConnected(false)
         log("使用一次性配对码 ${payload.token}（不会保存）")
         val c = PairingClient(payload) { line -> runOnUiThread { log(line) } }
         client = c
@@ -179,30 +216,147 @@ class MainActivity : AppCompatActivity() {
             c.connect(object : PairingClient.Listener {
                 override fun onWelcome() = runOnUiThread {
                     statusText.text = "已与电脑建立加密会话。"
+                    setStatusConnected(true)
                     log("配对成功（加密会话已建立）")
                 }
 
                 override fun onRejected() = runOnUiThread {
                     statusText.text = "配对码被拒绝。请回到电脑重新生成配对。"
+                    setStatusConnected(false)
                     c.close()
                 }
 
                 override fun onError(message: String) = runOnUiThread {
                     statusText.text = "连接失败：$message"
+                    setStatusConnected(false)
                     c.close()
                 }
 
                 override fun onDisconnected() = runOnUiThread {
                     statusText.text = "会话已断开。"
+                    setStatusConnected(false)
                 }
             })
         }.start()
+    }
+
+    private fun setStatusConnected(connected: Boolean) {
+        statusDot.backgroundTintList =
+            android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(this, if (connected) R.color.dot_ready else R.color.dot_idle),
+            )
     }
 
     private fun log(line: String) {
         logLines.appendLine(line)
         logText.text = logLines.toString()
     }
+
+    // -- 电脑发来的文件 ---------------------------------------------------------
+
+    private fun refreshFiles() {
+        // API ≤ 32 需要 READ_EXTERNAL_STORAGE；拒绝过就不再重复弹，走空状态提示。
+        if (Build.VERSION.SDK_INT <= 32 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            if (shouldShowRequestPermissionRationale(Manifest.permission.READ_EXTERNAL_STORAGE)) {
+                showFilesEmpty(needsPermission = false)
+                return
+            }
+            requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), REQUEST_READ_FILES)
+            return
+        }
+        Thread {
+            val entries = ReceivedFiles.list(this)
+            runOnUiThread { renderFiles(entries) }
+        }.start()
+    }
+
+    private fun renderFiles(entries: List<ReceivedFiles.Entry>) {
+        fileList.removeAllViews()
+        if (entries.isEmpty()) {
+            showFilesEmpty(needsPermission = !ReceivedFiles.canReadDirectly() && !ReceivedFiles.hasAllFilesAccess())
+            return
+        }
+        fileEmpty.visibility = View.GONE
+        val dateFormat = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+        for (entry in entries) {
+            fileList.addView(buildFileRow(entry, dateFormat))
+        }
+    }
+
+    private fun showFilesEmpty(needsPermission: Boolean) {
+        fileEmpty.visibility = View.VISIBLE
+        fileEmptyText.setText(if (needsPermission) R.string.files_need_permission else R.string.files_empty)
+        grantFilesButton.visibility = if (needsPermission) View.VISIBLE else View.GONE
+    }
+
+    /** 文件行：类型徽标 + 名称/元信息，整行可点（查看；APK 走系统安装器）。 */
+    private fun buildFileRow(entry: ReceivedFiles.Entry, dateFormat: SimpleDateFormat): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, dp(11), 0, dp(11))
+            background = getDrawable(R.drawable.bg_input)
+            val margin = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            margin.topMargin = dp(4)
+            layoutParams = margin
+            isClickable = true
+            isFocusable = true
+        }
+        val badge = TextView(this).apply {
+            text = getString(if (entry.isApk) R.string.badge_apk else R.string.badge_file)
+            setTextColor(ContextCompat.getColor(context, R.color.brand_blue))
+            textSize = 11f
+            setTypeface(typeface, Typeface.BOLD)
+            background = ContextCompat.getDrawable(context, R.drawable.bg_file_badge)
+            setPadding(dp(9), dp(5), dp(9), dp(5))
+        }
+        row.addView(badge)
+        val info = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            params.leftMargin = dp(12)
+            layoutParams = params
+        }
+        info.addView(TextView(this).apply {
+            text = entry.name
+            setTextColor(ContextCompat.getColor(context, R.color.text_primary))
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        })
+        info.addView(TextView(this).apply {
+            text = "${formatSize(entry.size)} · ${dateFormat.format(Date(entry.modifiedAt))}"
+            setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+            textSize = 12f
+        })
+        row.addView(info)
+        row.addView(TextView(this).apply {
+            text = if (entry.isApk) "安装" else "查看"
+            setTextColor(ContextCompat.getColor(context, R.color.brand_blue))
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+        })
+        row.setOnClickListener {
+            if (!ReceivedFiles.open(this, entry)) {
+                Toast.makeText(this, "无法打开这个文件。", Toast.LENGTH_SHORT).show()
+            }
+        }
+        return row
+    }
+
+    private fun formatSize(bytes: Long): String = when {
+        bytes >= 1 shl 20 -> "%.1f MB".format(bytes / 1048576f)
+        bytes >= 1 shl 10 -> "%.0f KB".format(bytes / 1024f)
+        else -> "$bytes B"
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
 
 /**

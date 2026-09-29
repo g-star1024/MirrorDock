@@ -4,67 +4,96 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- 头部：与桌面客户端一致的蓝色品牌区。状态一行跟随其下。 -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@color/brand_blue"
-        android:paddingLeft="20dp"
-        android:paddingRight="20dp"
-        android:paddingTop="24dp"
-        android:paddingBottom="20dp">
-
-        <TextView
-            android:id="@+id/app_title"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="#FFFFFF"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/status_text"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="@color/header_text_secondary"
-            android:textSize="13sp"
-            android:text="@string/status_idle" />
-    </LinearLayout>
-
+    <!-- 现代扁平风：浅灰底 + 白色大圆角卡片 + 蓝色渐变 hero 卡。内容分区块，不挤在头部。 -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:fillViewport="true">
+        android:fillViewport="true"
+        android:scrollbars="none">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:paddingLeft="20dp"
+            android:paddingRight="20dp"
+            android:paddingTop="28dp"
+            android:paddingBottom="32dp">
 
-            <!-- 主操作：扫码配对。 -->
-            <Button
-                android:id="@+id/button_scan"
-                style="@style/PrimaryButton"
+            <!-- 标题区：留白充足，层级清晰。 -->
+            <TextView
+                android:id="@+id/app_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="@color/text_primary"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/app_tagline"
+                android:textColor="@color/text_secondary"
+                android:textSize="13.5sp" />
+
+            <!-- Hero 卡：状态 + 主 CTA。 -->
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:text="@string/action_scan" />
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:orientation="vertical"
+                android:background="@drawable/bg_hero"
+                android:paddingLeft="22dp"
+                android:paddingRight="22dp"
+                android:paddingTop="24dp"
+                android:paddingBottom="22dp">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <View
+                        android:id="@+id/status_dot"
+                        android:layout_width="10dp"
+                        android:layout_height="10dp"
+                        android:background="@drawable/bg_dot" />
+
+                    <TextView
+                        android:id="@+id/status_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginLeft="9dp"
+                        android:text="@string/status_idle"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/button_scan"
+                    style="@style/PrimaryButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="20dp"
+                    android:text="@string/action_scan" />
+            </LinearLayout>
 
             <!-- 次要操作并排。 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginTop="10dp">
+                android:layout_marginTop="14dp">
 
                 <Button
                     android:id="@+id/button_manual"
                     style="@style/SecondaryButton"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="48dp"
                     android:layout_weight="1"
                     android:layout_marginRight="5dp"
                     android:text="@string/action_manual" />
@@ -73,7 +102,7 @@
                     android:id="@+id/button_capture"
                     style="@style/SecondaryButton"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="48dp"
                     android:layout_weight="1"
                     android:layout_marginLeft="5dp"
                     android:text="@string/action_capture" />
@@ -84,24 +113,102 @@
                 android:id="@+id/manual_input"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="12dp"
                 android:visibility="gone"
                 android:background="@drawable/bg_input"
-                android:padding="12dp"
+                android:padding="14dp"
                 android:textSize="13sp"
+                android:textColor="@color/text_primary"
                 android:hint="@string/manual_hint"
                 android:inputType="text"
                 android:autofillHints="none" />
+
+            <!-- 电脑发来的文件：可直接查看；APK 可再次安装。 -->
+            <LinearLayout
+                android:id="@+id/files_card"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/files_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <Button
+                        android:id="@+id/button_files_refresh"
+                        style="@style/TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/action_refresh" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/files_note"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12.5sp" />
+
+                <LinearLayout
+                    android:id="@+id/file_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical" />
+
+                <!-- 空状态 / 需要权限：居中、留白。 -->
+                <LinearLayout
+                    android:id="@+id/file_empty"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:paddingTop="22dp"
+                    android:paddingBottom="22dp">
+
+                    <TextView
+                        android:id="@+id/file_empty_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/files_empty"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="13.5sp" />
+
+                    <Button
+                        android:id="@+id/button_grant_files"
+                        style="@style/SecondaryButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:layout_marginTop="12dp"
+                        android:visibility="gone"
+                        android:text="@string/action_grant_files" />
+                </LinearLayout>
+            </LinearLayout>
 
             <!-- 崩溃取证卡：只在确实发生过崩溃时出现，可查看详情、可清除。 -->
             <LinearLayout
                 android:id="@+id/crash_card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="14dp"
                 android:orientation="vertical"
                 android:background="@drawable/bg_danger_card"
-                android:padding="14dp"
+                android:padding="18dp"
                 android:visibility="gone">
 
                 <TextView
@@ -109,17 +216,17 @@
                     android:layout_height="wrap_content"
                     android:text="@string/crash_title"
                     android:textColor="@color/danger_text"
-                    android:textSize="14sp"
+                    android:textSize="14.5sp"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/crash_detail"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="10dp"
                     android:visibility="gone"
                     android:background="@drawable/bg_input"
-                    android:padding="10dp"
+                    android:padding="12dp"
                     android:textSize="11sp"
                     android:textColor="@color/danger_text"
                     android:fontFamily="monospace"
@@ -129,21 +236,21 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
+                    android:layout_marginTop="10dp">
 
                     <Button
                         android:id="@+id/button_crash_view"
                         style="@style/SecondaryButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="38dp"
+                        android:layout_height="40dp"
                         android:text="@string/action_view_detail" />
 
                     <Button
                         android:id="@+id/button_crash_clear"
                         style="@style/SecondaryButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="38dp"
-                        android:layout_marginLeft="8dp"
+                        android:layout_height="40dp"
+                        android:layout_marginLeft="10dp"
                         android:text="@string/action_clear" />
                 </LinearLayout>
             </LinearLayout>
@@ -154,7 +261,7 @@
                 style="@style/Card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="14dp"
                 android:orientation="vertical">
 
                 <LinearLayout
@@ -170,13 +277,14 @@
                         android:layout_weight="1"
                         android:text="@string/log_title"
                         android:textColor="@color/text_secondary"
-                        android:textSize="13sp" />
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
 
                     <Button
                         android:id="@+id/button_log_toggle"
-                        style="@style/SecondaryButton"
+                        style="@style/TextButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="36dp"
+                        android:layout_height="wrap_content"
                         android:text="@string/action_show" />
                 </LinearLayout>
 
@@ -184,7 +292,7 @@
                     android:id="@+id/log_scroller"
                     android:layout_width="match_parent"
                     android:layout_height="220dp"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="10dp"
                     android:visibility="gone"
                     android:background="@drawable/bg_input">
 
@@ -192,7 +300,7 @@
                         android:id="@+id/log_text"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:padding="10dp"
+                        android:padding="12dp"
                         android:textSize="12sp"
                         android:textColor="@color/text_primary"
                         android:fontFamily="monospace"

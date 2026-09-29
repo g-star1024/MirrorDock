@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 只暴露电脑推送目录（下载/MirrorDock），不开放其他共享存储路径。 -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-path name="download_mirror" path="Download/MirrorDock/" />
+</paths>

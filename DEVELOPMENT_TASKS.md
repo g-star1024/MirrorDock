@@ -243,6 +243,12 @@
   - 产物：`test-runs/mirrordock-companion-debug-0.1.3-poc.apk`（本地 gradle 构建，SHA-256 c58a7456…44c61）。真机配对保持 >15s 待用户验证。
   - 附带结论（不改代码）：手机上「撤销 USB 调试授权」只影响**下一次**连接的授权检查，已建立的 adb/scrcpy 会话（USB 或无线）不会被主动踢下线——认证发生在连接建立时；且 Android 11+ 无线调试的配对授权独立于该开关。
 
+- [x] X10-04 伴侣 App 界面现代化 + 「电脑发来的文件」（versionCode 5 / 0.1.4-poc）。
+  - 视觉重做：去掉挤压式蓝头部条，改为「标题区留白 → 蓝色渐变 hero 卡（状态点 + 白胶囊主 CTA）→ 白卡片分区（文件 / 崩溃 / 日志）」；20dp 圆角白卡、扁平无描边、次级按钮白底、文字按钮收敛。
+  - 新增「电脑发来的文件」卡：列 `Download/MirrorDock`（与桌面端 send_file_to_device 同一目录），显示类型徽标 + 文件名 + 大小/时间；点击查看（ACTION_VIEW + FileProvider，仅暴露该目录）；`.apk` 走系统安装器再次安装（REQUEST_INSTALL_PACKAGES，仍需用户逐次确认）。
+  - 存储访问逐级降级（如实呈现，不假成功）：API ≤ 32 运行时 READ_EXTERNAL_STORAGE；API 30+ 先试直读/MediaStore 兜底，都不行时空状态给「授权文件访问」按钮（MANAGE_EXTERNAL_STORAGE，侧载 POC 可接受）；Manifest 加 requestLegacyExternalStorage + FileProvider（file_paths 仅 Download/MirrorDock）。
+  - 验证：本地 gradle assembleDebug 通过，APK 落 `test-runs/mirrordock-companion-debug-0.1.4-poc.apk`（SHA-256 c7ba8f96…a88e）。真机视觉与文件列表（Android 13 Redmi）待用户验证。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

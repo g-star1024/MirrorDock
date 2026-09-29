@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -7,6 +8,16 @@
     <!-- API 34 起媒体投影前台服务必须声明专用类型与权限。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 读取「下载/MirrorDock」里电脑推送的文件：API ≤ 32 走运行时权限。 -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- API 30+ 看到并打开电脑推送文件的现实路径：由用户在系统设置里授予所有文件访问。 -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- 再次安装电脑发来的 APK：仍需用户逐次确认，不经用户同意装不了。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -14,7 +25,8 @@
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Companion"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:requestLegacyExternalStorage="true">
 
         <activity
             android:name=".MainActivity"
@@ -35,5 +47,16 @@
             android:name=".CaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 只共享「下载/MirrorDock」里的电脑推送文件，供查看与 APK 安装使用。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

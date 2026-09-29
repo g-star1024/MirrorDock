@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 次要操作：白底浅圆角，无边框（扁平、安静的次级按钮）。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/brand_blue_dark" />
-            <corners android:radius="12dp" />
+            <solid android:color="#EEF1F7" />
+            <corners android:radius="16dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/brand_blue" />
-            <corners android:radius="12dp" />
+            <solid android:color="#FFFFFF" />
+            <corners android:radius="16dp" />
         </shape>
     </item>
 </selector>

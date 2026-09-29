@@ -3,13 +3,19 @@
 <resources>
     <color name="brand_blue">#2563EB</color>
     <color name="brand_blue_dark">#1D4ED8</color>
-    <color name="screen_bg">#F3F5F9</color>
+    <color name="screen_bg">#F5F6FA</color>
     <color name="card_bg">#FFFFFF</color>
     <color name="text_primary">#111827</color>
     <color name="text_secondary">#6B7280</color>
+    <color name="text_tertiary">#9CA3AF</color>
     <color name="danger_text">#B91C1C</color>
     <color name="danger_bg">#FEF2F2</color>
     <color name="danger_border">#FECACA</color>
-    <color name="input_border">#D6DCE5</color>
-    <color name="header_text_secondary">#C7D7FE</color>
+    <color name="input_border">#E5E9F0</color>
+    <color name="input_bg">#F8F9FC</color>
+    <color name="hero_text_secondary">#C7D7FE</color>
+    <color name="dot_idle">#C3CAD6</color>
+    <color name="dot_ready">#22C55E</color>
+    <color name="file_badge_bg">#EAF1FE</color>
+    <color name="divider">#F0F2F7</color>
 </resources>
