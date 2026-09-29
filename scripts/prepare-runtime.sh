@@ -24,14 +24,21 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "prepare-runtime: 未知平台 $(uname -s)-$(uname -m)，跳过（运行时将回退 PATH）"; exit 0 ;;
 esac
 
-if [ ! -d "$SRC" ]; then
-  echo "prepare-runtime: 找不到本机运行时 $SRC" >&2
-  echo "  请先按供应链流程准备 .tools/scrcpy（官方包 + SHA-256 校验）。" >&2
-  exit 1
+if [ -d "$SRC" ]; then
+  mkdir -p "$DEST"
+  # 全量同步官方包内容（scrcpy、scrcpy-server、adb 及附带文件）。
+  rm -rf "${DEST:?}"/*
+  cp -R "$SRC"/. "$DEST"/
+  echo "prepare-runtime: 已复制 $(ls "$DEST" | wc -l | tr -d ' ') 个文件 -> ${DEST#"$REPO_ROOT"/}"
+  exit 0
 fi
 
-mkdir -p "$DEST"
-# 全量同步官方包内容（scrcpy、scrcpy-server、adb 及附带文件）。
-rm -rf "${DEST:?}"/*
-cp -R "$SRC"/. "$DEST"/
-echo "prepare-runtime: 已复制 $(ls "$DEST" | wc -l | tr -d ' ') 个文件 -> ${DEST#"$REPO_ROOT"/}"
+# CI 打包作业会先行下载官方运行时放进 DEST（A1-08）：此时无需本地 .tools。
+if [ -f "$DEST/scrcpy" ] || [ -f "$DEST/scrcpy.exe" ]; then
+  echo "prepare-runtime: 运行时已由外部准备（$DEST），跳过复制"
+  exit 0
+fi
+
+echo "prepare-runtime: 找不到本机运行时 $SRC" >&2
+echo "  请先按供应链流程准备 .tools/scrcpy（官方包 + SHA-256 校验）。" >&2
+exit 1
