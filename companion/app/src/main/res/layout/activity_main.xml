@@ -108,19 +108,22 @@
                     android:text="@string/action_capture" />
             </LinearLayout>
 
-            <!-- 手动输入（默认隐藏）。 -->
+            <!-- 手动输入（默认隐藏）：点「手动输入」展开即聚焦弹键盘。 -->
             <EditText
                 android:id="@+id/manual_input"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:visibility="gone"
-                android:background="@drawable/bg_input"
+                android:background="@drawable/bg_input_field"
                 android:padding="14dp"
                 android:textSize="13sp"
                 android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_tertiary"
                 android:hint="@string/manual_hint"
                 android:inputType="text"
+                android:imeOptions="actionGo"
+                android:maxLines="1"
                 android:autofillHints="none" />
 
             <!-- 电脑发来的文件：可直接查看；APK 可再次安装。 -->

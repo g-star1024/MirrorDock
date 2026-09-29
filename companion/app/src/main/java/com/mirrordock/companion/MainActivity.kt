@@ -79,12 +79,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
         findViewById<Button>(R.id.button_manual).setOnClickListener {
-            manualInput.visibility =
-                if (manualInput.visibility == View.GONE) View.VISIBLE else View.GONE
+            val show = manualInput.visibility == View.GONE
+            manualInput.visibility = if (show) View.VISIBLE else View.GONE
+            val imm = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+            if (show) {
+                // 展开即聚焦并弹键盘：不弹键盘会被当成「点了没反应」。
+                manualInput.post {
+                    manualInput.requestFocus()
+                    imm.showSoftInput(manualInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                }
+            } else {
+                imm.hideSoftInputFromWindow(manualInput.windowToken, 0)
+            }
         }
-        manualInput.setOnEditorActionListener { _, _, _ ->
-            startWithPayload(manualInput.text.toString())
-            true
+        manualInput.setOnEditorActionListener { _, actionId, event ->
+            // 只认键盘「前往」动作或实体回车，其余动作（如「下一步」）不触发连接。
+            val isGo = actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO
+            val isEnter = event != null &&
+                event.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
+                event.action == android.view.KeyEvent.ACTION_DOWN
+            if (isGo || isEnter) {
+                startWithPayload(manualInput.text.toString())
+                true
+            } else {
+                false
+            }
         }
         findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
 
@@ -201,6 +220,10 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "配对信息格式不正确", Toast.LENGTH_SHORT).show()
             return
         }
+        // 发起连接后收起输入框和键盘，回到主状态。
+        manualInput.visibility = View.GONE
+        val imm = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        imm.hideSoftInputFromWindow(manualInput.windowToken, 0)
         connect(payload)
     }
 

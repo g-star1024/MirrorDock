@@ -255,6 +255,7 @@
   - 按钮灰色圆角边框：三个按钮样式统一 `android:stateListAnimator=@null`，去掉系统给 Button 默认挂的 Z 抬升投影（浅色底上呈灰边感）；白胶囊按下色同步去蓝（#E9EAEE）。
   - 产物：`test-runs/mirrordock-companion-debug-0.1.5-poc.apk`（SHA-256 b98d38d1…ef922）；已 adb 安装到真机（M2104K10AC）并启动，效果待用户确认。
   - 追补（同日用户反馈「墨色风格，用图标里的青碧色」→ versionCode 7 / 0.1.6-poc）：强调色改青碧（图标实测主色 #50B0B8；白底文字用加深档 #2F98A1、徽标底 #E6F4F5），hero 渐变改墨色带青碧冷调（#23393C→#131E20），连接状态点改亮青碧 #6FE3E8（绿→青，与主色呼应）；产物 `test-runs/mirrordock-companion-debug-0.1.6-poc.apk`（SHA-256 fbd3a057…87452b），已真机安装并启动。
+  - 追补（同日用户反馈「点手动输入有 bug」→ versionCode 8 / 0.1.7-poc）：真机复现被锁屏挡住（不绕过锁屏），按代码链路修三处——①展开即聚焦+弹键盘（原样只改 visibility，键盘不弹，观感「点了没反应」）；②输入框改白底+1dp 边框（bg_input_field，原底色 #F7F7F9 贴页面底色几乎隐身）；③`imeOptions=actionGo` + 只认 IME_ACTION_GO/实体回车触发连接（原任意编辑动作都触发）；发起连接后自动收起输入框与键盘。产物 `test-runs/mirrordock-companion-debug-0.1.7-poc.apk`（SHA-256 2d2a7d83…d0e02），已 adb 安装（设备锁屏中，待用户解锁验证）。
 
 ## 最终成品退出条件
 
