@@ -950,6 +950,11 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             }
         };
         if finished {
+            // 会话意外退出后同步菜单文案（连接/断开、录制开关、置灰项）。
+            // 测试环境没有 TRAY_APP，自动跳过。
+            if let Some(app) = TRAY_APP.get() {
+                refresh_tray_menu(app);
+            }
             return;
         }
     });
@@ -1267,23 +1272,46 @@ fn wake_screen_for_serial(runtimes: &AppRuntimes, serial: &str) -> Result<(), Ap
     })
 }
 
+/// 菜单里需要随会话状态改文案/可用性的项。
+///
+/// 文案只是提示，**动作以点击时的真实会话状态为准**：即使菜单文案与状态短暂
+/// 不一致（状态跃迁与菜单刷新之间有窗口期），也不会执行错误方向的动作。
+struct TrayMenuHandles {
+    connect: tauri::menu::MenuItem<tauri::Wry>,
+    wake: tauri::menu::MenuItem<tauri::Wry>,
+    shot: tauri::menu::MenuItem<tauri::Wry>,
+    record: tauri::menu::MenuItem<tauri::Wry>,
+}
+
+/// 监视线程（无 AppHandle 入参）在会话意外退出后刷新菜单用。
+/// setup 阶段设置一次；测试环境不设置，刷新自动降级为空操作。
+static TRAY_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
     use tauri::tray::TrayIconBuilder;
 
     let open = MenuItemBuilder::with_id("tray-open", "打开 MirrorDock").build(app)?;
-    let wake = MenuItemBuilder::with_id("tray-wake", "唤醒手机屏幕").build(app)?;
+    let connect = MenuItemBuilder::with_id("tray-connect", "连接设备").build(app)?;
+    let record = MenuItemBuilder::with_id("tray-record", "开始屏幕录制").build(app)?;
+    let wake = MenuItemBuilder::with_id("tray-wake", "屏幕唤醒").build(app)?;
     let shot = MenuItemBuilder::with_id("tray-screenshot", "手机截图").build(app)?;
     let quit = MenuItemBuilder::with_id("tray-quit", "退出 MirrorDock").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&open)
         .item(&PredefinedMenuItem::separator(app)?)
+        .item(&connect)
+        .item(&record)
+        .item(&PredefinedMenuItem::separator(app)?)
         .item(&wake)
         .item(&shot)
         .item(&PredefinedMenuItem::separator(app)?)
         .item(&quit)
         .build()?;
+
+    let _ = TRAY_APP.set(app.handle().clone());
+    app.manage(TrayMenuHandles { connect, wake, shot, record });
 
     TrayIconBuilder::with_id("mirrordock-tray")
         .icon(app.default_window_icon().expect("app has a default icon").clone())
@@ -1292,7 +1320,30 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| handle_tray_event(app, event.id().as_ref()))
         .build(app)?;
+
+    // 初始状态与空闲会话对齐（屏幕唤醒/截图在无会话时置灰）。
+    refresh_tray_menu(app.handle());
     Ok(())
+}
+
+/// 把菜单项的文案与可用性同步到当前会话状态。
+///
+/// 所有会话状态跃迁点（启动、停止、重启、监视线程发现进程退出）之后都应调用。
+/// 刷新失败静默忽略：菜单文案只是提示，真正的动作以点击时的状态校验为准。
+fn refresh_tray_menu(app: &AppHandle) {
+    let Some(handles) = app.try_state::<TrayMenuHandles>() else {
+        return;
+    };
+    let sessions: State<SessionStore> = app.state();
+    let Ok(state) = sessions.lock() else {
+        return;
+    };
+    let active = is_session_active(&state);
+    let recording = state.process.is_some() && state.options.record;
+    let _ = handles.connect.set_text(if active { "断开连接" } else { "连接设备" });
+    let _ = handles.record.set_text(if recording { "结束屏幕录制" } else { "开始屏幕录制" });
+    let _ = handles.wake.set_enabled(active);
+    let _ = handles.shot.set_enabled(active);
 }
 
 fn handle_tray_event(app: &AppHandle, id: &str) {
@@ -1301,11 +1352,129 @@ fn handle_tray_event(app: &AppHandle, id: &str) {
         "tray-quit" => app.exit(0),
         "tray-wake" => tray_wake(app),
         "tray-screenshot" => tray_screenshot(app),
+        "tray-connect" => tray_connect_toggle(app),
+        "tray-record" => tray_record_toggle(app),
         _ => {}
     }
 }
 
-/// 菜单里的「唤醒手机屏幕」。没有进行中的会话时用系统对话框如实说明。
+/// 菜单里的「连接设备 / 断开连接」。
+///
+/// 连接目标：优先最近设备里当前就绪的那台（符合「连我刚才那台」的直觉），
+/// 其次任意一台就绪设备；一台就绪的都没有时如实提示。启动参数用后端默认值，
+/// 与前端默认设置一致（保持唤醒/剪贴板/声音开、录制关）。
+fn tray_connect_toggle(app: &AppHandle) {
+    let sessions: State<SessionStore> = app.state();
+    let runtimes: State<AppRuntimes> = app.state();
+    let log: State<DiagnosticsLog> = app.state();
+    let active = sessions
+        .lock()
+        .map(|state| is_session_active(&state))
+        .unwrap_or(true);
+    if active {
+        let result = stop_mirroring_with(&sessions);
+        log.record_outcome("mirror_stop", result.as_ref().err(), &[]);
+        if let Err(error) = result {
+            tray_notify_error(app, &error.message);
+        }
+        refresh_tray_menu(app);
+        return;
+    }
+    let recent = recent_devices_path(app)
+        .and_then(|path| load_recent_devices(&path))
+        .unwrap_or_default();
+    let devices = runtimes.adb.list_devices().unwrap_or_default();
+    let Some((serial, label)) = pick_tray_target(&recent, &devices) else {
+        tray_notify_info(
+            app,
+            "没有检测到可连接的手机。请先用数据线连接并允许调试，或在主窗口中使用无线连接。",
+        );
+        return;
+    };
+    let result =
+        start_mirroring_with(&runtimes, &sessions, serial.clone(), SessionOptions::default(), None);
+    log.record_outcome("mirror_start", result.as_ref().err(), &[&serial, &label]);
+    if let Err(error) = result {
+        tray_notify_error(app, &error.message);
+    }
+    refresh_tray_menu(app);
+}
+
+/// 从（最近设备 × 当前就绪设备）里挑出菜单「连接设备」的目标。
+fn pick_tray_target(recent: &[RecentDevice], devices: &[AdbDevice]) -> Option<(String, String)> {
+    let target = |device: &AdbDevice| (device.serial.clone(), device.label.clone());
+    // 最近设备优先：符合「连我刚才用的那台」的直觉。
+    for entry in recent {
+        if let Some(device) = devices
+            .iter()
+            .find(|device| device.serial == entry.serial && device.state == DeviceState::Ready)
+        {
+            return Some(target(device));
+        }
+    }
+    // 没有命中的最近设备时，取第一台就绪设备；未授权/离线设备不能作为目标。
+    devices
+        .iter()
+        .find(|device| device.state == DeviceState::Ready)
+        .map(target)
+}
+
+/// 菜单里的「开始/结束屏幕录制」。
+///
+/// 录制开关改变窗口参数，语义与主窗口一致：结束旧窗口 + 按新设置重开，
+/// 画面会短暂中断——成功后的对话框里如实说明，不假装是热更新。
+fn tray_record_toggle(app: &AppHandle) {
+    let sessions: State<SessionStore> = app.state();
+    let runtimes: State<AppRuntimes> = app.state();
+    let log: State<DiagnosticsLog> = app.state();
+    // 没有真正运行中的进程时给统一提示，不去触碰一个不存在的会话。
+    let (serial, current) = match running_session_options(&sessions) {
+        Ok(value) => value,
+        Err(_) => {
+            tray_notify_no_session(app);
+            return;
+        }
+    };
+    let next = SessionOptions { record: !current.record, ..current };
+    let starting_recording = next.record;
+    if let Err(error) = ensure_edition_allows(app, &next) {
+        tray_notify_error(app, &error.message);
+        return;
+    }
+    // 文件名用 Unix 时间戳（纯 ASCII，能过 validate_media_name 白名单），不猜时区。
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let file_name = format!("mirrordock-record-{seconds}.mp4");
+    let record_path = match prepare_recording_path(app, next.record, Some(&file_name)) {
+        Ok(path) => path,
+        Err(error) => {
+            tray_notify_error(app, &error.message);
+            return;
+        }
+    };
+    let result = apply_session_options_with(&runtimes, &sessions, next, record_path);
+    log.record_outcome("session_update", result.as_ref().err(), &[&serial]);
+    match result {
+        Ok(update) => {
+            refresh_tray_menu(app);
+            let message = if update.applied {
+                if starting_recording {
+                    format!("已开始屏幕录制：{file_name}（镜像窗口已按录制要求重启，画面短暂中断）。")
+                } else {
+                    "已结束屏幕录制，文件保存在本机视频目录的 MirrorDock 文件夹。".to_owned()
+                }
+            } else {
+                update.note.unwrap_or_else(|| "设置未变化。".to_owned())
+            };
+            tray_notify_info(app, &message);
+        }
+        Err(error) => tray_notify_error(app, &error.message),
+    }
+}
+
+/// 菜单里的「屏幕唤醒」。没有进行中的会话时用系统对话框如实说明。
 fn tray_wake(app: &AppHandle) {
     let sessions: State<SessionStore> = app.state();
     let runtimes: State<AppRuntimes> = app.state();
@@ -1350,9 +1519,16 @@ fn tray_screenshot(app: &AppHandle) {
 
 /// 菜单动作没有会话可作用时的提示。
 fn tray_notify_no_session(app: &AppHandle) {
+    tray_notify_info(
+        app,
+        "当前没有进行中的镜像会话。先在 MirrorDock 里连接手机，再使用该功能。",
+    );
+}
+
+fn tray_notify_info(app: &AppHandle, message: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     app.dialog()
-        .message("当前没有进行中的镜像会话。先在 MirrorDock 里连接手机，再使用该功能。")
+        .message(message.to_string())
         .title("MirrorDock")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::Ok)
@@ -1501,7 +1677,7 @@ fn describe_lock_state(
                 (
                     "手机已解锁，仅屏幕处于关闭状态；设备并未锁定，可以远程点亮后继续操作。"
                         .to_owned(),
-                    "点击「唤醒屏幕」，手机亮起后即可直接在镜像窗口中操作。".to_owned(),
+                    "点击「屏幕唤醒」，手机亮起后即可直接在镜像窗口中操作。".to_owned(),
                 )
             } else {
                 (
@@ -2739,6 +2915,7 @@ fn start_mirroring(
         })
         .unwrap_or_else(|| serial.clone());
     remember_recent_device(&app, &serial, &label);
+    refresh_tray_menu(&app);
     Ok(())
 }
 
@@ -2950,9 +3127,14 @@ fn apply_session_options_with(
 }
 
 #[tauri::command]
-fn stop_mirroring(sessions: State<SessionStore>, log: State<DiagnosticsLog>) -> Result<(), AppError> {
+fn stop_mirroring(
+    app: AppHandle,
+    sessions: State<SessionStore>,
+    log: State<DiagnosticsLog>,
+) -> Result<(), AppError> {
     let result = stop_mirroring_with(&sessions);
     log.record_outcome("mirror_stop", result.as_ref().err(), &[]);
+    refresh_tray_menu(&app);
     result
 }
 
@@ -2999,6 +3181,7 @@ fn update_session_options(
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = apply_session_options_with(&runtimes, &sessions, options, record_path);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
+    refresh_tray_menu(&app);
     result
 }
 
@@ -5588,7 +5771,7 @@ mod tests {
     fn waking_is_offered_only_for_an_unlocked_but_asleep_device() {
         let (_, recovery) =
             describe_lock_state(KeyguardState::Unlocked, Some(true), ScreenState::Asleep);
-        assert!(recovery.contains("唤醒屏幕"));
+        assert!(recovery.contains("屏幕唤醒"));
 
         let (explanation, _) =
             describe_lock_state(KeyguardState::Unknown, None, ScreenState::Unknown);
@@ -5658,6 +5841,56 @@ mod tests {
     }
 
     // -- 最近设备 --
+
+    fn adb_device(serial: &str, label: &str, state: DeviceState) -> AdbDevice {
+        AdbDevice {
+            serial: serial.into(),
+            label: label.into(),
+            state,
+        }
+    }
+
+    #[test]
+    fn tray_connect_target_prefers_a_ready_recent_device() {
+        let recent = vec![RecentDevice {
+            serial: "b".into(),
+            label: "B".into(),
+            last_used_at: 2,
+        }];
+        let devices = vec![
+            adb_device("a", "A", DeviceState::Ready),
+            adb_device("b", "B", DeviceState::Ready),
+        ];
+        // 最近设备优先于列表顺序：不是第一台就绪设备，而是「我刚才用的那台」。
+        assert_eq!(
+            pick_tray_target(&recent, &devices),
+            Some(("b".into(), "B".into()))
+        );
+    }
+
+    #[test]
+    fn tray_connect_target_falls_back_to_the_first_ready_device() {
+        let recent = vec![RecentDevice {
+            serial: "gone".into(),
+            label: "已拔出".into(),
+            last_used_at: 9,
+        }];
+        let devices = vec![
+            adb_device("u", "U", DeviceState::Unauthorized),
+            adb_device("a", "A", DeviceState::Ready),
+        ];
+        // 最近记录里的设备不在线时，取第一台就绪设备；未授权设备不能作为目标。
+        assert_eq!(
+            pick_tray_target(&recent, &devices),
+            Some(("a".into(), "A".into()))
+        );
+    }
+
+    #[test]
+    fn tray_connect_target_is_none_without_ready_devices() {
+        let devices = vec![adb_device("u", "U", DeviceState::Unauthorized)];
+        assert_eq!(pick_tray_target(&[], &devices), None);
+    }
 
     #[test]
     fn recent_devices_dedupe_and_keep_the_most_recent_first() {

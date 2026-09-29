@@ -1238,7 +1238,7 @@ function App() {
                       <p className="capability-pending">正在读取手机当前的锁屏状态…</p>
                     )}
                     <button className="secondary-button" type="button" disabled={lockBusy} onClick={() => void wakeDevice(readyDevice.serial)}>
-                      {lockBusy ? "正在唤醒…" : "唤醒屏幕"}
+                      {lockBusy ? "正在唤醒…" : "屏幕唤醒"}
                     </button>
                     {sessionActive && lockReport?.screen === "asleep" && (
                       <p className="capability-pending" role="status">屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
@@ -1556,94 +1556,192 @@ function App() {
               <h1>设置</h1>
               <p className="intro">镜像窗口、快捷键与授权。</p>
             </div>
-            <section className="connection-card">
-              <fieldset className="session-options">
-                <legend>通用</legend>
-                <label><input type="checkbox" checked={autostartEnabled} onChange={e => void toggleAutostart(e.target.checked)} /> 开机自动启动 MirrorDock</label>
+
+            <section className="settings-card">
+              <header className="settings-card-head">
+                <div><h2>通用</h2><p>窗口关闭行为、菜单栏/托盘与开机启动。</p></div>
+              </header>
+              <div className="settings-rows">
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">开机自动启动 MirrorDock</span>
+                    <span className="setting-desc">登录本机后自动运行，无需手动打开。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="开机自动启动" checked={autostartEnabled} onChange={e => void toggleAutostart(e.target.checked)} /></label>
+                </div>
                 {isMac && (
-                  <label><input type="checkbox" checked={appSettings.hide_dock_icon} onChange={e => void toggleHideDockIcon(e.target.checked)} /> 隐藏 Dock 图标（只保留屏幕顶部菜单栏图标）</label>
+                  <div className="setting-row">
+                    <div className="setting-info">
+                      <span className="setting-name">隐藏 Dock 图标</span>
+                      <span className="setting-desc">只保留屏幕顶部菜单栏图标，从菜单栏回到主窗口。</span>
+                    </div>
+                    <label className="setting-toggle"><input type="checkbox" aria-label="隐藏 Dock 图标" checked={appSettings.hide_dock_icon} onChange={e => void toggleHideDockIcon(e.target.checked)} /></label>
+                  </div>
                 )}
-                <p>点窗口关闭按钮 = 最小化到菜单栏/托盘，不会结束镜像会话；从菜单栏/托盘图标可以回到主窗口、唤醒手机、截图或退出。</p>
-                <p>镜像画面黑屏（手机熄屏）时，在镜像窗口上点右键即可直接点亮屏幕，不必回到本窗口点「唤醒屏幕」。</p>
-                {generalNotice && <p className="apply-notice" role="status">{generalNotice}</p>}
-              </fieldset>
+                <p className="setting-note">点窗口关闭按钮 = 最小化到菜单栏/托盘，不会结束镜像会话。菜单栏/托盘里可以：连接/断开、开始/结束屏幕录制、屏幕唤醒、手机截图。</p>
+                <p className="setting-note">镜像画面黑屏（手机熄屏）时，在镜像窗口上点右键即可直接点亮屏幕，不必回到本窗口。</p>
+                {generalNotice && <p className="setting-note apply-notice" role="status">{generalNotice}</p>}
+              </div>
+            </section>
 
-              <fieldset className="session-options">
-                <legend>镜像窗口设置{sessionActive ? "（会话中修改需重启镜像窗口）" : "（开始镜像时生效）"}</legend>
-                <label>画质 <select value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>
-                  <option value="smooth">流畅 · 1024 / 2 Mbps</option><option value="balanced">均衡 · 1920 / 8 Mbps</option><option value="sharp">清晰 · 2560 / 16 Mbps</option>
-                </select></label>
-                <label>显示方向 <select value={options.rotation} onChange={e => updateOptions({...options, rotation: Number(e.target.value)})}>
-                  <option value={0}>自动（跟随手机）</option>
-                  <option value={90}>锁定 90°</option>
-                  <option value={180}>锁定 180°</option>
-                  <option value={270}>锁定 270°</option>
-                </select></label>
-                <label><input type="checkbox" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})}/> 全屏启动</label>
-                <label><input type="checkbox" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})}/> 窗口置顶</label>
-                <label><input type="checkbox" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})}/> 会话期间保持手机唤醒</label>
-                <label><input type="checkbox" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})}/> 录制这一会话的画面（MP4，保存在本机）{!proEdition && "——专业版功能，在下方「版本与授权」激活后可用"}</label>
-                <label><input type="checkbox" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})}/> 双向同步剪贴板</label>
-                <label><input type="checkbox" checked={options.audio} disabled={audioUnsupported} onChange={e => updateOptions({...options, audio: e.target.checked})}/> 转发手机播放的声音（Android 11+）{audioUnsupported ? "——这台手机不支持系统音频转发，已自动关闭" : ""}</label>
-                <label>镜像窗口快捷键修饰键 <select value={options.shortcut_mod ?? ""} onChange={e => updateOptions({...options, shortcut_mod: e.target.value || null})}>
-                  <option value="">默认（左 Alt / 左 Super）</option>
-                  <option value="lctrl">左 Ctrl</option>
-                  <option value="rctrl">右 Ctrl</option>
-                  <option value="lalt">左 Alt</option>
-                  <option value="ralt">右 Alt</option>
-                  <option value="lsuper">左 Super（Win / ⌘）</option>
-                  <option value="rsuper">右 Super</option>
-                </select></label>
-                <label><input type="checkbox" checked={options.show_touches} onChange={e => updateOptions({...options, show_touches: e.target.checked})}/> 显示触摸点（演示用）</label>
-                <label><input type="checkbox" checked={options.read_only} onChange={e => updateOptions({...options, read_only: e.target.checked})}/> 只读模式（键鼠不控制手机）</label>
-                {sessionActive && (
-                  <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
-                    {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
-                  </button>
-                )}
-                <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
-                {sessionActive && <p>镜像窗口形态在启动时确定，运行中修改需重启窗口，画面会短暂中断。</p>}
-                <p>显示方向选「自动」时跟随手机旋转；声音只在电脑播放、手机静音；只读模式下电脑键鼠不控制手机。受保护内容（支付、密码页）系统会屏蔽为黑屏。</p>
-                <p>镜像窗口内建快捷键（修饰键在上方选择）：+H 主屏幕、+B 返回、+S 最近任务、+N 通知栏、+P 电源、+O 熄屏（镜像继续）、+↑/↓ 音量、+F 全屏、+Q 退出。</p>
-                <p>会话进行中的全局快捷键（无需切回本窗口）可在下方「全局快捷键」中自定义。</p>
-                {applyNotice && <p className="apply-notice" role="status">{applyNotice}</p>}
-              </fieldset>
+            <section className="settings-card">
+              <header className="settings-card-head">
+                <div><h2>镜像窗口</h2><p>{sessionActive ? "会话中修改需重启镜像窗口" : "开始镜像时生效"}</p></div>
+                <div className="settings-actions">
+                  {sessionActive && (
+                    <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
+                      {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
+                    </button>
+                  )}
+                  <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
+                </div>
+              </header>
+              <div className="settings-rows">
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">画质</span>
+                    <span className="setting-desc">分辨率与码率越高越清晰，对电脑与手机性能要求也越高。</span>
+                  </div>
+                  <select className="setting-control" value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>
+                    <option value="smooth">流畅 · 1024 / 2 Mbps</option><option value="balanced">均衡 · 1920 / 8 Mbps</option><option value="sharp">清晰 · 2560 / 16 Mbps</option>
+                  </select>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">显示方向</span>
+                    <span className="setting-desc">「自动」跟随手机旋转，打开横屏游戏会自动转为横屏。</span>
+                  </div>
+                  <select className="setting-control" aria-label="显示方向" value={options.rotation} onChange={e => updateOptions({...options, rotation: Number(e.target.value)})}>
+                    <option value={0}>自动（跟随手机）</option>
+                    <option value={90}>锁定 90°</option>
+                    <option value={180}>锁定 180°</option>
+                    <option value={270}>锁定 270°</option>
+                  </select>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">全屏启动</span>
+                    <span className="setting-desc">镜像窗口直接铺满整个屏幕。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="全屏启动" checked={options.fullscreen} onChange={e => updateOptions({...options, fullscreen: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">窗口置顶</span>
+                    <span className="setting-desc">镜像窗口始终浮在其他窗口上方。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="窗口置顶" checked={options.always_on_top} onChange={e => updateOptions({...options, always_on_top: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">会话期间保持手机唤醒</span>
+                    <span className="setting-desc">镜像进行中手机不会自动熄屏锁屏。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="会话期间保持手机唤醒" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">录制这一会话的画面</span>
+                    <span className="setting-desc">MP4 保存在本机视频目录。{!proEdition && "专业版功能，在下方「版本与授权」激活后可用"}</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="录制这一会话的画面" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">双向同步剪贴板</span>
+                    <span className="setting-desc">在电脑和手机之间直接复制粘贴。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="双向同步剪贴板" checked={options.clipboard_autosync} onChange={e => updateOptions({...options, clipboard_autosync: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">转发手机播放的声音</span>
+                    <span className="setting-desc">{audioUnsupported ? "这台手机不支持系统音频转发，已自动关闭。" : "声音在电脑播放、手机静音（Android 11+）。"}</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="转发手机播放的声音" checked={options.audio} disabled={audioUnsupported} onChange={e => updateOptions({...options, audio: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">显示触摸点</span>
+                    <span className="setting-desc">画面上显示点按位置，适合演示与录屏。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="显示触摸点" checked={options.show_touches} onChange={e => updateOptions({...options, show_touches: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">只读模式</span>
+                    <span className="setting-desc">电脑键鼠只看不控，避免误操作手机。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="只读模式" checked={options.read_only} onChange={e => updateOptions({...options, read_only: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">镜像窗口快捷键修饰键</span>
+                    <span className="setting-desc">窗口内组合键的修饰键，如 +H 主屏幕、+B 返回、+O 熄屏（镜像继续）。</span>
+                  </div>
+                  <select className="setting-control" value={options.shortcut_mod ?? ""} onChange={e => updateOptions({...options, shortcut_mod: e.target.value || null})}>
+                    <option value="">默认（左 Alt / 左 Super）</option>
+                    <option value="lctrl">左 Ctrl</option>
+                    <option value="rctrl">右 Ctrl</option>
+                    <option value="lalt">左 Alt</option>
+                    <option value="ralt">右 Alt</option>
+                    <option value="lsuper">左 Super（Win / ⌘）</option>
+                    <option value="rsuper">右 Super</option>
+                  </select>
+                </div>
+                <p className="setting-note">窗口内建快捷键：+H 主屏幕、+B 返回、+S 最近任务、+N 通知栏、+P 电源、+O 熄屏（镜像继续）、+↑/↓ 音量、+F 全屏、+Q 退出。</p>
+                <p className="setting-note">受保护内容（支付、密码页）系统会屏蔽为黑屏；会话进行中的全局快捷键（无需切回本窗口）可在下方「全局快捷键」中自定义。</p>
+                {sessionActive && <p className="setting-note">镜像窗口形态在启动时确定，运行中修改需重启窗口，画面会短暂中断。</p>}
+                {applyNotice && <p className="setting-note apply-notice" role="status">{applyNotice}</p>}
+              </div>
+            </section>
 
-              <fieldset className="session-options">
-                <legend>全局快捷键</legend>
-                <p>镜像运行中时全局生效（Windows 用 Ctrl，macOS 用 ⌘）。格式：修饰键+按键，如 Ctrl+Alt+S。</p>
-                <label>截图 <input value={shortcuts.screenshot} onChange={e => updateShortcuts({ ...shortcuts, screenshot: e.target.value })} placeholder="CommandOrControl+Alt+S" autoComplete="off" spellCheck={false} /></label>
-                <label>录制开关 <input value={shortcuts.record} onChange={e => updateShortcuts({ ...shortcuts, record: e.target.value })} placeholder="CommandOrControl+Alt+R" autoComplete="off" spellCheck={false} /></label>
-                <label>轮换方向 <input value={shortcuts.rotate} onChange={e => updateShortcuts({ ...shortcuts, rotate: e.target.value })} placeholder="CommandOrControl+Alt+D" autoComplete="off" spellCheck={false} /></label>
-                {(!isValidShortcut(shortcuts.screenshot) || !isValidShortcut(shortcuts.record) || !isValidShortcut(shortcuts.rotate)) && (
-                  <p className="capability-pending" role="alert">格式无效：至少一个修饰键（Ctrl/Alt/⌘ 等）加一个普通键。无效的组合不会生效。</p>
-                )}
-                <button type="button" className="secondary-button" onClick={() => updateShortcuts({ ...defaultShortcuts })}>恢复默认</button>
-                <p className="capability-pending">修改立即保存；镜像运行中会自动改用新组合，无需重启。</p>
-              </fieldset>
+            <section className="settings-card">
+              <header className="settings-card-head">
+                <div><h2>全局快捷键</h2><p>镜像运行中全局生效，无需切回本窗口（Windows 用 Ctrl，macOS 用 ⌘）。</p></div>
+                <div className="settings-actions">
+                  <button type="button" className="secondary-button" onClick={() => updateShortcuts({ ...defaultShortcuts })}>恢复默认</button>
+                </div>
+              </header>
+              <div className="shortcut-grid">
+                <label className="shortcut-row"><span>截图</span><input value={shortcuts.screenshot} onChange={e => updateShortcuts({ ...shortcuts, screenshot: e.target.value })} placeholder="CommandOrControl+Alt+S" autoComplete="off" spellCheck={false} /></label>
+                <label className="shortcut-row"><span>录制开关</span><input value={shortcuts.record} onChange={e => updateShortcuts({ ...shortcuts, record: e.target.value })} placeholder="CommandOrControl+Alt+R" autoComplete="off" spellCheck={false} /></label>
+                <label className="shortcut-row"><span>轮换方向</span><input value={shortcuts.rotate} onChange={e => updateShortcuts({ ...shortcuts, rotate: e.target.value })} placeholder="CommandOrControl+Alt+D" autoComplete="off" spellCheck={false} /></label>
+              </div>
+              {(!isValidShortcut(shortcuts.screenshot) || !isValidShortcut(shortcuts.record) || !isValidShortcut(shortcuts.rotate)) && (
+                <p className="setting-note" role="alert">格式无效：至少一个修饰键（Ctrl/Alt/⌘ 等）加一个普通键。无效的组合不会生效。</p>
+              )}
+              <p className="setting-note">格式：修饰键+按键，如 Ctrl+Alt+S。修改立即保存；镜像运行中会自动改用新组合，无需重启。</p>
+            </section>
 
-              <fieldset className="session-options">
-                <legend>版本与授权</legend>
-                <p>当前版本：{editionLabel(entitlement?.edition)}{proEdition && entitlement?.key_id ? `（许可证 ${entitlement.key_id}，${expiryText(entitlement.expires_at)}）` : ""}</p>
+            <section className="settings-card">
+              <header className="settings-card-head">
+                <div><h2>版本与授权</h2><p>当前版本：{editionLabel(entitlement?.edition)}{proEdition && entitlement?.key_id ? `（许可证 ${entitlement.key_id}，${expiryText(entitlement.expires_at)}）` : ""}</p></div>
+              </header>
+              <div className="settings-rows">
                 {proEdition ? (
                   <>
-                    <p>专业版已激活：MP4 录制可用。授权状态保存在本机，激活与使用都不需要联网账号。</p>
-                    <button type="button" className="secondary-button" disabled={licenseBusy} onClick={() => void deactivateLicense()}>
-                      {licenseBusy ? "正在处理…" : "撤销本机授权"}
-                    </button>
+                    <p className="setting-note">专业版已激活：MP4 录制可用。授权状态保存在本机，激活与使用都不需要联网账号。</p>
+                    <div className="settings-actions license-action">
+                      <button type="button" className="secondary-button" disabled={licenseBusy} onClick={() => void deactivateLicense()}>
+                        {licenseBusy ? "正在处理…" : "撤销本机授权"}
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <>
-                    <label>专业版许可证 <input value={licenseInput} onChange={e => setLicenseInput(e.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" /></label>
-                    <button type="button" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>
-                      {licenseBusy ? "正在激活…" : "激活专业版"}
-                    </button>
-                    <p>免费版含全部镜像、截图与传输功能；专业版解锁 MP4 录制。离线激活，只保存在本机。</p>
+                    <div className="license-input-row">
+                      <label className="shortcut-row"><span>许可证</span><input value={licenseInput} onChange={e => setLicenseInput(e.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" autoComplete="off" spellCheck={false} /></label>
+                      <button type="button" className="primary-button" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>
+                        {licenseBusy ? "正在激活…" : "激活专业版"}
+                      </button>
+                    </div>
+                    <p className="setting-note">免费版含全部镜像、截图与传输功能；专业版解锁 MP4 录制。离线激活，只保存在本机。</p>
                   </>
                 )}
-                {licenseMessage && <p className="capability-pending" role="status">{licenseMessage}</p>}
+                {licenseMessage && <p className="setting-note" role="status">{licenseMessage}</p>}
                 {licenseError && <p className="diagnostic" role="alert">{licenseError}</p>}
-              </fieldset>
+              </div>
             </section>
           </section>
 

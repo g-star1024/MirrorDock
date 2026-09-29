@@ -156,15 +156,37 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 .ready-panel { display: flex; align-items: center; gap: 13px; margin-top: 20px; padding: 16px; border: 1px solid #d9ecdf; border-radius: 14px; background: #f2faf5; }
 .device-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-.session-options { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 0; padding: 16px; border: 1px solid #e6eaf2; border-radius: 12px; }
-.session-options legend { padding: 0 6px; font-weight: 700; font-size: 14px; color: #3c4654; }
-.session-options label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-.session-options select { font: inherit; font-size: 13.5px; padding: 6px 8px; max-width: 100%; border: 1px solid #d4dae4; border-radius: 8px; background: #fff; }
-.session-options input[type="checkbox"] { width: 15px; height: 15px; accent-color: #2e6be6; }
-.session-options input[type="text"], .session-options input:not([type]) { flex: 1 1 220px; padding: 8px 10px; border: 1px solid #d4dae4; border-radius: 8px; font: inherit; font-size: 14px; }
-.session-options p { width: 100%; margin: 0; color: #6b7686; font-size: 13px; }
-/* 「应用并重启镜像窗口」的结果反馈：与普通说明文字区分开，失败信息不能被当成背景文字被忽略。 */
-.session-options p.apply-notice { padding: 10px 12px; border-left: 3px solid #2e6be6; border-radius: 8px; color: #1f4fc4; background: #f0f5fd; }
+
+/* -- 设置页：每张卡一个主题，行式布局（名称+说明居左，控件居右） ---------- */
+
+.settings-card { padding: 22px 24px; border: 1px solid #e6eaf2; border-radius: 16px; background: #fff; box-shadow: 0 10px 30px rgba(28, 45, 80, .06); margin-bottom: 16px; }
+.settings-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid #eef1f6; }
+.settings-card-head h2 { margin: 0; font-size: 15.5px; color: #253041; }
+.settings-card-head p { margin: 4px 0 0; color: #6b7686; font-size: 13px; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 10px; flex: 0 0 auto; }
+
+.settings-rows { display: grid; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 0; border-bottom: 1px solid #f2f4f8; }
+.setting-row:last-of-type { border-bottom: 0; }
+.setting-info { display: grid; gap: 3px; min-width: 0; }
+.setting-name { color: #2b3648; font-size: 14px; font-weight: 650; }
+.setting-desc { color: #6b7686; font-size: 12.5px; line-height: 1.5; }
+.setting-toggle { flex: 0 0 auto; display: flex; align-items: center; }
+.setting-toggle input, .setting-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: #2e6be6; }
+.setting-row select.setting-control { flex: 0 0 auto; max-width: 62%; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 1px solid #d4dae4; border-radius: 8px; background: #fff; }
+
+.setting-note { margin: 10px 0 0; color: #6b7686; font-size: 13px; line-height: 1.55; }
+/* 「应用/保存」类结果反馈：与普通说明文字区分开，失败信息不能被当成背景文字忽略。 */
+.setting-note.apply-notice { padding: 10px 12px; border-left: 3px solid #2e6be6; border-radius: 8px; color: #1f4fc4; background: #f0f5fd; }
+
+.shortcut-grid { display: grid; gap: 10px; margin-top: 12px; }
+.shortcut-row { display: flex; align-items: center; gap: 14px; }
+.shortcut-row > span { flex: 0 0 72px; color: #2b3648; font-size: 14px; font-weight: 650; }
+.shortcut-row input { flex: 1 1 auto; max-width: 320px; padding: 8px 10px; border: 1px solid #d4dae4; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+
+.license-input-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.license-input-row .shortcut-row { flex: 1 1 320px; }
+.license-action { margin-top: 12px; }
 .device-choice { padding: 7px 12px; border: 1px solid #d4dae4; border-radius: 999px; color: #3c4654; background: #fff; font-size: 13px; font-weight: 650; cursor: pointer; }
 .device-choice:hover { border-color: #2e6be6; color: #1f4fc4; }
 .device-choice.selected { border-color: #2e6be6; color: #fff; background: #2e6be6; }
