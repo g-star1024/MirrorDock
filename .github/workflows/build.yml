@@ -250,7 +250,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             release-files/**/*.dmg
-            release-files/**/*.app.tar.gz
             release-files/**/*.msi
             release-files/**/*.exe
             release-files/**/*.deb
