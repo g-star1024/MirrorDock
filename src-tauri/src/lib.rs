@@ -1115,6 +1115,261 @@ fn save_trusted_devices(path: &Path, devices: &[TrustedWirelessDevice]) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// 应用级设置（与镜像会话参数无关的本机偏好）
+// ---------------------------------------------------------------------------
+
+/// 本机应用偏好。与 SessionOptions 的区别：这些设置不进镜像子进程参数，
+/// 只影响客户端自身的行为（窗口、图标）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+struct AppSettings {
+    /// 仅 macOS：隐藏 Dock 图标，只保留菜单栏图标与菜单。
+    /// Windows/Linux 上恒为 false（写了也不生效，读出原样返回）。
+    hide_dock_icon: bool,
+}
+
+fn app_settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("app-settings.json"))
+        .map_err(|_| {
+            AppError::new(
+                "settings_unavailable",
+                "无法访问本机设置。",
+                "请检查本机文件权限，或重新安装 MirrorDock。",
+            )
+        })
+}
+
+/// 读取应用设置。
+///
+/// 刻意**容错**：设置文件缺失或损坏一律回默认值。设置坏了不应该挡住应用启动——
+/// 用户永远可以从界面里重新勾选，让文件被正常覆盖写回。
+fn load_app_settings(path: &Path) -> AppSettings {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<AppSettings>(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_app_settings(path: &Path, settings: &AppSettings) -> Result<(), AppError> {
+    let directory = path.parent().ok_or_else(|| {
+        AppError::new(
+            "settings_write_failed",
+            "无法保存本机设置。",
+            "请检查本机文件权限。",
+        )
+    })?;
+    fs::create_dir_all(directory).map_err(|_| {
+        AppError::new(
+            "settings_write_failed",
+            "无法创建本机设置目录。",
+            "请检查本机文件权限。",
+        )
+    })?;
+    let serialized = serde_json::to_vec_pretty(settings).map_err(|_| {
+        AppError::new(
+            "settings_write_failed",
+            "无法整理本机设置。",
+            "请重试，或重新安装 MirrorDock。",
+        )
+    })?;
+    fs::write(path, serialized).map_err(|_| {
+        AppError::new(
+            "settings_write_failed",
+            "无法保存本机设置。",
+            "请检查本机文件权限。",
+        )
+    })
+}
+
+/// 按设置应用 macOS 的 Dock/菜单栏策略。
+///
+/// 只在 macOS 上有意义；其他平台什么都不做（不报错——设置在那些平台本来就
+/// 不该出现勾选项）。运行中切换由 `set_app_settings` 触发。
+fn apply_dock_icon_policy(app: &AppHandle, settings: &AppSettings) {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if settings.hide_dock_icon {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        };
+        if let Err(error) = app.set_activation_policy(policy) {
+            eprintln!("set_activation_policy failed: {error}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, settings);
+    }
+}
+
+#[tauri::command]
+fn get_app_settings(app: AppHandle) -> Result<AppSettings, AppError> {
+    Ok(load_app_settings(&app_settings_path(&app)?))
+}
+
+#[tauri::command]
+fn set_app_settings(app: AppHandle, settings: AppSettings) -> Result<AppSettings, AppError> {
+    // macOS 之外不允许打开隐藏 Dock（前端也不展示该选项；这里再兜一层底，
+    // 防止手改 JSON 后在 Windows/Linux 上出现「勾了但没有任何效果」的假开关）。
+    let settings = AppSettings {
+        hide_dock_icon: cfg!(target_os = "macos") && settings.hide_dock_icon,
+    };
+    apply_dock_icon_policy(&app, &settings);
+    save_app_settings(&app_settings_path(&app)?, &settings)?;
+    Ok(settings)
+}
+
+// ---------------------------------------------------------------------------
+// 菜单栏 / 托盘
+//
+// 关闭按钮 = 最小化到菜单栏（macOS）/托盘（Windows/Linux），不退出。
+// 退出只能从菜单菜单触发，保证用户始终有明确的出口。
+// ---------------------------------------------------------------------------
+
+/// 显示并聚焦主窗口（macOS 上还要把应用带回前台，否则窗口在后台不拿焦点）。
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Accessory 模式下窗口不会自动抢焦点/前置，需要显式激活应用。
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        if let Err(error) = app.show() {
+            eprintln!("app.show failed: {error}");
+        }
+    }
+}
+
+/// 取当前会话的序列号（仅会话进行中）。没有会话返回 None。
+fn tray_active_serial(sessions: &SessionStore) -> Option<String> {
+    let state = sessions.lock().ok()?;
+    if !is_session_active(&state) {
+        return None;
+    }
+    state.session.serial.clone()
+}
+
+/// 点亮手机屏幕（供命令与菜单复用）。
+fn wake_screen_for_serial(runtimes: &AppRuntimes, serial: &str) -> Result<(), AppError> {
+    runtimes.adb.wake_screen(serial).map_err(|error| {
+        adb_command_error(
+            error,
+            "wake_failed",
+            "无法点亮手机屏幕。",
+            "请确认数据线或无线连接仍然有效；也可以直接按一下手机的电源键。",
+        )
+    })
+}
+
+fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+    use tauri::tray::TrayIconBuilder;
+
+    let open = MenuItemBuilder::with_id("tray-open", "打开 MirrorDock").build(app)?;
+    let wake = MenuItemBuilder::with_id("tray-wake", "唤醒手机屏幕").build(app)?;
+    let shot = MenuItemBuilder::with_id("tray-screenshot", "手机截图").build(app)?;
+    let quit = MenuItemBuilder::with_id("tray-quit", "退出 MirrorDock").build(app)?;
+
+    let menu = MenuBuilder::new(app)
+        .item(&open)
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&wake)
+        .item(&shot)
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&quit)
+        .build()?;
+
+    TrayIconBuilder::with_id("mirrordock-tray")
+        .icon(app.default_window_icon().expect("app has a default icon").clone())
+        .tooltip("MirrorDock")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| handle_tray_event(app, event.id().as_ref()))
+        .build(app)?;
+    Ok(())
+}
+
+fn handle_tray_event(app: &AppHandle, id: &str) {
+    match id {
+        "tray-open" => show_main_window(app),
+        "tray-quit" => app.exit(0),
+        "tray-wake" => tray_wake(app),
+        "tray-screenshot" => tray_screenshot(app),
+        _ => {}
+    }
+}
+
+/// 菜单里的「唤醒手机屏幕」。没有进行中的会话时用系统对话框如实说明。
+fn tray_wake(app: &AppHandle) {
+    let sessions: State<SessionStore> = app.state();
+    let runtimes: State<AppRuntimes> = app.state();
+    let Some(serial) = tray_active_serial(&sessions) else {
+        tray_notify_no_session(app);
+        return;
+    };
+    if let Err(error) = wake_screen_for_serial(&runtimes, &serial) {
+        tray_notify_error(app, &error.message);
+    }
+}
+
+/// 菜单里的「手机截图」。
+///
+/// 文件名用 Unix 时间戳（纯 ASCII，能过 validate_media_name 白名单），**不猜时区**：
+/// 与主窗口里由前端按本地时间命名的截图并存，名字风格不同是刻意取舍——
+/// 菜单路径拿不到前端的命名逻辑，也不用为此引入时区依赖。
+fn tray_screenshot(app: &AppHandle) {
+    let sessions: State<SessionStore> = app.state();
+    let runtimes: State<AppRuntimes> = app.state();
+    let Some(serial) = tray_active_serial(&sessions) else {
+        tray_notify_no_session(app);
+        return;
+    };
+    let directory = match screenshot_dir(app) {
+        Ok(directory) => directory,
+        Err(error) => {
+            tray_notify_error(app, &error.message);
+            return;
+        }
+    };
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let file_name = format!("mirrordock-screenshot-{seconds}.png");
+    let result = capture_screenshot_into(&runtimes, &directory, serial.clone(), file_name);
+    if let Err(error) = result {
+        tray_notify_error(app, &error.message);
+    }
+}
+
+/// 菜单动作没有会话可作用时的提示。
+fn tray_notify_no_session(app: &AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    app.dialog()
+        .message("当前没有进行中的镜像会话。先在 MirrorDock 里连接手机，再使用该功能。")
+        .title("MirrorDock")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::Ok)
+        .show(|_| {});
+}
+
+fn tray_notify_error(app: &AppHandle, message: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    app.dialog()
+        .message(message.to_string())
+        .title("MirrorDock")
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::Ok)
+        .show(|_| {});
+}
+
+// ---------------------------------------------------------------------------
 // 锁屏与屏幕状态诊断
 //
 // 产品边界（AGENTS.md 铁律）：不绕过锁屏、DRM/FLAG_SECURE、受保护页面、MDM 与用户同意。
@@ -3125,14 +3380,7 @@ fn wake_device(runtimes: State<AppRuntimes>, serial: String) -> Result<(), AppEr
     if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
         return Err(error);
     }
-    runtimes.adb.wake_screen(&serial).map_err(|error| {
-        adb_command_error(
-            error,
-            "wake_failed",
-            "无法点亮手机屏幕。",
-            "请确认数据线或无线连接仍然有效；也可以直接按一下手机的电源键。",
-        )
-    })
+    wake_screen_for_serial(&runtimes, &serial)
 }
 
 #[tauri::command]
@@ -3762,6 +4010,32 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .setup(|app| {
+            // 应用级设置（含 macOS 隐藏 Dock）要在任何窗口展示前生效。
+            // setup 闭包的错误类型是 Box<dyn StdError>，而 AppError 没实现
+            // StdError：这里失败只能说明 app_data_dir 不可用，转成字符串即可。
+            let path = app_settings_path(app.handle())
+                .map_err(|_| "无法访问本机设置目录".to_string())?;
+            let settings = load_app_settings(&path);
+            apply_dock_icon_policy(app.handle(), &settings);
+            build_tray(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 点关闭 = 最小化到菜单栏/托盘，不退出：从菜单栏图标可以随时回到
+            // 主窗口，退出走托盘菜单（明确的出口只有一个，避免「关了又在后台」
+            // 与「想最小化却把会话杀了」两种误伤）。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             check_adb_devices,
             probe_device_capabilities,
@@ -3795,7 +4069,9 @@ pub fn run() {
             entitlement_deactivate,
             companion_begin_pairing,
             companion_pairing_status,
-            companion_end_pairing
+            companion_end_pairing,
+            get_app_settings,
+            set_app_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -5492,6 +5768,50 @@ mod tests {
             load_recent_devices(&path).unwrap().is_empty(),
             "删除必须真正落盘，不能只改内存"
         );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn app_settings_default_when_missing_or_corrupt() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrordock-settings-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let path = directory.join("nested").join("app-settings.json");
+
+        // 缺文件 → 默认值：设置坏了/没写过都不该挡住应用启动。
+        assert!(!load_app_settings(&path).hide_dock_icon);
+
+        // 损坏文件 → 默认值，而不是报错退出。
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{ not json").unwrap();
+        assert!(!load_app_settings(&path).hide_dock_icon);
+
+        // 空对象（旧版本缺字段）→ serde(default) 兜底。
+        fs::write(&path, b"{}").unwrap();
+        assert_eq!(load_app_settings(&path), AppSettings::default());
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn app_settings_roundtrip_on_disk() {
+        let directory = std::env::temp_dir().join(format!(
+            "mirrordock-settings-roundtrip-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        let path = directory.join("app-settings.json");
+
+        let enabled = AppSettings { hide_dock_icon: true };
+        save_app_settings(&path, &enabled).unwrap();
+        assert_eq!(load_app_settings(&path), enabled);
+
+        let disabled = AppSettings::default();
+        save_app_settings(&path, &disabled).unwrap();
+        assert_eq!(load_app_settings(&path), disabled);
 
         let _ = fs::remove_dir_all(&directory);
     }

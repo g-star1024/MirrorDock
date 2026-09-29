@@ -96,6 +96,14 @@ type PairingStatus = {
 // 开发者中心自动发现（mDNS）：手机无线调试页广播的服务。
 type WirelessServices = { pairing: string[]; connect: string[] };
 
+// 应用级设置（后端持久化到 app-settings.json）：只影响客户端自身行为
+// （窗口、图标），与镜像会话参数（SessionOptions）严格分开。
+export type AppSettingsView = { hide_dock_icon: boolean };
+// 平台判断：只有 macOS 提供「隐藏 Dock 图标」。做成纯函数方便测试。
+export function isMacPlatform(userAgent: string): boolean {
+  return /Macintosh|Mac OS X/.test(userAgent);
+}
+
 // 扫码配对（Android 11+ 无线调试「使用二维码配对设备」）：
 // 桌面出码 → 手机扫码 → 手机广播配对服务 → 桌面自动 adb pair / connect。
 type QrPairingOffer = { payload: string; service_name: string; pairing_code: string };
@@ -398,6 +406,55 @@ function App() {
   }, []);
   const [options, setOptions] = useState<SessionOptions>(readOptions);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  // 通用设置：开机自启（autostart 插件持久化）与 macOS 隐藏 Dock（后端持久化）。
+  const [appSettings, setAppSettings] = useState<AppSettingsView>({ hide_dock_icon: false });
+  const [autostartEnabled, setAutostartEnabled] = useState(false);
+  const [generalNotice, setGeneralNotice] = useState<string | null>(null);
+  const isMac = isMacPlatform(navigator.userAgent);
+
+  // 挂载时读取一次通用设置。两者都允许静默失败：读不到就用默认值，
+  // 不该因为一个偏好设置读不出来而影响连接与镜像。
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const settings = await invoke<Partial<AppSettingsView>>("get_app_settings");
+        if (!disposed) setAppSettings({ hide_dock_icon: settings.hide_dock_icon === true });
+      } catch { if (!disposed) setAppSettings({ hide_dock_icon: false }); }
+      try {
+        const enabled = await invoke<unknown>("plugin:autostart|is_enabled");
+        if (!disposed) setAutostartEnabled(enabled === true);
+      } catch { /* 非 Tauri 环境（浏览器/测试）没有该命令，保持关闭 */ }
+    })();
+    return () => { disposed = true; };
+  }, []);
+
+  async function toggleAutostart(enabled: boolean) {
+    const previous = autostartEnabled;
+    setAutostartEnabled(enabled);
+    setGeneralNotice(null);
+    try {
+      await invoke(enabled ? "plugin:autostart|enable" : "plugin:autostart|disable");
+      setGeneralNotice(enabled ? "已开启开机自动启动。" : "已关闭开机自动启动。");
+    } catch (error) {
+      setAutostartEnabled(previous);
+      setGeneralNotice(errorMessage(error, "无法修改开机自动启动。"));
+    }
+  }
+
+  async function toggleHideDockIcon(hide: boolean) {
+    const previous = appSettings;
+    setAppSettings({ hide_dock_icon: hide });
+    setGeneralNotice(null);
+    try {
+      const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { hide_dock_icon: hide } });
+      setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true });
+      setGeneralNotice(hide ? "已隐藏 Dock 图标，从屏幕顶部菜单栏图标使用 MirrorDock。" : "已恢复 Dock 图标。");
+    } catch (error) {
+      setAppSettings(previous);
+      setGeneralNotice(errorMessage(error, "无法修改 Dock 图标设置。"));
+    }
+  }
   function updateOptions(next: SessionOptions) {
     setOptions(next);
     // 设置一旦被改动，上一次「已应用 / 无需重启」的结论就不再适用，先清掉避免误导。
@@ -1183,6 +1240,9 @@ function App() {
                     <button className="secondary-button" type="button" disabled={lockBusy} onClick={() => void wakeDevice(readyDevice.serial)}>
                       {lockBusy ? "正在唤醒…" : "唤醒屏幕"}
                     </button>
+                    {sessionActive && lockReport?.screen === "asleep" && (
+                      <p className="capability-pending" role="status">屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
+                    )}
                     <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁。设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
                   </div>
                 </div>
@@ -1497,6 +1557,17 @@ function App() {
               <p className="intro">镜像窗口、快捷键与授权。</p>
             </div>
             <section className="connection-card">
+              <fieldset className="session-options">
+                <legend>通用</legend>
+                <label><input type="checkbox" checked={autostartEnabled} onChange={e => void toggleAutostart(e.target.checked)} /> 开机自动启动 MirrorDock</label>
+                {isMac && (
+                  <label><input type="checkbox" checked={appSettings.hide_dock_icon} onChange={e => void toggleHideDockIcon(e.target.checked)} /> 隐藏 Dock 图标（只保留屏幕顶部菜单栏图标）</label>
+                )}
+                <p>点窗口关闭按钮 = 最小化到菜单栏/托盘，不会结束镜像会话；从菜单栏/托盘图标可以回到主窗口、唤醒手机、截图或退出。</p>
+                <p>镜像画面黑屏（手机熄屏）时，在镜像窗口上点右键即可直接点亮屏幕，不必回到本窗口点「唤醒屏幕」。</p>
+                {generalNotice && <p className="apply-notice" role="status">{generalNotice}</p>}
+              </fieldset>
+
               <fieldset className="session-options">
                 <legend>镜像窗口设置{sessionActive ? "（会话中修改需重启镜像窗口）" : "（开始镜像时生效）"}</legend>
                 <label>画质 <select value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>

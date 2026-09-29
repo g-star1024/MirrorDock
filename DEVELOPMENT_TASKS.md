@@ -200,6 +200,22 @@
   - 诚实边界：主页上的性能数字全部来自 test-runs/ 已归档的真机报告，不以宣传话术替代证据。
 - [x] X8-02 发布链稳定性收口。**已完成**（见 X7-08）。当前 Release 状态与「同 tag 唯一、非草稿、资产齐全」三项判据一致。
 
+## X9 常驻与快捷唤醒轮（2026-09-29）
+
+- [x] X9-01 重打 tag `v0.2.0-beta` 验证新发布 job。**已完成并上线**（run 36512102908 success）。
+  - 发布 job 八步全部 success：清理（含草稿）→ 创建 → 上传 → 校验。匿名视角核验：1 个 Release、非草稿、20 资产、正文 1017 字。X7-08 的 gh CLI 发布链至此有真实流水线证据。
+- [x] X9-02 关闭按钮 = 最小化到菜单栏/托盘 + 开机自启。**代码完成；GUI 行为真机验证待用户。**
+  - Rust：`on_window_event` 拦截主窗口 `CloseRequested` → `prevent_close` + `hide`；退出只能走菜单栏/托盘菜单「退出 MirrorDock」。
+  - 托盘（`tauri` `tray-icon` feature）：图标用默认应用图标，菜单 = 打开 MirrorDock / 唤醒手机屏幕 / 手机截图 / 退出。唤醒与截图复用命令侧逻辑（`wake_screen_for_serial` 提取共用）；无会话时弹系统对话框如实说明。截图文件名用 Unix 时间戳（纯 ASCII 过白名单），**不猜时区**——与前端本地时间命名的截图并存是刻意取舍。
+  - 开机自启：`tauri-plugin-autostart`（macOS 用 LaunchAgent）；capabilities 新增 `autostart:allow-enable/disable/is-enabled`。
+  - 新命令 `get_app_settings` / `set_app_settings`（命令面 31→33），应用级设置落 `app-settings.json`；读取**容错**（缺失/损坏/缺字段一律回默认，设置坏了不挡启动）。Rust 111（+2：缺失/损坏回默认、落盘往返）。
+- [x] X9-03 镜像黑屏免开客户端唤醒。**已定案：右键手势（scrcpy 内置）+ 界面提示；左键唤醒做不到，原因如实记录。**
+  - 依据 scrcpy v4.1 官方文档（doc/mouse.md）：SDK 鼠标默认「右键触发 BACK（熄屏时改为 POWER 点亮屏幕）」；`--mouse-bind` 只能配置**次级**按键（右/中/4/5），**左键（primary）永远转发触控**——「左键点击唤醒」在 scrcpy 4.1 配置层面不存在，不虚报。
+  - 落地：镜像窗口内右键即可点亮（无需打开客户端，天然满足诉求）；设置页「通用」与锁屏面板（会话中且屏幕关闭时）两处明示该手势。
+- [x] X9-04 macOS 菜单栏图标 + 隐藏 Dock 图标。**代码完成；GUI 行为真机验证待用户。**
+  - 菜单栏图标即上述托盘（macOS 左键弹菜单），提供打开/唤醒/截图/退出。
+  - 设置中心（仅 macOS 显示）新增「隐藏 Dock 图标」：`AppHandle::set_activation_policy` 在 **Accessory ↔ Regular 间运行时切换**，设置经后端持久化、启动时在 `setup` 中先于窗口生效；回到主窗口时临时切回 Regular 并激活应用，保证窗口能正常抢焦点。非 macOS 平台后端强制 false（防「勾了没效果」的假开关）。前端 38（+4：平台判断、自启切换、关闭/右键文案、Dock 选项仅 macOS）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

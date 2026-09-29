@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
 import App, {
   capabilitySummary,
   defaultShortcuts,
+  isMacPlatform,
   isValidShortcut,
   pairingPayload,
   editionLabel,
@@ -95,6 +96,10 @@ function baseInvoke(cmd: string): Promise<unknown> {
       return Promise.resolve({ edition: "free", key_id: null, expires_at: null });
     case "companion_pairing_status":
       return Promise.resolve({ phase: "idle", events: [], offer: null });
+    case "get_app_settings":
+      return Promise.resolve({ hide_dock_icon: false });
+    case "plugin:autostart|is_enabled":
+      return Promise.resolve(false);
     default:
       return Promise.resolve({});
   }
@@ -513,5 +518,53 @@ describe("companion pairing", () => {
     await waitFor(() => {
       expect(screen.queryByText(/等待伴侣扫码/)).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("general settings (tray, autostart, dock)", () => {
+  it("isMacPlatform_only_matches_apple_desktop_agents", () => {
+    expect(isMacPlatform("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15")).toBe(true);
+    expect(isMacPlatform("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120")).toBe(false);
+    expect(isMacPlatform("Mozilla/5.0 (X11; Linux x86_64) Firefox/120")).toBe(false);
+  });
+
+  it("toggles_launch_at_login_through_the_autostart_plugin", async () => {
+    render(<App />);
+    const checkbox = await screen.findByRole("checkbox", { name: /开机自动启动/ });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(checkbox);
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "plugin:autostart|enable")).toBe(true);
+    });
+    expect(await screen.findByText("已开启开机自动启动。")).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "plugin:autostart|disable")).toBe(false);
+  });
+
+  it("explains_close_to_tray_and_right_click_wake_upfront", async () => {
+    render(<App />);
+    expect(await screen.findByText(/点窗口关闭按钮 = 最小化到菜单栏\/托盘/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/在镜像窗口上点右键即可直接点亮屏幕，不必回到本窗口/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows_the_dock_option_only_on_macos", async () => {
+    const stubUserAgent = (userAgent: string) => {
+      Object.defineProperty(window.navigator, "userAgent", { value: userAgent, configurable: true });
+    };
+    const original = window.navigator.userAgent;
+    try {
+      stubUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120");
+      const windows = render(<App />);
+      await screen.findByRole("checkbox", { name: /开机自动启动/ });
+      expect(screen.queryByRole("checkbox", { name: /隐藏 Dock 图标/ })).not.toBeInTheDocument();
+      windows.unmount();
+
+      stubUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15");
+      render(<App />);
+      expect(await screen.findByRole("checkbox", { name: /隐藏 Dock 图标/ })).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window.navigator, "userAgent", { value: original, configurable: true });
+    }
   });
 });
