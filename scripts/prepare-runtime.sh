@@ -8,20 +8,33 @@
 # 与 CI 构建产物一致。
 #
 # 用法：在仓库根目录执行（由 tauri.conf.json beforeBuildCommand 自动调用）。
-# 平台目录映射：
-#   macOS (x86_64 / aarch64)  .tools/scrcpy/macos-x86_64 或 macos-aarch64
-#   Windows                   .tools/scrcpy/windows-x86_64（如已准备）
+# 平台差异（对齐 A1-08）：
+#   macOS / Windows  打包必须随带运行时：本地 .tools 缺失时若 DEST 已由
+#                    外部（CI 下载步）准备好则跳过，否则报错终止。
+#   Linux            无官方包，设计上不随带运行时，直接跳过（回退 PATH）。
+#
+# 注意：脚本必须兼容 macOS 自带的 bash 3.2——全角标点紧跟 $变量 会被
+# 并入变量名导致 "unbound variable"（X10-19 实测），因此所有含变量的
+# 输出一律使用 ASCII 标点。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src-tauri/resources/scrcpy"
 
-case "$(uname -s)-$(uname -m)" in
-  Darwin-x86_64) SRC="$REPO_ROOT/.tools/scrcpy/macos-x86_64" ;;
-  Darwin-arm64)  SRC="$REPO_ROOT/.tools/scrcpy/macos-aarch64" ;;
+OS_ARCH="$(uname -s)-$(uname -m)"
+case "$OS_ARCH" in
+  Darwin-x86_64)      SRC="$REPO_ROOT/.tools/scrcpy/macos-x86_64" ;;
+  Darwin-arm64)       SRC="$REPO_ROOT/.tools/scrcpy/macos-aarch64" ;;
   MINGW*|MSYS*|Windows*) SRC="$REPO_ROOT/.tools/scrcpy/windows-x86_64" ;;
-  Linux*) SRC="$REPO_ROOT/.tools/scrcpy/linux-x86_64" ;;
-  *) echo "prepare-runtime: 未知平台 $(uname -s)-$(uname -m)，跳过（运行时将回退 PATH）"; exit 0 ;;
+  Linux*)
+    # A1-08：Linux 无官方包，不随带运行时，交给用户 PATH。
+    echo "prepare-runtime: Linux build skips bundled runtime (PATH fallback per A1-08)"
+    exit 0
+    ;;
+  *)
+    echo "prepare-runtime: unknown platform $OS_ARCH, skipping (runtime falls back to PATH)"
+    exit 0
+    ;;
 esac
 
 if [ -d "$SRC" ]; then
@@ -29,16 +42,16 @@ if [ -d "$SRC" ]; then
   # 全量同步官方包内容（scrcpy、scrcpy-server、adb 及附带文件）。
   rm -rf "${DEST:?}"/*
   cp -R "$SRC"/. "$DEST"/
-  echo "prepare-runtime: 已复制 $(ls "$DEST" | wc -l | tr -d ' ') 个文件 -> ${DEST#"$REPO_ROOT"/}"
+  echo "prepare-runtime: copied runtime from $SRC to $DEST"
   exit 0
 fi
 
-# CI 打包作业会先行下载官方运行时放进 DEST（A1-08）：此时无需本地 .tools。
+# CI 打包作业会先行下载官方运行时放进 DEST：此时无需本地 .tools。
 if [ -f "$DEST/scrcpy" ] || [ -f "$DEST/scrcpy.exe" ]; then
-  echo "prepare-runtime: 运行时已由外部准备（$DEST），跳过复制"
+  echo "prepare-runtime: runtime already prepared at $DEST, skip copying"
   exit 0
 fi
 
-echo "prepare-runtime: 找不到本机运行时 $SRC" >&2
-echo "  请先按供应链流程准备 .tools/scrcpy（官方包 + SHA-256 校验）。" >&2
+echo "prepare-runtime: local runtime not found at $SRC" >&2
+echo "  prepare .tools/scrcpy first (official package + SHA-256 check)." >&2
 exit 1
