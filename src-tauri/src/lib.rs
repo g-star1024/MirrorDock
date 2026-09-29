@@ -1372,6 +1372,20 @@ fn apply_dock_icon_policy(app: &AppHandle, settings: &AppSettings) {
     }
 }
 
+/// 「回到主窗口」时是否需要把应用切回 Regular 以抢回前台。
+///
+/// 开启了隐藏 Dock 的应用必须保持 Accessory：Regular 会把 Dock 图标重新
+/// 拉出来（真机反馈 2026-09-29：勾选后点菜单栏打开主窗口，图标又出现了）。
+/// Accessory 模式下窗口照样可以 show/focus，只是不抢整个应用的前台。
+#[cfg(target_os = "macos")]
+fn show_focus_policy(hide_dock_icon: bool) -> Option<tauri::ActivationPolicy> {
+    if hide_dock_icon {
+        None
+    } else {
+        Some(tauri::ActivationPolicy::Regular)
+    }
+}
+
 #[tauri::command]
 fn get_app_settings(app: AppHandle) -> Result<AppSettings, AppError> {
     Ok(load_app_settings(&app_settings_path(&app)?))
@@ -1405,8 +1419,14 @@ fn show_main_window(app: &AppHandle) {
     }
     #[cfg(target_os = "macos")]
     {
-        // Accessory 模式下窗口不会自动抢焦点/前置，需要显式激活应用。
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        // 以磁盘上的设置为准：未开启隐藏 Dock 才切回 Regular 抢前台；
+        // 开启隐藏时保持 Accessory，绝不能把 Dock 图标重新拉出来。
+        let hide = app_settings_path(app)
+            .map(|path| load_app_settings(&path).hide_dock_icon)
+            .unwrap_or(false);
+        if let Some(policy) = show_focus_policy(hide) {
+            let _ = app.set_activation_policy(policy);
+        }
         if let Err(error) = app.show() {
             eprintln!("app.show failed: {error}");
         }
@@ -7485,9 +7505,20 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn app_settings_default_when_missing_or_corrupt() {
-        let directory = std::env::temp_dir().join(format!(
+    fn show_focus_policy_never_revives_dock_icon_when_hidden() {
+        // 开启隐藏 Dock：回到主窗口绝不切回 Regular，否则图标会被拉出来。
+        assert!(show_focus_policy(true).is_none());
+        // 未开启：切回 Regular 抢前台，行为不变。
+        assert!(matches!(
+            show_focus_policy(false),
+            Some(tauri::ActivationPolicy::Regular)
+        ));
+    }
+
+    #[test]
+    fn app_settings_default_when_missing_or_corrupt() {        let directory = std::env::temp_dir().join(format!(
             "mirrordock-settings-test-{}",
             std::process::id()
         ));

@@ -337,6 +337,11 @@
   - 版本号 0.2.0 → 0.2.1（tauri.conf.json / package.json / Cargo.toml 三处同步）；首版带出 X10-05～X10-13：伴侣 0.1.7-poc、屏幕唤醒智能化（DIM→BACK）、会话期 20s 变暗守护、无线三杠杆保活、密码页安全表面检测提示、内置帮助中心 7 篇、GitHub Pages 官网。
   - 本地门禁：Rust 145 / clippy 0 / vitest 40 / build 全绿；推送后 tag 触发 build.yml（verify → 四平台打包 + 伴侣 APK → release）。
 
+- [x] X10-15 隐藏 Dock 图标失效修复 + 定制应用图标。
+  - 用户真机反馈：勾选「隐藏 Dock 图标」后图标仍显示。根因：`show_main_window`（菜单栏「打开 MirrorDock」触发）在 macOS 上无条件 `set_activation_policy(Regular)`，把 Accessory 策略覆盖，Dock 图标被拉回。修复：新增 `show_focus_policy(hide_dock_icon)`——开启隐藏时返回 None（保持 Accessory，窗口照常 show/focus），未开启才切 Regular；策略以磁盘上的设置文件为准。新增 1 项测试（Rust 146）。
+  - 定制应用图标：此前 Dock/任务栏图标是 Tauri 框架默认图标（蓝橙环），无定制。新图标与产品视觉体系一致（石墨墨色 #101A1C~#2A4145 渐变底 + 青碧 #50B0B8 系描边，「显示器 + 手机」投屏母题 + 连接光点），PIL 绘制 1024×1024 源文件经 `tauri icon` 生成全平台尺寸（icns/ico/ Square*/android mipmap）。验证 scrcpy 镜像窗口不会在 Dock 增加图标（lsappinfo 仅 MirrorDock 注册），用户所见即应用图标本身。
+  - ⚠️ 交付说明：本条目随本地 `tauri build` 装机验证；正式 tag 发布（v0.2.2-beta）待用户确认后执行。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
