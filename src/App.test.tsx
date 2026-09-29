@@ -568,3 +568,70 @@ describe("general settings (tray, autostart, dock)", () => {
     }
   });
 });
+
+describe("apk install", () => {
+  function withReadyDevice(extra: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(
+          adbCheck({ devices: [{ serial: "phone", label: "Pixel 8", state: "ready" }] }),
+        );
+      }
+      const custom = extra(cmd);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  it("installs_the_chosen_apk_and_reports_the_backend_summary", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("/Users/me/下载/伴侣 App.apk");
+    withReadyDevice((cmd) =>
+      cmd === "install_apk_to_device"
+        ? Promise.resolve({ file_name: "伴侣 App.apk", bytes: 2048, summary: "安装完成。" })
+        : undefined,
+    );
+    render(<App />);
+
+    // 未选包时不允许安装：按钮保持禁用，避免装错文件。
+    const install = await screen.findByRole("button", { name: "安装到手机" });
+    expect(install).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择 APK 安装包" }));
+    // 选中的路径必须显示出来，用户才能核对自己装的是哪一个包。
+    expect(await screen.findByText("/Users/me/下载/伴侣 App.apk")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "安装到手机" }));
+
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "install_apk_to_device");
+      expect(call?.[1]).toMatchObject({ serial: "phone", apkPath: "/Users/me/下载/伴侣 App.apk" });
+    });
+    // 回执行：文件名 · 大小 · 后端结论（多条文案都含「安装完成」，这里按大小定位回执行）。
+    expect(await screen.findByText(/2 KB/)).toBeInTheDocument();
+    expect(screen.getAllByText(/安装完成。/).length).toBeGreaterThan(0);
+    // 安装由手机上的系统安装器完成，界面必须提醒用户本人在手机上确认。
+    expect(screen.getByText(/需要你本人同意/)).toBeInTheDocument();
+  });
+
+  it("keeps_the_backend_reason_when_the_phone_refuses_to_install", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("/tmp/old.apk");
+    withReadyDevice((cmd) =>
+      cmd === "install_apk_to_device"
+        ? Promise.reject({
+            code: "apk_install_failed",
+            message:
+              "手机里已安装的版本比这个安装包更新。（INSTALL_FAILED_VERSION_DOWNGRADE）",
+            recovery: "如果手机屏幕上有提示，请按提示处理后再试一次。",
+          })
+        : undefined,
+    );
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "选择 APK 安装包" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装到手机" }));
+
+    // 具体失败原因（而非笼统的「安装失败」）必须原样呈现给用户。
+    expect(await screen.findByText(/INSTALL_FAILED_VERSION_DOWNGRADE/)).toBeInTheDocument();
+  });
+});

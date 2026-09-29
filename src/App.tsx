@@ -137,6 +137,8 @@ export function expiryText(expiresAt: number | null) {
 type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
+// 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
+type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, read_only: false };
 export function readOptions(): SessionOptions {
   try {
@@ -360,6 +362,12 @@ function App() {
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [lastTransfer, setLastTransfer] = useState<TransferReceipt | null>(null);
+  // 安装 APK：选中的安装包路径只存在内存里（不写 localStorage，不入日志）。
+  const [apkPath, setApkPath] = useState<string | null>(null);
+  const [apkBusy, setApkBusy] = useState(false);
+  const [apkReceipt, setApkReceipt] = useState<ApkInstallReceipt | null>(null);
+  const [apkMessage, setApkMessage] = useState<string | null>(null);
+  const [apkError, setApkError] = useState<string | null>(null);
   // 诊断包：默认不生成、不落盘；预览后由用户显式导出。
   const [diagnostics, setDiagnostics] = useState<DiagnosticsPreviewData | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
@@ -921,6 +929,45 @@ function App() {
     }
   }
 
+  // 选择要安装的 APK：只挑 .apk，路径留在内存里，不写任何持久化记录。
+  async function pickApk() {
+    setApkMessage(null);
+    setApkError(null);
+    let picked: string | string[] | null;
+    try {
+      picked = await openFilePicker({
+        multiple: false,
+        title: "选择要安装到手机的 APK",
+        filters: [{ name: "Android 安装包", extensions: ["apk"] }],
+      });
+    } catch (error) {
+      setApkError(errorMessage(error, "无法打开文件选择器。"));
+      return;
+    }
+    // 用户取消选择不算错误，界面回到原样即可。
+    if (typeof picked !== "string" || picked.length === 0) return;
+    setApkPath(picked);
+    setApkReceipt(null);
+  }
+
+  // 一键安装：后端用 adb 直接安装，失败原因由后端解析成可照做的文案。
+  async function installApk(serial: string) {
+    if (!apkPath) return;
+    setApkBusy(true);
+    setApkMessage(null);
+    setApkError(null);
+    setApkReceipt(null);
+    try {
+      const receipt = await invoke<ApkInstallReceipt>("install_apk_to_device", { serial, apkPath });
+      setApkReceipt(receipt);
+      setApkMessage(`${receipt.summary}手机上可能出现「安装未知应用」等确认，需要你本人同意。`);
+    } catch (error) {
+      setApkError(errorMessage(error, "安装没有完成。"));
+    } finally {
+      setApkBusy(false);
+    }
+  }
+
   // 取回文件：保存到本机「下载 / MirrorDock」，同名时后端自动顺延序号。
   async function fetchDeviceFile(serial: string, fileName: string) {
     setTransferBusy(true);
@@ -1422,6 +1469,27 @@ function App() {
                   ))}
                   {transferMessage && <p className="apply-notice" role="status">{transferMessage}</p>}
                   {transferError && <p className="capability-pending" role="alert">{transferError}</p>}
+                </div>
+                <div className="capability-panel apk-panel" aria-live="polite">
+                  <strong>安装 APK</strong>
+                  <p className="capability-pending">选择本机的 .apk 安装包，一键装到手机上（覆盖安装，保留应用数据）。</p>
+                  <span>
+                    <button className="secondary-button" type="button" disabled={apkBusy} onClick={() => void pickApk()}>
+                      {apkPath ? "重新选择安装包" : "选择 APK 安装包"}
+                    </button>
+                    <button className="primary-button" type="button" disabled={apkBusy || !apkPath} onClick={() => void installApk(readyDevice.serial)}>
+                      {apkBusy ? "正在安装…" : "安装到手机"}
+                    </button>
+                  </span>
+                  {apkPath && <p className="screenshot-path">{apkPath}</p>}
+                  {apkReceipt && (
+                    <div className="screenshot-result">
+                      <p className="capability-summary">{apkReceipt.file_name} · {formatBytes(apkReceipt.bytes)} · {apkReceipt.summary}</p>
+                    </div>
+                  )}
+                  {apkMessage && <p className="apply-notice" role="status">{apkMessage}</p>}
+                  {apkError && <p className="capability-pending" role="alert">{apkError}</p>}
+                  <p className="capability-pending">安装由手机上的系统安装器完成；需要你在手机上确认（如「安装未知应用」）。安装包只在你选中的文件与手机之间传输，不经过任何服务器。</p>
                 </div>
               </div>
             ) : (

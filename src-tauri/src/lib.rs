@@ -82,6 +82,8 @@ struct AdbCheck {
 ///   screenshot_write_failed / screenshot_missing / screenshot_delete_failed
 ///   recording_dir_unavailable / recording_in_progress / recording_missing / recording_delete_failed
 ///   transfer_name_invalid / transfer_local_missing / transfer_dir_unavailable
+///   transfer_push_failed / transfer_list_failed / transfer_pull_failed
+///   apk_path_invalid / apk_install_failed
 ///   transfer_push_failed / transfer_pull_failed / transfer_list_failed
 ///   diagnostics_write_failed（诊断包导出失败）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -294,6 +296,13 @@ trait AdbRuntime: Send + Sync {
         remote_path: &str,
         local: &Path,
     ) -> Result<String, std::io::Error>;
+    /// 在设备上安装一个 APK。返回 adb 的原始输出（stdout+stderr 合并）。
+    ///
+    /// 与其它方法不同，这里**业务失败也返回 Ok(原始输出)**：`adb install` 在失败时
+    /// 会把 `Failure [INSTALL_FAILED_…]` 写在输出里并置非零退出码，只有把原始输出
+    /// 交给上层解析，才能告诉用户「是版本降级、签名冲突还是空间不足」，而不是把
+    /// 具体原因塌缩成一句笼统的「安装失败」。仅当进程无法启动（如 adb 缺失）才返回 Err。
+    fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error>;
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error>;
     fn connect(&self, endpoint: &str) -> Result<(), std::io::Error>;
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error>;
@@ -618,6 +627,28 @@ impl AdbRuntime for SystemAdbRuntime {
         } else {
             Err(std::io::Error::other("adb returned a failing status"))
         }
+    }
+
+    fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
+        // 固定参数直接调用：APK 路径作为单个 argv 传入，不做 shell 拼接或插值，
+        // 路径含空格、中文也安全。
+        // `-r` 覆盖安装（保留应用数据）；`-t` 允许 test-only 包（开发版 APK 常见）。
+        // 刻意**不用 `-g`**：那会在不与用户确认的情况下批量授予运行时权限，与
+        // 「不绕过用户同意」的产品边界冲突——权限仍由用户在手机上逐项确认。
+        let output = Command::new(adb_binary())
+            .args(["-s", serial, "install", "-r", "-t"])
+            .arg(apk)
+            .output()?;
+        // 失败原因可能落在 stdout 或 stderr（视 adb 版本与平台而定），两路都收。
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(&stderr);
+        }
+        Ok(text)
     }
 
     fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error> {
@@ -2247,6 +2278,149 @@ fn fetch_file_from_device_into(
 }
 
 // ---------------------------------------------------------------------------
+// 安装 APK：把用户选中的安装包直接装到手机上
+// ---------------------------------------------------------------------------
+
+fn apk_path_invalid_error() -> AppError {
+    AppError::new(
+        "apk_path_invalid",
+        "选择的文件不是可用的安装包。",
+        "请选择扩展名为 .apk 的安装包文件；如果它是压缩包或已损坏，请重新下载。",
+    )
+}
+
+/// 安装回执：文件名、字节数与 adb 结论的可读摘要。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ApkInstallReceipt {
+    file_name: String,
+    bytes: u64,
+    /// 面向用户的结论（如「安装完成。」）；失败时不会走到这里，而是返回错误。
+    summary: String,
+}
+
+/// 校验用户选中的 APK 路径，返回（路径, 文件名, 字节数）。
+///
+/// 只接受「绝对路径 + 已存在的普通文件 + `.apk` 后缀」。**不做目录白名单**：安装包
+/// 可能在下载、桌面或 U 盘里，路径由系统文件选择器给出，这里是二次确认（防止把
+/// 任意文件塞给 adb）。后缀严格限制是刻意的——`adb install` 对非 APK 只会回一句
+/// 难懂的解析错误，提前拒绝能给出可照做的提示。
+fn validate_apk_path(path: &str) -> Result<(PathBuf, String, u64), AppError> {
+    let local = PathBuf::from(path.trim());
+    if local.as_os_str().is_empty() || !local.is_absolute() {
+        return Err(apk_path_invalid_error());
+    }
+    let metadata = fs::metadata(&local).map_err(|_| apk_path_invalid_error())?;
+    if !metadata.is_file() {
+        return Err(apk_path_invalid_error());
+    }
+    let file_name = local
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or_else(apk_path_invalid_error)?;
+    let lowered = file_name.to_ascii_lowercase();
+    if !lowered.ends_with(".apk") || lowered.len() <= ".apk".len() {
+        return Err(apk_path_invalid_error());
+    }
+    Ok((local, file_name, metadata.len()))
+}
+
+/// 解析 `adb install` 的输出，给出「是否成功 + 可读结论」。
+///
+/// 成功判定：输出里出现 `Success`。失败时尽量取出 `Failure [REASON]` 的 REASON，
+/// 翻译成用户能照做的动作；遇到未知 REASON 就把原始错误码一起带上，便于用户复述
+/// 与检索——而不是把具体原因塌缩成一句笼统的「安装失败」。
+fn describe_apk_install_output(raw: &str) -> (bool, String) {
+    if raw.contains("Success") {
+        return (true, "安装完成。".to_owned());
+    }
+    let reason = raw.lines().find_map(|line| {
+        let line = line.trim();
+        let open = line.find('[')?;
+        let closing = line[open..].find(']')?;
+        let value = line[open + 1..open + closing].trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_owned())
+        }
+    });
+    let advice = match reason.as_deref() {
+        Some("INSTALL_FAILED_ALREADY_EXISTS") => {
+            "手机里已有同包名的应用，且无法覆盖安装。请先在手机上卸载旧版本再试。"
+        }
+        Some("INSTALL_FAILED_VERSION_DOWNGRADE") => {
+            "手机里已安装的版本比这个安装包更新。请先卸载手机上的版本，或改用版本号更高的安装包。"
+        }
+        Some("INSTALL_FAILED_UPDATE_INCOMPATIBLE") => {
+            "与手机里已安装的同名应用签名不一致，无法覆盖。请先在手机上卸载旧应用再安装。"
+        }
+        Some("INSTALL_FAILED_DUPLICATE_PACKAGE") => "手机里已有同名的系统应用，无法覆盖。",
+        Some("INSTALL_FAILED_INSUFFICIENT_STORAGE") => "手机存储空间不足。请清理空间后重试。",
+        Some("INSTALL_FAILED_INVALID_APK") => "这个文件不是有效的安装包，或已损坏。",
+        Some("INSTALL_FAILED_INVALID_URI") => {
+            "安装包在传输过程中出错（文件不完整）。请重新选择安装包再试。"
+        }
+        Some("INSTALL_PARSE_FAILED_NO_CERTIFICATES") => "安装包没有签名，系统拒绝安装。",
+        Some("INSTALL_FAILED_TEST_ONLY") => "这是仅供测试的安装包，手机拒绝了它。",
+        Some("INSTALL_FAILED_USER_RESTRICTED") => {
+            "手机当前限制了安装（如「安装未知应用」开关、儿童模式或工作资料限制）。请在手机上允许后重试。"
+        }
+        Some("INSTALL_FAILED_OLDER_SDK") => "这个安装包要求更高的 Android 版本，当前手机不支持。",
+        Some("INSTALL_FAILED_DEPRECATED_SDK_VERSION") => {
+            "这个安装包面向的 Android 版本过旧，当前系统拒绝安装。"
+        }
+        Some("INSTALL_FAILED_NO_MATCHING_ABIS") => "安装包不支持这台手机的处理器架构。",
+        Some("INSTALL_FAILED_ABORTED") => "安装被手机上取消。请重新操作，并在手机上确认安装。",
+        Some("INSTALL_FAILED_VERIFICATION_FAILURE") => "手机的应用校验没有通过这个安装包。",
+        Some("INSTALL_FAILED_CONFLICTING_PROVIDER") => {
+            "与手机里已安装的应用存在冲突。请先卸载相关旧应用再试。"
+        }
+        Some("INSTALL_FAILED_MEDIA_UNAVAILABLE") => "手机存储当前不可用。请检查存储状态后重试。",
+        _ => "安装没有完成。请查看手机屏幕上的提示，处理后重试。",
+    };
+    match reason {
+        Some(code) => (false, format!("{advice}（{code}）")),
+        None => (false, advice.to_owned()),
+    }
+}
+
+/// 在指定设备上安装一个 APK。
+fn install_apk_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    apk_path: String,
+) -> Result<ApkInstallReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+
+    // 先确认连接可用：未授权/离线时直接给出对应的恢复动作，不去跑一次注定失败的安装。
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let (apk, file_name, bytes) = validate_apk_path(&apk_path)?;
+
+    let raw = runtimes.adb.install_apk(&serial, &apk).map_err(|_| {
+        AppError::new(
+            "apk_install_failed",
+            "无法在这台手机上执行安装。",
+            "请确认数据线或无线连接仍然有效、手机保持解锁，然后重试。",
+        )
+    })?;
+    let (installed, summary) = describe_apk_install_output(&raw);
+    if !installed {
+        return Err(AppError::new(
+            "apk_install_failed",
+            &summary,
+            "如果手机屏幕上有提示，请按提示处理后再试一次。",
+        ));
+    }
+    Ok(ApkInstallReceipt {
+        file_name,
+        bytes,
+        summary,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // 录制：把本会话的画面录成 MP4 保存在本机
 // ---------------------------------------------------------------------------
 
@@ -3651,6 +3825,22 @@ fn list_device_files(
     list_device_files_with(&runtimes, serial)
 }
 
+/// 把用户选中的 APK 安装到手机上（「一键安装」）。
+///
+/// 只在用户明确选择安装包后调用；安装包内容不经过 MirrorDock 进程，也不写日志。
+/// 本地路径可能含用户名等隐私，因此与文件名一起作为机密擦除。
+#[tauri::command]
+fn install_apk_to_device(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    apk_path: String,
+) -> Result<ApkInstallReceipt, AppError> {
+    let result = install_apk_with(&runtimes, serial.clone(), apk_path.clone());
+    log.record_outcome("apk_install", result.as_ref().err(), &[&serial, &apk_path]);
+    result
+}
+
 /// 从手机取回一个文件，保存到本机「下载 / MirrorDock」。
 #[tauri::command]
 fn fetch_file_from_device(
@@ -4235,6 +4425,7 @@ pub fn run() {
             send_file_to_device,
             list_device_files,
             fetch_file_from_device,
+            install_apk_to_device,
             current_recording,
             delete_recording,
             pair_wireless_device,
@@ -4293,6 +4484,8 @@ mod tests {
         device_listing: Option<String>,
         /// 为真时传输类调用（mkdir/push/pull）一律失败。
         transfer_fails: bool,
+        /// `adb install` 的原始输出（stdout+stderr 合并）；`None` 表示进程本身失败。
+        install_output: Option<String>,
         /// `pull_file` 成功时写进本机文件的内容，用于验证回执字节数。
         pulled_contents: Vec<u8>,
         calls: Arc<Mutex<Vec<String>>>,
@@ -4489,6 +4682,18 @@ mod tests {
             Ok("1 file pulled".to_owned())
         }
 
+        fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
+            self.calls.lock().unwrap().push(format!(
+                "install {serial} {}",
+                apk.to_string_lossy()
+            ));
+            match &self.install_output {
+                Some(raw) => Ok(raw.clone()),
+                // 进程本身没跑起来（如 adb 缺失）：与真实实现一致，返回 Err。
+                None => Err(std::io::Error::other("adb is not available")),
+            }
+        }
+
         fn pair(&self, endpoint: &str, pairing_code: &str) -> Result<(), std::io::Error> {
             self.calls
                 .lock()
@@ -4496,7 +4701,6 @@ mod tests {
                 .push(format!("pair {endpoint} {pairing_code}"));
             Ok(())
         }
-
         fn connect(&self, endpoint: &str) -> Result<(), std::io::Error> {
             self.calls.lock().unwrap().push(format!("connect {endpoint}"));
             Ok(())
@@ -6701,6 +6905,163 @@ mod tests {
 
         let _ = fs::remove_dir_all(&directory);
         let _ = fs::remove_dir_all(&local_dir);
+    }
+
+    // -- APK 安装 --
+
+    #[test]
+    fn an_apk_is_installed_on_the_ready_device() {
+        let directory = scratch_dir("apk-install");
+        fs::create_dir_all(&directory).unwrap();
+        let apk = directory.join("MirrorDock-伴侣.apk");
+        fs::write(&apk, b"apk-bytes").unwrap();
+
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            install_output: Some("Performing Streamed Install\nSuccess\n".to_owned()),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let receipt =
+            install_apk_with(&runtimes, "phone".into(), apk.to_string_lossy().into_owned())
+                .unwrap();
+
+        assert_eq!(receipt.file_name, "MirrorDock-伴侣.apk");
+        assert_eq!(receipt.bytes, 9);
+        assert_eq!(receipt.summary, "安装完成。");
+        let calls = calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec![format!("install phone {}", apk.to_string_lossy())],
+            "安装必须直接指向用户选中的这个文件，且只调用一次"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_non_apk_file_is_rejected_before_touching_the_device() {
+        let directory = scratch_dir("apk-reject");
+        fs::create_dir_all(&directory).unwrap();
+        let not_apk = directory.join("notes.txt");
+        fs::write(&not_apk, b"hello").unwrap();
+
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            install_output: Some("Success\n".to_owned()),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let error =
+            install_apk_with(&runtimes, "phone".into(), not_apk.to_string_lossy().into_owned())
+                .unwrap_err();
+
+        assert_eq!(error.code, "apk_path_invalid");
+        assert!(
+            !calls.lock().unwrap().iter().any(|call| call.starts_with("install")),
+            "后缀不对时不应向设备发起安装"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_missing_or_relative_apk_path_is_rejected() {
+        let runtimes = screenshot_runtimes(FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            install_output: Some("Success\n".to_owned()),
+            ..FakeAdb::default()
+        });
+
+        for path in ["/definitely/not/here/app.apk", "app.apk", "", "   "] {
+            assert_eq!(
+                install_apk_with(&runtimes, "phone".into(), path.to_owned())
+                    .unwrap_err()
+                    .code,
+                "apk_path_invalid",
+                "“{path}”必须被拒绝：只接受已存在的绝对路径"
+            );
+        }
+    }
+
+    #[test]
+    fn install_failure_keeps_the_specific_reason_for_the_user() {
+        let directory = scratch_dir("apk-downgrade");
+        fs::create_dir_all(&directory).unwrap();
+        let apk = directory.join("old.apk");
+        fs::write(&apk, b"apk").unwrap();
+
+        let runtimes = screenshot_runtimes(FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            install_output: Some(
+                "Performing Streamed Install\nFailure [INSTALL_FAILED_VERSION_DOWNGRADE]\n"
+                    .to_owned(),
+            ),
+            ..FakeAdb::default()
+        });
+
+        let error =
+            install_apk_with(&runtimes, "phone".into(), apk.to_string_lossy().into_owned())
+                .unwrap_err();
+
+        assert_eq!(error.code, "apk_install_failed");
+        assert!(
+            error.message.contains("版本") && error.message.contains("INSTALL_FAILED_VERSION_DOWNGRADE"),
+            "失败原因必须具体到可照做，并保留原始错误码，实际：{}",
+            error.message
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn install_output_parsing_covers_success_and_unknown_reasons() {
+        assert_eq!(
+            describe_apk_install_output("Performing Streamed Install\nSuccess"),
+            (true, "安装完成。".to_owned())
+        );
+        // 未知原因保留原始错误码，便于用户复述与检索，而不是塌缩成一句「安装失败」。
+        let (ok, message) = describe_apk_install_output("Failure [INSTALL_FAILED_SOMETHING_NEW]");
+        assert!(!ok);
+        assert!(message.contains("INSTALL_FAILED_SOMETHING_NEW"));
+        // 完全没有可解析原因时也给一句可执行的话，而不是空消息。
+        let (ok, message) = describe_apk_install_output("error: device offline");
+        assert!(!ok);
+        assert!(message.contains("手机屏幕"));
+    }
+
+    #[test]
+    fn installing_is_refused_when_the_device_is_not_ready() {
+        let directory = scratch_dir("apk-unauthorized");
+        fs::create_dir_all(&directory).unwrap();
+        let apk = directory.join("app.apk");
+        fs::write(&apk, b"apk").unwrap();
+
+        for state in [DeviceState::Unauthorized, DeviceState::Offline] {
+            let adb = FakeAdb {
+                devices: vec![device("phone", state)],
+                install_output: Some("Success\n".to_owned()),
+                ..FakeAdb::default()
+            };
+            let calls = Arc::clone(&adb.calls);
+            let runtimes = screenshot_runtimes(adb);
+
+            let error =
+                install_apk_with(&runtimes, "phone".into(), apk.to_string_lossy().into_owned())
+                    .unwrap_err();
+
+            assert!(error.code.starts_with("device_"), "实际：{}", error.code);
+            assert!(
+                !calls.lock().unwrap().iter().any(|call| call.starts_with("install")),
+                "{state:?} 的设备不得发起安装"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&directory);
     }
 
     // -- 集成场景：把多个命令串成完整的用户旅程，验证跨命令的状态与授权一致性。 --
