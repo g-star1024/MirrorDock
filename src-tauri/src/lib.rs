@@ -1865,6 +1865,10 @@ struct TrayMenuHandles {
     record: tauri::menu::MenuItem<tauri::Wry>,
 }
 
+/// 菜单栏模板图标（icons/tray.png，44x44 单色 + alpha）。
+/// 与应用图标同一设计语言：环形 + 缺口切片 + 中心圆点。
+const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/tray.png");
+
 /// 监视线程（无 AppHandle 入参）在会话意外退出后刷新菜单用。
 /// setup 阶段设置一次；测试环境不设置，刷新自动降级为空操作。
 static TRAY_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
@@ -1899,13 +1903,22 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let _ = TRAY_APP.set(app.handle().clone());
     app.manage(TrayMenuHandles { connect, wake, shot, record });
 
-    TrayIconBuilder::with_id("mirrordock-tray")
-        .icon(app.default_window_icon().expect("app has a default icon").clone())
+    // 菜单栏图标：单色模板图（黑色形状 + alpha），macOS 按菜单栏深浅自动反色
+    // （深色菜单栏渲染为白色，与系统自带图标一致）。非 macOS 平台仍用彩色应用图标。
+    let tray_icon = tauri::image::Image::from_bytes(TRAY_ICON_PNG)
+        .expect("embedded tray icon is a valid PNG")
+        .to_owned();
+    let mut builder = TrayIconBuilder::with_id("mirrordock-tray")
+        .icon(tray_icon)
         .tooltip("MirrorDock")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| handle_tray_event(app, event.id().as_ref()))
-        .build(app)?;
+        .on_menu_event(|app, event| handle_tray_event(app, event.id().as_ref()));
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.icon_as_template(true);
+    }
+    builder.build(app)?;
 
     // 初始状态与空闲会话对齐（屏幕唤醒/截图在无会话时置灰）。
     refresh_tray_menu(app.handle());

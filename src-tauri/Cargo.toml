@@ -1,6 +1,6 @@
 [package]
 name = "mirrordock"
-version = "0.2.1"
+version = "0.2.2"
 description = "Local-first Android desktop mirroring"
 authors = ["MirrorDock"]
 edition = "2021"
@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # tray-icon：菜单栏/托盘图标（关闭按钮=最小化、菜单栏快捷功能、macOS 隐藏 Dock）。
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 # 全局快捷键（B-快捷键）：镜像窗口获得焦点时主窗口收不到键盘事件，只有系统级

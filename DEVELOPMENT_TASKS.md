@@ -347,6 +347,13 @@
   - 镜像窗口图标包装（macOS）：直接运行 scrcpy 裸二进制时 SDL 把 scrcpy 自带图标挂上 Dock。新增 `macos_mirror_bundle_exec`：在 scrcpy 同目录构建最小 `MirrorDock Mirror.app` bundle（Info.plist com.mirrordock.mirror + 主客户端同款 icon.icns + scrcpy/adb/scrcpy-server 复制件），经 bundle 启动后 LaunchServices 按 bundle 注册，Dock 显示「MirrorDock 镜像」与主客户端同款图标；任何失败回退裸二进制，绝不挡镜像。真机实验先行（/tmp 测试 bundle 经 lsappinfo 证实注册为「MirrorDock 镜像」）。启动点显式 `env("ADB", adb_binary)` 保证 bundle 内也能找到 adb。Rust 测试 +1。
   - 键盘直输（UHID）：用户反馈「微信发送时唤起手机自带输入法，不方便输入」。SessionOptions 新增 `keyboard_uhid`（serde 默认 true）：开启传 `--keyboard=uhid`（手机把电脑当外接键盘，全屏软键盘收起为小候选条，电脑键盘直接打字），关闭传 `--keyboard=scrcpy`（注入模式，软键盘照常弹出）。前端设置页新开关「键盘直输（手机不弹全屏键盘）」，旧配置无缝回填。Rust 测试 +1、vitest 断言同步。
   - 主客户端图标 v2（用户指定 Tauri 蓝橙环配色+风格）：PIL 绘制海军蓝渐变圆角方底 + 蓝橙双色粗环（蓝 340° 渐变环 + 橙 150° 呼应弧 + 中心橙点），经 tauri icon 生成全平台尺寸；镜像 bundle 的 AppIcon.icns 自动同款，两图标风格一致。
+
+- [x] X10-17 键盘直输不生效根因修复（设备端键盘布局未配置）+ 菜单栏白模板图标 + 版本号 0.2.2。
+  - **键盘直输根因定位（真机证据链）**：用户反馈「微信、便签 Mac 直接输入不生效」。逐步排除——①会话命令行核查（pgrep）：用户运行中的镜像进程确实带 `--keyboard=uhid`，配置链路（前端 readOptions 旧配置回填 true → begin_session → arguments()）无误；②受控实验：`--keyboard=uhid` 无头会话下设备端 `dumpsys input` 出现 `6: scrcpy`（KEYBOARD|ALPHAKEY，/dev/input/event6），UHID 键盘在 InputReader 注册成功；③logcat 无 UHID 报错；④打开系统实体键盘设置页（`am start -a android.settings.HARD_KEYBOARD_SETTINGS`）+ 截屏取证：scrcpy 实体键盘的**键盘布局列表一个布局都没启用**——没有布局，HID 按键无法映射成字符，按键必然无效。**修复**：经 adb 导航在设备上启用「英语（美国）」布局（此为设备侧一次性配置，持久生效）。取证截图落 `test-runs/uhid-e2e/`。**遗留观察项**：「使用屏幕键盘」开关当前保持开启（接实体键盘时软键盘以小条形式出现）；若用户仍嫌输入法弹出干扰，可引导关闭该开关。
+  - 菜单栏白图标（用户反馈「顶部跟 Mac 其他图标一样主元素统一为白色、去掉背景色」）：新增 `src-tauri/icons/tray.png`（44x44，单色环+缺口切片+中心点，黑形状+alpha 通道，与主图标同一设计语言）；`build_tray` 改用内嵌 PNG（`include_bytes!`，Cargo 新增 tauri `image-png` feature），macOS 上 `icon_as_template(true)`——模板图由系统按菜单栏深浅自动反色（深色菜单栏渲染为白色，与系统图标一致）；非 macOS 平台保持彩色应用图标。
+  - 主客户端 Dock 图标「没改」实为图标缓存：/Applications 内 icon.icns 已是 v2 蓝橙环设计（sips 渲染核对），重装后 `killall Dock` 刷新缓存。
+  - 版本号三处同步 0.2.1 → 0.2.2（tauri.conf.json / package.json / Cargo.toml），tag `v0.2.2-beta` 发布。
+  - 证据：`cargo test` 148 项全过；`cargo clippy --all-targets` 零告警；`pnpm test`（vitest）40 项全过。
   - 门禁：Rust 148 / clippy 0 / vitest 40 / build 全绿。
   - ⚠️ 待真机验证：镜像运行时 Dock 应显示「MirrorDock 镜像」蓝橙环图标；微信输入框点击后不再弹全屏键盘（底部小候选条直接打字）。
 
