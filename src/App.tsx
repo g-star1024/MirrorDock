@@ -1748,7 +1748,7 @@ function App() {
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">会话期间保持手机唤醒</span>
-                    <span className="setting-desc">镜像进行中手机不会自动熄屏，锁屏页有充足时间输入解锁密码。USB 与无线均生效：无线连接时会临时把手机置为「充电时保持唤醒」，所以状态栏可能显示充电中；会话结束即恢复原设置。</span>
+                    <span className="setting-desc">镜像进行中手机不会自动熄屏，也不会变暗，锁屏页有充足时间输入解锁密码。USB 与无线均生效：无线连接时会临时把手机置为「充电时保持唤醒」（状态栏可能显示充电中），屏幕即将变暗时也会自动恢复亮度；会话结束即恢复原设置。</span>
                   </div>
                   <label className="setting-toggle"><input type="checkbox" aria-label="会话期间保持手机唤醒" checked={options.keep_awake} onChange={e => updateOptions({...options, keep_awake: e.target.checked})} /></label>
                 </div>

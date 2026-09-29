@@ -304,6 +304,18 @@
   - 测试：新增 5 项（三杠杆全拉满、读不到原值则跳过该杠杆、撤销顺序且假充电最前、会话重启只重写不覆盖账本、老版本账本文件兼容）；Rust 134 / clippy 0 / vitest 40 / build 通过。
   - ⚠️ **待真机验证**（手机在排查过程中掉线，无法当场实测）：需重连后确认三杠杆生效、锁屏页可持续亮、会话结束后手机状态栏充电指示消失。
 
+- [x] X10-11 「屏幕亮着但镜像黑」的第二段根因与修复：电源策略卡在变暗（DIM）阶段（真机取证复现）。
+  - 用户真机反馈：屏幕明明亮着，镜像窗口黑屏，点「屏幕唤醒」也没用；怀疑是「安全策略不让镜像输密码」。
+  - 排查中排除的假设（均有实测证据）：①锁屏页 FLAG_SECURE 屏蔽——screencap 与 scrcpy 流在锁屏主页都能拿到正常画面（亮度 131/255、129/255）；②PIN 键盘界面屏蔽——多次尝试验证均被 DIM 干扰，未定案；③参数问题（--max-size/--bit-rate/codec）——逐参数对照全部为亮；④自适应亮度变暗——`screen_brightness_mode=0`（手动，255），光线传感器不参与。
+  - **定案根因**：`mPowerRequest=policy=DIM`。`stay_on_while_plugged_in`（X10-10 杠杆②/scrcpy --stay-awake）只能拦「熄屏（OFF）」，拦不住熄屏前的「变暗（DIM）」——锁屏静置约 3 分钟后进入 DIM：背光压到 5%（`SdrBrightness=0.05`，设置明明是最大）、渲染层对虚拟显示器输出黑帧（复现：DIM 时 scrcpy 录制 11~14 帧全部 0/255）。物理上像熄屏、镜像上就是黑屏，而 `mWakefulness` 仍是 Awake。
+  - **为什么点「屏幕唤醒」没用**：`KEYCODE_WAKEUP` 的语义是「Asleep→Awake」，对已 Awake 但 DIM 的状态无效（实测：DIM 后发 WAKEUP，policy 仍 DIM）；实测 `KEYCODE_BACK` 可把 DIM 拉回 BRIGHT（锁屏上无副作用、不闪黑）；`KEYCODE_MENU` 无效；兜底手段是 SLEEP→WAKEUP 强制走一次熄屏-点亮环（有效但闪黑）。
+  - 修复两处：
+    ① 「屏幕唤醒」命令智能化（`wake_screen_for_serial`）：先读显示策略——DIM 走恢复（BACK→复查→环兜底）、BRIGHT 直接成功（不注入）、读不到退回原 WAKEUP 保守路径；
+    ② 会话期「变暗守护」`spawn_keep_awake_guard`：keep_awake 开启时随会话启动（USB/无线都启动），每 20 秒检查一次，发现 DIM **且设备处于锁屏**时恢复（解锁状态下绝不注入——BACK 会后退用户界面）。退出条件：epoch 变化/进程消失/keep_awake 关闭。
+  - 实现：AdbRuntime 新增 `display_state`（dumpsys display 原始输出）与 `press_key`（keycode 仅限代码常量，注释明确禁止接用户输入）；`parse_display_policy` 解析 `mPowerRequest=policy=`；`revive_dimmed_display`/`force_display_cycle`/`keep_awake_guard_tick` 均为纯函数便于测试。
+  - 测试：新增 8 项（策略解析三态、BACK 恢复不闪黑、BACK 无效走环且如实报败、唤醒命令 DIM 路径选 BACK、BRIGHT 路径零注入、守护锁屏注入/未锁屏不注入/epoch 过期退出）；Rust 142 / clippy 0 / vitest 40 / build 通过。
+  - ⚠️ 待真机验证：锁屏静置 4 分钟后镜像应仍可见（守护每 20 秒巡检）；「屏幕唤醒」在 DIM 下应能立即恢复画面。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

@@ -293,6 +293,15 @@ trait AdbRuntime: Send + Sync {
     fn window_policy(&self, serial: &str) -> Result<String, std::io::Error>;
     /// 读取 `dumpsys power` 原始输出，用于判断屏幕是否点亮。
     fn power_state(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 读取 `dumpsys display` 原始输出，用于识别「变暗（DIM）」电源策略。
+    ///
+    /// 背景：`stay_on_while_plugged_in` 只能拦住熄屏（OFF），拦不住熄屏前的
+    /// 变暗阶段（DIM，背光压到 5%、渲染层对虚拟显示器输出黑帧）。要识别这个
+    /// 状态必须看 `mPowerRequest=policy=`，它只在 `dumpsys display` 里。
+    fn display_state(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 发送一个按键码。`keycode` 只允许来自代码内常量（如 `KEYCODE_BACK`），
+    /// 绝不接受用户输入——按键注入属于输入类操作，参数必须可审计。
+    fn press_key(&self, serial: &str, keycode: &str) -> Result<(), std::io::Error>;
     /// 读取设备当前屏幕的 PNG 快照（原始字节）。
     ///
     /// 返回值是**屏幕内容**，属于最敏感的数据类别：只允许写入用户可见的本地文件，
@@ -648,6 +657,15 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn window_policy(&self, serial: &str) -> Result<String, std::io::Error> {
         Self::capture(&["-s", serial, "shell", "dumpsys", "window", "policy"])
+    }
+
+    fn display_state(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "dumpsys", "display"])
+    }
+
+    fn press_key(&self, serial: &str, keycode: &str) -> Result<(), std::io::Error> {
+        // keycode 来自代码内常量，作为单个 argv 传入，不做任何 shell 拼接。
+        Self::run(&["-s", serial, "shell", "input", "keyevent", keycode])
     }
 
     fn power_state(&self, serial: &str) -> Result<String, std::io::Error> {
@@ -1388,7 +1406,30 @@ fn tray_active_serial(sessions: &SessionStore) -> Option<String> {
 }
 
 /// 点亮手机屏幕（供命令与菜单复用）。
+///
+/// 先识别显示电源策略再选动作：
+/// * **DIM**（熄屏前变暗阶段被保活拦住，背光 5%、镜像黑帧）：纯唤醒键无效
+///   （实测），必须走 `revive_dimmed_display`（BACK，失败再环）。
+/// * **BRIGHT**：屏幕已正常点亮，什么都不做——多发 WAKEUP 无益。
+/// * 其它/读不到：退回保守路径 `KEYCODE_WAKEUP`（熄屏状态下的标准唤醒）。
 fn wake_screen_for_serial(runtimes: &AppRuntimes, serial: &str) -> Result<(), AppError> {
+    if let Ok(dump) = runtimes.adb.display_state(serial) {
+        match parse_display_policy(&dump) {
+            DisplayPolicy::Dim => {
+                return if revive_dimmed_display(runtimes.adb.as_ref(), serial) {
+                    Ok(())
+                } else {
+                    Err(AppError::new(
+                        "wake_failed",
+                        "屏幕处于系统变暗状态，自动恢复没有成功。",
+                        "请按一下手机的电源键点亮屏幕，再回到这里点「屏幕唤醒」。",
+                    ))
+                };
+            }
+            DisplayPolicy::Bright => return Ok(()),
+            DisplayPolicy::Other => {}
+        }
+    }
     runtimes.adb.wake_screen(serial).map_err(|error| {
         adb_command_error(
             error,
@@ -1620,6 +1661,131 @@ fn load_keep_awake_backup(path: &Path) -> Option<KeepAwakeBackup> {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+// ---------------------------------------------------------------------------
+// 变暗（DIM）守护
+//
+// 第二段根因链（2026-09-29 真机实测，Redmi M2104K10AC / Android 13 / MIUI）：
+// stay_on_while_plugged_in 只拦「熄屏（OFF）」，拦不住熄屏前的「变暗（DIM）」。
+// 锁屏静置约 3 分钟后电源策略进入 DIM（`mPowerRequest=policy=DIM`，背光压到
+// 5%，渲染层对虚拟显示器输出黑帧）——物理上像熄屏，镜像上是黑屏，但
+// `mWakefulness` 仍是 Awake。此时：
+//   * `KEYCODE_WAKEUP` 无效（设备已经是 Awake，唤醒语义不命中）——这就是用户
+//     点「屏幕唤醒」后镜像依旧黑屏的原因；
+//   * `KEYCODE_BACK` 可以把电源策略拉回 BRIGHT（锁屏上无副作用，实测有效）；
+//   * BACK 无效时退化为 `KEYCODE_SLEEP`→`KEYCODE_WAKEUP` 强制走一次熄屏-点亮
+//     环（屏幕会闪黑一下，作为兜底）。
+// ---------------------------------------------------------------------------
+
+/// 显示电源策略（`dumpsys display` 的 `mPowerRequest=policy=` 字段）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayPolicy {
+    /// 正常亮度。
+    Bright,
+    /// 熄屏前的变暗阶段：背光压低、内容层可能对虚拟显示器关闭。
+    Dim,
+    /// OFF / DOZE / 读不到等其它情况，一律按「不是 DIM」处理。
+    Other,
+}
+
+/// 从 `dumpsys display` 输出解析电源策略。找不到字段按 Other 处理（保守：
+/// 不确定时宁可不注入按键）。
+fn parse_display_policy(dump: &str) -> DisplayPolicy {
+    const NEEDLE: &str = "mPowerRequest=policy=";
+    for line in dump.lines() {
+        if let Some(index) = line.find(NEEDLE) {
+            let rest = &line[index + NEEDLE.len()..];
+            return if rest.starts_with("BRIGHT") {
+                DisplayPolicy::Bright
+            } else if rest.starts_with("DIM") {
+                DisplayPolicy::Dim
+            } else {
+                DisplayPolicy::Other
+            };
+        }
+    }
+    DisplayPolicy::Other
+}
+
+/// 把处于 DIM 阶段的屏幕拉回正常亮度。返回是否确认恢复。
+///
+/// 顺序：先注入 `KEYCODE_BACK`（无闪黑、锁屏上无副作用），复查仍 DIM 再走
+/// 熄屏-点亮环兜底。任何 adb 失败都如实返回 false，由调用方决定下一步。
+fn revive_dimmed_display(adb: &dyn AdbRuntime, serial: &str) -> bool {
+    if adb.press_key(serial, "KEYCODE_BACK").is_err() {
+        return force_display_cycle(adb, serial);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    match adb.display_state(serial) {
+        Ok(dump) if parse_display_policy(&dump) != DisplayPolicy::Dim => true,
+        _ => force_display_cycle(adb, serial),
+    }
+}
+
+/// 熄屏-点亮环：强制走一次 OFF 再唤醒，把电源策略从 DIM 拉回 BRIGHT。
+/// 屏幕会闪黑一下，只作为 BACK 无效时的兜底。
+fn force_display_cycle(adb: &dyn AdbRuntime, serial: &str) -> bool {
+    if adb.press_key(serial, "KEYCODE_SLEEP").is_err() {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    if adb.press_key(serial, "KEYCODE_WAKEUP").is_err() {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    match adb.display_state(serial) {
+        Ok(dump) => parse_display_policy(&dump) != DisplayPolicy::Dim,
+        Err(_) => false,
+    }
+}
+
+/// 守护线程的单次检查。返回 true 表示继续守护，false 表示应当退出。
+///
+/// 注入按键有界面副作用（解锁状态下 BACK 会后退界面），所以**只在设备处于
+/// 锁屏时**才允许注入——锁屏上 BACK 无副作用，而用户需要输密码的场景恰恰
+/// 都在锁屏上。设备未锁屏时的 DIM 是正常省电，一碰即恢复，不做处理。
+fn keep_awake_guard_tick(adb: &dyn AdbRuntime, store: &SessionStore, epoch: u64, serial: &str) -> bool {
+    let alive = {
+        let Ok(state) = store.0.lock() else {
+            return false;
+        };
+        state.epoch == epoch && state.process.is_some() && state.options.keep_awake
+    };
+    if !alive {
+        return false;
+    }
+    let Ok(policy_dump) = adb.display_state(serial) else {
+        return true; // 设备瞬时离线等，下一轮再试
+    };
+    if parse_display_policy(&policy_dump) != DisplayPolicy::Dim {
+        return true;
+    }
+    let Ok(window_dump) = adb.window_policy(serial) else {
+        return true;
+    };
+    let (keyguard, _) = parse_keyguard_state(&window_dump);
+    if keyguard != KeyguardState::Locked {
+        return true; // 未锁屏时不注入，避免后退用户界面
+    }
+    revive_dimmed_display(adb, serial);
+    true
+}
+
+/// 会话期间守护锁屏不被 DIM 黑掉（keep_awake 开启时启动）。
+///
+/// 退出条件：epoch 变化（会话重启/结束）、会话进程消失、keep_awake 被关闭、
+/// store 锁不可用。任何 adb 瞬时失败都只是跳过本轮，不打断守护。
+fn spawn_keep_awake_guard(store: SessionStore, epoch: u64, serial: String) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        let Some(adb) = MONITOR_ADB.get() else {
+            return;
+        };
+        if !keep_awake_guard_tick(adb.as_ref(), &store, epoch, &serial) {
+            return;
+        }
+    });
 }
 
 /// 菜单里需要随会话状态改文案/可用性的项。
@@ -3516,6 +3682,12 @@ fn launch_into_reserved_session(
     } else {
         disable_wireless_keep_awake(runtimes.adb.as_ref(), sessions);
     }
+    // 变暗（DIM）守护：stay_on 类保活拦得住熄屏、拦不住熄屏前的变暗阶段
+    // （背光 5%、镜像黑帧），锁屏静置约 3 分钟必然进入。USB 与无线都会遇到
+    // （真机实测），所以守护不限连接方式，只跟随 keep_awake 开关。
+    if keep_awake {
+        spawn_keep_awake_guard(sessions.clone(), epoch, serial);
+    }
     Ok(())
 }
 
@@ -4830,6 +5002,11 @@ mod tests {
         window_policy_dump: Option<String>,
         /// `dumpsys power` 的原始输出；`None` 表示读取失败。
         power_dump: Option<String>,
+        /// `dumpsys display` 的原始输出；`None` 表示读取失败。用互斥包一层，
+        /// 让 `press_key` 能在测试中模拟「注入按键改变了显示策略」。
+        display_dump: Arc<Mutex<Option<String>>>,
+        /// 为真（Some）时，`press_key` 后显示策略被改写为该值（模拟真实设备响应）。
+        policy_after_key: Option<DisplayPolicy>,
         /// `screencap -p` 返回的字节流；`None` 表示读取失败。
         screenshot: Option<Vec<u8>>,
         /// 设备传输目录的 `ls -1` 输出；`None` 表示读取失败。
@@ -5030,6 +5207,47 @@ mod tests {
                 Some(dump) => Ok(dump.clone()),
                 None => Err(std::io::Error::other("power state unavailable")),
             }
+        }
+
+        fn display_state(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("display_state {serial}"));
+            match self.display_dump.lock().unwrap().clone() {
+                Some(dump) => Ok(dump),
+                None => Err(std::io::Error::other("display state unavailable")),
+            }
+        }
+
+        fn press_key(&self, serial: &str, keycode: &str) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("key {keycode} {serial}"));
+            // 模拟「注入按键改变了显示策略」：BACK 恢复到 policy_after_key，
+            // SLEEP 进 Other（熄屏）——与真机行为一致的简化模型。
+            if let Some(target) = &self.policy_after_key {
+                let next = match keycode {
+                    "KEYCODE_SLEEP" => DisplayPolicy::Other,
+                    _ => *target,
+                };
+                let text = format!(
+                    "  mPowerRequest=policy={}\n",
+                    match next {
+                        DisplayPolicy::Bright => "BRIGHT",
+                        DisplayPolicy::Dim => "DIM",
+                        DisplayPolicy::Other => "OFF",
+                    }
+                );
+                let mut slot = self.display_dump.lock().unwrap();
+                if let Some(dump) = slot.as_mut() {
+                    *dump = text;
+                } else {
+                    *slot = Some(text);
+                }
+            }
+            Ok(())
         }
 
         fn screenshot_png(&self, serial: &str) -> Result<Vec<u8>, std::io::Error> {
@@ -6746,6 +6964,184 @@ mod tests {
         runtimes.adb.wake_screen(&serial).unwrap();
 
         assert_eq!(calls.lock().unwrap().as_slice(), ["wake phone"]);
+    }
+
+    // -- 变暗（DIM）守护：stay_on 拦得住熄屏拦不住变暗，需注入 BACK 拉回 --
+
+    fn dim_display() -> Arc<Mutex<Option<String>>> {
+        Arc::new(Mutex::new(Some("  mPowerRequest=policy=DIM\n".into())))
+    }
+
+    fn bright_display() -> Arc<Mutex<Option<String>>> {
+        Arc::new(Mutex::new(Some("  mPowerRequest=policy=BRIGHT\n".into())))
+    }
+
+    #[test]
+    fn display_policy_parser_maps_bright_dim_and_missing() {
+        assert_eq!(parse_display_policy("  mPowerRequest=policy=BRIGHT"), DisplayPolicy::Bright);
+        assert_eq!(parse_display_policy("  mPowerRequest=policy=DIM, x"), DisplayPolicy::Dim);
+        assert_eq!(parse_display_policy("  mPowerRequest=policy=OFF"), DisplayPolicy::Other);
+        assert_eq!(parse_display_policy("no such field"), DisplayPolicy::Other);
+    }
+
+    #[test]
+    fn dimmed_display_is_revived_with_back_without_screen_cycle() {
+        let adb = FakeAdb {
+            display_dump: dim_display(),
+            policy_after_key: Some(DisplayPolicy::Bright),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+
+        assert!(revive_dimmed_display(&adb, "phone"));
+        // 只注入 BACK，不触发熄屏-点亮环（屏幕不闪黑）。
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            ["key KEYCODE_BACK phone", "display_state phone"]
+        );
+    }
+
+    #[test]
+    fn display_cycle_runs_when_back_cannot_restore() {
+        // 模拟设备对任何注入都不响应（BACK 后仍 DIM）：revive 走完
+        // SLEEP→WAKEUP 环后仍失败，如实返回 false。
+        let adb = FakeAdb {
+            display_dump: dim_display(),
+            policy_after_key: Some(DisplayPolicy::Dim),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        assert!(!revive_dimmed_display(&adb, "phone"));
+        let calls = calls.lock().unwrap();
+        assert!(calls.iter().any(|c| c.contains("KEYCODE_BACK")));
+        assert!(calls.iter().any(|c| c.contains("KEYCODE_SLEEP")));
+        assert!(calls.iter().any(|c| c.contains("KEYCODE_WAKEUP")));
+    }
+
+    #[test]
+    fn wake_command_revives_a_dimmed_screen_instead_of_wake_key() {
+        // 用户点「屏幕唤醒」时屏幕卡在 DIM：KEYCODE_WAKEUP 实测无效（设备已
+        // Awake），必须注入 BACK。这里验证命令路径选择了正确动作。
+        let probe = FakeAdb {
+            display_dump: dim_display(),
+            policy_after_key: Some(DisplayPolicy::Bright),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&probe.calls);
+        let runtimes = runtimes(probe, FakeMirror::running());
+
+        let serial = validate_serial("phone").unwrap();
+        wake_screen_for_serial(&runtimes, &serial).unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert!(calls.iter().any(|c| c.contains("KEYCODE_BACK")));
+        assert!(!calls.iter().any(|c| c.starts_with("wake ")));
+    }
+
+    #[test]
+    fn wake_command_is_a_noop_when_screen_is_already_bright() {
+        let probe = FakeAdb {
+            display_dump: bright_display(),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&probe.calls);
+        let runtimes = runtimes(probe, FakeMirror::running());
+
+        let serial = validate_serial("phone").unwrap();
+        wake_screen_for_serial(&runtimes, &serial).unwrap();
+
+        // 屏幕正常亮着时：只读了一次显示策略，没有任何按键注入。
+        assert_eq!(calls.lock().unwrap().as_slice(), ["display_state phone"]);
+    }
+
+    #[test]
+    fn guard_revives_dimmed_screen_only_while_keyguard_is_showing() {
+        // 锁屏 + DIM + keep_awake：注入 BACK 恢复（用户输密码的场景）。
+        let probe = FakeAdb {
+            display_dump: dim_display(),
+            policy_after_key: Some(DisplayPolicy::Bright),
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Awake\n",
+            )
+        };
+        let calls = Arc::clone(&probe.calls);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
+            .unwrap();
+        let epoch = store.lock().unwrap().epoch;
+
+        // 用带状态的 adb 直调 tick（线程循环即逐次调用 tick）。
+        assert!(keep_awake_guard_tick(&probe, &store, epoch, "phone"));
+        assert!(calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("KEYCODE_BACK")));
+    }
+
+    #[test]
+    fn guard_never_injects_keys_when_device_is_unlocked() {
+        // 解锁状态下 BACK 会后退用户界面：即使 DIM 也不注入。
+        let unlocked_policy = "  KeyguardShowing=false\n  mInputRestricted=false\n";
+        let probe = FakeAdb {
+            display_dump: dim_display(),
+            policy_after_key: Some(DisplayPolicy::Bright),
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                unlocked_policy,
+                "  mWakefulness=Awake\n",
+            )
+        };
+        let calls = Arc::clone(&probe.calls);
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
+            .unwrap();
+        let epoch = store.lock().unwrap().epoch;
+
+        assert!(keep_awake_guard_tick(&probe, &store, epoch, "phone"));
+        assert!(calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|c| !c.contains("KEYCODE_")));
+    }
+
+    #[test]
+    fn guard_stops_when_the_session_epoch_has_moved_on() {
+        let probe = FakeAdb {
+            display_dump: dim_display(),
+            ..FakeAdb::with_lock_state(
+                vec![device("phone", DeviceState::Ready)],
+                SECURE_KEYGUARD_POLICY,
+                "  mWakefulness=Awake\n",
+            )
+        };
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
+            .unwrap();
+
+        // 用过期的 epoch 调用：守护应当退出（返回 false），不注入任何按键。
+        assert!(!keep_awake_guard_tick(&probe, &store, 9999, "phone"));
+        assert!(probe
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|c| !c.contains("KEYCODE_")));
     }
 
     // -- 最近设备 --
