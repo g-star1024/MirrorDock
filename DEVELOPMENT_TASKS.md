@@ -502,6 +502,18 @@
   - **Release 正文改进（用户反馈：固定文案不友好）**：build.yml 创建 Release 时若存在 `docs/releases/<tag>.md` 则在固定模板前输出「## 本版更新内容」栏目；本期新建 `docs/releases/v0.2.11-beta.md`。
   - 文档：帮助中心 FAQ 输入法条目改写（0.2.11 自动切 ABC）；README/官网版本行同步 0.2.11。
   - 验证：`cargo test --lib` **171 项全过**（is_third_party 移除：新策略不再需要该判定，-2 测试）；tsc / vitest **41** / pnpm build 全过；版本 0.2.11，tag `v0.2.11-beta` 走 CI 发布。
+- [x] X10-42~43（跳号留白）。X10-41 之后的人工会话直接以 X10-44 起编号，42/43 未使用。
+- [x] X10-44~48 + v0.3.0-beta / v0.4.0-beta（补录，2026-10-01：人工会话提交 b2a4546 / 23157b4 / 245e269 / 3331efc / f380be4 未同步本文件，本轮按提交信息与 release notes 整理入档，并做独立基线复核）。
+  - **修复：结束镜像时整个客户端被杀（v0.3.0，macOS 15 TIS 主队列断言，崩溃报告实锤）**。`input_source.rs` 全部 TIS 调用改走主线程（`run_on_main_thread` + 3s 超时降级）；`maybe_switch` 在锁外调度避免与主线程锁等待环；`ExitRequested(code=None)` 一律 `prevent_exit`，退出仅保留托盘菜单一个出口。
+  - **X10-45 无线断线自动重连**：异常退出 + 无线端点 → 5s 探测、15 分钟预算，设备回网后按原参数重建（录制不续录）；设置可关；事件通知前端。
+  - **X10-47 应用内自动更新**：`tauri-plugin-updater` + minisign 签名（签名私钥只走 GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` 注入，不进代码与构建产物日志，与「私钥永不进 CI 代码」假设一致）；CI 产出 `.sig` 与 `latest.json`（macOS 双架构 artifact 统一改名 `<v>_<arch>.app.tar.gz` 防 merge-multiple 互覆，提交 3331efc）；设置→关于一键升级。
+  - **X10-44 帧率上限**：`--max-fps` 白名单 24/30/60，默认跟随设备。
+  - **X10-46 手机实体键盘设置一键直达**：`open_keyboard_settings` 命令（命令面 36→37），设置页键盘直输区按钮直达手机「实体键盘」页（承接 X10-37/38 排障经验）。
+  - **X10-48 Linux 随包 scrcpy 4.1**：CI 官方源码编译（固定 tag + SHA-256），server 用官方 release digest 校验，adb 用 platform-tools 固定版本；scrcpy 4.x 依赖 SDL3，CI 增 SDL3 release-3.4.16 源码编译（固定 tag + 固定 SHA-256，提交 245e269/f380be4——v0.3.0-beta 首跑实锤 Ubuntu 22.04 只有 SDL2，meson 报 sdl3 not found）；SDL3 动态库不随包，README/THIRD_PARTY_NOTICES 已如实更新。
+  - **v0.4.0-beta 功能（代码已在 main，随下个 tag 发布）**：①桌面模式 `--new-display`——手机上创建独立虚拟显示器，电脑画面不被手机操作打断（类 DeX），需 Android 10+；②摄像头源 `--video-source=camera`——显式开启、强制 `--no-audio`（不采麦克风，兑现 A1-05 承诺）；③两者互斥（`video_source_conflict` 错误码），旧配置 serde/localStorage 回填。
+  - **版本号口径**：v0.4.0 提交后为对齐重发的 tag `v0.3.0-beta`，版本号暂回 0.3.0（package.json/tauri.conf.json/Cargo.toml），v0.4.0 功能代码已在 main。
+  - **本轮独立基线复核（2026-10-01 04:17，HEAD=f380be4，工作区干净）**：`cargo test --manifest-path src-tauri/Cargo.toml` **175 passed / 0 failed**；`pnpm build` 通过；vitest **41 passed / 0 failed**。与提交声称的 cargo 175 / vitest 41 一致。
+  - **未验证面（外部依赖）**：v0.3.0-beta tag CI 重发 build（run 36770770206）进行中，产物可运行性、updater 端到端（minisign 验签 + latest.json 拉取 + 三平台升级）、桌面模式/摄像头源/自动重连/帧率上限的真机行为均待真机与产物验收。
 
 ## 最终成品退出条件
 
