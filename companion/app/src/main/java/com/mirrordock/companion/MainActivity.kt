@@ -69,6 +69,14 @@ class MainActivity : AppCompatActivity() {
 
         setStatusConnected(false)
 
+        if (isTv()) {
+            // TV 模式（X10-28）：电视没有相机，扫码不可用；手动输入是唯一配对路径，
+            // 默认展开（不强制弹键盘——电视输入法由用户按 OK 主动唤起）。
+            findViewById<Button>(R.id.button_scan).visibility = View.GONE
+            manualInput.visibility = View.VISIBLE
+            log("TV 模式：已隐藏扫码入口，请使用手动输入配对码连接电脑。")
+        }
+
         findViewById<Button>(R.id.button_scan).setOnClickListener {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED
@@ -241,6 +249,8 @@ class MainActivity : AppCompatActivity() {
                     statusText.text = "已与电脑建立加密会话。"
                     setStatusConnected(true)
                     log("配对成功（加密会话已建立）")
+                    // 边界如实告知（X10-31）：这条会话是伴侣通道，不等于镜像连接。
+                    log("提示：这是伴侣助手通道，不会让手机出现在电脑的连接列表里；要镜像请用数据线或在电脑端完成无线调试配对。")
                 }
 
                 override fun onRejected() = runOnUiThread {
@@ -321,7 +331,6 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(0, dp(11), 0, dp(11))
-            background = getDrawable(R.drawable.bg_input)
             val margin = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             )
@@ -329,6 +338,8 @@ class MainActivity : AppCompatActivity() {
             layoutParams = margin
             isClickable = true
             isFocusable = true
+            // TV 模式（X10-28）：D-pad 聚焦时用青碧描边高亮，焦点必须看得见。
+            background = ContextCompat.getDrawable(context, R.drawable.bg_file_row)
         }
         val badge = TextView(this).apply {
             text = getString(if (entry.isApk) R.string.badge_apk else R.string.badge_file)
@@ -380,6 +391,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    /**
+     * 是否运行在 Android TV 上（leanback 设备）。电视没有相机与触屏，
+     * 界面据此裁剪扫码入口、默认展开手动输入；D-pad 焦点导航靠系统默认。
+     */
+    private fun isTv(): Boolean {
+        val manager = getSystemService(android.app.UiModeManager::class.java) ?: return false
+        return manager.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+    }
 }
 
 /**

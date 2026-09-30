@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TV banner（leanback 启动器要求 320x180）：hero 同款墨色渐变 + 品牌 M 标。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:startColor="#23393C"
+                android:endColor="#131E20" />
+        </shape>
+    </item>
+    <item
+        android:left="100dp"
+        android:right="100dp"
+        android:top="30dp"
+        android:bottom="30dp"
+        android:drawable="@drawable/tv_banner_mark" />
+</layer-list>

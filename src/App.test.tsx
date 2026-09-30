@@ -60,6 +60,12 @@ function idleSession(): MirrorSession {
   return { phase: "idle", serial: null, first_frame: "unknown", error: null };
 }
 
+// X10-27 起 Device 携带 physical_serial 与 connections（多通道合并），
+// 夹具缺字段会让 connectionLabel 在渲染期崩溃；这里统一补齐。
+function testDevice(serial: string, label: string, state: "ready" | "unauthorized" | "offline" | "unknown") {
+  return { serial, label, state, physical_serial: null, connections: [] };
+}
+
 // App 挂载时会并行轮询多条命令；每个命令都必须返回结构正确的值，
 // 否则组件在渲染期崩溃——这个 helper 保证任何测试忘记 mock 的命令都有安全兜底。
 function baseInvoke(cmd: string): Promise<unknown> {
@@ -68,6 +74,10 @@ function baseInvoke(cmd: string): Promise<unknown> {
       return Promise.resolve(adbCheck());
     case "mirror_session":
       return Promise.resolve(idleSession());
+    case "mirror_sessions":
+      // X10-27 起前端轮询的是会话列表（Vec<MirrorSession>）；漏 mock 会回落到
+      // default 的 {}，组件拿到非数组直接渲染崩溃。
+      return Promise.resolve([]);
     case "current_recording":
       return Promise.resolve(null);
     case "list_recent_devices":
@@ -329,8 +339,11 @@ describe("App rendering", () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "check_adb_devices") {
         return Promise.resolve(
-          adbCheck({ devices: [{ serial: "phone", label: "Xiaomi M2104K10AC", state: "unauthorized" }] }),
+          adbCheck({ devices: [testDevice("phone", "Xiaomi M2104K10AC", "unauthorized")] }),
         );
+      }
+      if (cmd === "mirror_sessions") {
+        return Promise.resolve([{ phase: "unauthorized", serial: "phone", first_frame: "unknown", error: null }]);
       }
       if (cmd === "mirror_session") {
         return Promise.resolve({ phase: "unauthorized", serial: "phone", first_frame: "unknown", error: null });
@@ -348,8 +361,12 @@ describe("App rendering", () => {
       switch (cmd) {
         case "check_adb_devices":
           return Promise.resolve(
-            adbCheck({ devices: [{ serial: "phone", label: "Pixel 8", state: "ready" }] }),
+            adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }),
           );
+        case "mirror_sessions":
+          return Promise.resolve([
+            { phase: "streaming", serial: "phone", first_frame: "reached", error: null },
+          ]);
         case "mirror_session":
           return Promise.resolve({
             phase: "streaming",
@@ -576,7 +593,7 @@ describe("apk install", () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "check_adb_devices") {
         return Promise.resolve(
-          adbCheck({ devices: [{ serial: "phone", label: "Pixel 8", state: "ready" }] }),
+          adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }),
         );
       }
       const custom = extra(cmd);

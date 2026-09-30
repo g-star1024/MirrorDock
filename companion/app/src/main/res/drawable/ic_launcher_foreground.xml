@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标前景（X10-29）：白色 M 字 + 青碧圆点。自适应图标安全区为中央
+     66dp 圆，主视觉整体控制在中心 40% 内，避免被各厂商裁成圆形/圆角时切边。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- M：以 54,54 为中心，宽 40 高 30 -->
+    <path
+        android:pathData="M34,69 L34,39 L54,59 L74,39 L74,69"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <!-- 青碧点：M 正下方 -->
+    <path
+        android:pathData="M54,78 m-4.5,0 a4.5,4.5 0 1,1 9,0 a4.5,4.5 0 1,1 -9,0"
+        android:fillColor="#6FE3E8" />
+</vector>

@@ -62,9 +62,22 @@ struct PairingInner {
     events: Vec<String>,
     offer: Option<PairingOffer>,
     shutdown: Option<oneshot::Sender<()>>,
+    /// 设备报到时触发的桥接回调（桌面侧注入）：入参为伴侣端来源 IP，
+    /// 返回要追加进事件流的文案。伴侣模块不感知 adb——镜像通道的
+    /// 自动连接逻辑（mDNS 匹配 + adb connect）由调用方闭包实现。
+    device_bridge: Option<Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>>,
 }
 
 impl PairingState {
+    /// 注入设备报到桥接回调；应在任何配对开始前完成（run() 启动时设置一次）。
+    pub fn set_device_bridge(&self, bridge: Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>) {
+        self.inner.lock().unwrap().device_bridge = Some(bridge);
+    }
+
+    fn take_device_bridge(&self) -> Option<Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>> {
+        self.inner.lock().unwrap().device_bridge.clone()
+    }
+
     fn push_event(&self, text: impl Into<String>) {
         let mut inner = self.inner.lock().unwrap();
         inner.events.push(format!("{} {}", hhmmss_now(), text.into()));
@@ -271,7 +284,7 @@ async fn run_accept_loop(
                     }
                     result = acceptor.accept(stream) => {
                         match result {
-                            Ok(tls) => serve_session(tls, &token_expected, &state).await,
+                            Ok(tls) => serve_session(tls, &token_expected, &state, peer.ip().to_string()).await,
                             Err(e) => state.push_event(format!("TLS 握手失败：{e}")),
                         }
                     }
@@ -284,10 +297,14 @@ async fn run_accept_loop(
 }
 
 /// 单个伴侣会话：握手 + JSON 行事件流，直到 bye/断开。不接屏幕帧。
+///
+/// `peer_ip` 是伴侣端的局域网来源 IP，设备报到时交给桥接回调
+/// （桌面侧用它自动连接这台手机的镜像通道）。
 async fn serve_session(
     tls: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     token_expected: &str,
     state: &PairingState,
+    peer_ip: String,
 ) {
     let (reader, mut writer) = tokio::io::split(tls);
     let mut lines = BufReader::new(reader).lines();
@@ -327,6 +344,24 @@ async fn serve_session(
                     Some("device_hello") => {
                         let model = value.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
                         state.push_event(format!("设备报到：{model}"));
+                        // 桥接可能阻塞（mDNS 扫描 + adb connect），丢进阻塞线程池，
+                        // 结果以事件形式回到事件流——前端面板直接可见。
+                        if let Some(bridge) = state.take_device_bridge() {
+                            // state 的生命周期：会话循环持有 &PairingState，
+                            // 阻塞任务需要自有引用，这里借 Arc 化的事件缓冲兜底。
+                            // PairingState 由调用方以 Arc 持有，直接升级引用不安全；
+                            // 因此桥接文案由回调返回、由本循环追加，任务只返回 Vec<String>。
+                            let peer = peer_ip.clone();
+                            let join = tauri::async_runtime::spawn_blocking(move || bridge(&peer));
+                            match join.await {
+                                Ok(lines) => {
+                                    for line in lines {
+                                        state.push_event(line);
+                                    }
+                                }
+                                Err(e) => state.push_event(format!("桥接任务失败：{e}")),
+                            }
+                        }
                     }
                     Some("capture_stats") => {
                         let frames = value.get("frames").and_then(|f| f.as_u64()).unwrap_or(0);

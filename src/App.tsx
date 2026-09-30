@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
 import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plugin-dialog";
@@ -13,10 +14,23 @@ import "./App.css";
 
 type DeviceState = "ready" | "unauthorized" | "offline" | "unknown";
 
+type ConnectionKind = "usb" | "wireless";
+
+type ConnectionEndpoint = {
+  serial: string;
+  kind: ConnectionKind;
+  state: DeviceState;
+};
+
 type Device = {
   serial: string;
   label: string;
   state: DeviceState;
+  // 硬件序列号（ro.serialno）。同一台手机 USB 与无线一致，用于跨连接去重。
+  // 仅已授权设备才会带此值；未授权/离线的设备为 null。
+  physical_serial: string | null;
+  // 该物理设备当前在 adb 中出现的所有通道（USB / 无线可能并存）。
+  connections: ConnectionEndpoint[];
 };
 
 type AdbCheck = {
@@ -29,9 +43,55 @@ type AdbCheck = {
 type TrustedWirelessDevice = { endpoint: string };
 // 最近使用记录只保存在这台电脑上，用户可以逐条移除。last_used_at 是 Unix 秒。
 type RecentDevice = { serial: string; label: string; last_used_at: number };
-// 无线设备的标识形如 ip:port；USB 序列号不含冒号。仅用于决定给出哪种恢复动作。
+// 无线设备的标识有两类：`ip:port`（含冒号），以及无线调试的 mDNS 发现条目
+// （形如 `adb-xxx._adb-tls-connect._tcp`，不含冒号但也不是 USB）。
+// 仅用于决定给出哪种恢复动作；与后端 is_wireless_endpoint 保持同一判定。
 function looksLikeWirelessEndpoint(serial: string) {
-  return serial.includes(":");
+  return serial.includes(":") || serial.includes("._adb-tls") || serial.includes("._tcp");
+}
+// 通道提示：同一台设备可能同时走 USB 与无线，合并后需让用户看见。
+// 仅统计「已就绪」的通道——adb 拔除后可能残留陈旧/offline 条目，
+// 若把它算进徽标，会让只用 Wi-Fi 的设备误标成「USB + 无线」。
+function connectionLabel(device: Device) {
+  const kinds = new Set(
+    device.connections
+      .filter((connection) => connection.state === "ready")
+      .map((connection) => connection.kind)
+  );
+  if (kinds.has("usb") && kinds.has("wireless")) return "USB + 无线";
+  if (kinds.has("wireless")) return "无线";
+  if (kinds.has("usb")) return "USB";
+  return "";
+}
+// 同型号多台设备会显示相同名称（如两台 M2104K10AC），追加 -1、-2 后缀便于区分。
+// 以设备在列表中的出现顺序统一编号，key 用实际端点 serial。
+function buildDisplayLabels(devices: Device[]): Record<string, string> {
+  const counts = new Map<string, number>();
+  for (const device of devices) {
+    counts.set(device.label, (counts.get(device.label) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  const labels: Record<string, string> = {};
+  for (const device of devices) {
+    if ((counts.get(device.label) ?? 1) > 1) {
+      const index = (seen.get(device.label) ?? 0) + 1;
+      seen.set(device.label, index);
+      labels[device.serial] = `${device.label} -${index}`;
+    } else {
+      labels[device.serial] = device.label;
+    }
+  }
+  return labels;
+}
+// 最近设备按「实际连接序列号」存储；去重后要在合并设备里按硬件序列号或任一通道匹配。
+function findConnectedDevice(devices: Device[] | undefined, serial: string): Device | undefined {
+  if (!devices) return undefined;
+  return devices.find(
+    (device) =>
+      device.physical_serial === serial ||
+      device.serial === serial ||
+      device.connections.some((connection) => connection.serial === serial),
+  );
 }
 export function relativeTime(seconds: number) {
   if (!seconds) return "使用时间未知";
@@ -411,11 +471,34 @@ function App() {
   const [pairingQr, setPairingQr] = useState<string | null>(null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingError, setPairingError] = useState<string | null>(null);
-  const [session, setSession] = useState<MirrorSession | null>(null);
+  const [sessions, setSessions] = useState<MirrorSession[]>([]);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
-  const sessionActive = session?.phase === "connecting" || session?.phase === "streaming";
+  // 按设备结束镜像（X10-27 复测反馈）：记录正在结束的会话归属，
+  // 让每台设备自己的「结束」按钮显示各自的进行中状态，而不是全局一把抓。
+  const [stoppingSerial, setStoppingSerial] = useState<string | null>(null);
+  // 取消授权的两段式确认：第一次点击进入待确认状态，再点才真正执行（X10-32）。
+  const [revokeArmedSerial, setRevokeArmedSerial] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
+  const [revokeNotice, setRevokeNotice] = useState<{ text: string; error: boolean } | null>(null);
+  // 启动中的会话归属：多张设备卡同时可见时，「正在启动…」只出现在点下的那张卡上。
+  const [launchingSerial, setLaunchingSerial] = useState<string | null>(null);
+  // 拖拽安装 APK：拖入时显示全屏提示；安装结果以右下角浮层反馈（任何页签可见）。
+  const [apkDragOver, setApkDragOver] = useState(false);
+  const [dropInstallNotice, setDropInstallNotice] = useState<{ kind: "info" | "error"; text: string } | null>(null);
+  // X10-27 并发多设备：后端按设备维护会话表；这里保留「主会话」视图供既有
+  // 单会话 UI（顶栏、状态提示、设置应用）使用，各设备自己的状态按 serial 查询。
+  const session = sessions.find((item) => item.phase === "streaming" || item.phase === "connecting") ?? sessions[0] ?? null;
+  const sessionActive = sessions.some((item) => item.phase === "connecting" || item.phase === "streaming");
+  const sessionFor = (serial: string | null) =>
+    serial ? sessions.find((item) => item.serial === serial) ?? null : null;
+  const activeSessionCount = sessions.filter((item) => item.phase === "connecting" || item.phase === "streaming").length;
+  // 有明确归属（serial 非空）的进行中会话：供「正在镜像的设备」逐台列出与单独结束。
+  const activeSessionList = sessions.filter(
+    (item): item is MirrorSession & { serial: string } =>
+      (item.phase === "connecting" || item.phase === "streaming") && item.serial != null
+  );
   // 授权状态读取失败（null）按免费版呈现：录制开关禁用并给出激活指引。
   const proEdition = isProEdition(entitlement?.edition);
   useEffect(() => {
@@ -423,8 +506,8 @@ function App() {
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
-        const current = await invoke<MirrorSession>("mirror_session");
-        if (!disposed) { setSession(current); setSessionError(null); }
+        const current = await invoke<MirrorSession[]>("mirror_sessions");
+        if (!disposed) { setSessions(current); setSessionError(null); }
       } catch { if (!disposed) setSessionError("无法更新会话状态，请重新打开应用后检查。"); }
       try {
         const captured = await invoke<Recording | null>("current_recording");
@@ -530,8 +613,14 @@ function App() {
         options: next,
         // 只有开启录制时才生成文件名；后端在未开启录制时会忽略它。
         recordFileName: next.record ? recordingFileName(new Date()) : null,
+        // X10-27：设置作用于主会话（真正持有镜像进程的设备优先）；后端兼容不传。
+        serial: session?.serial ?? null,
       });
-      setSession(result.session);
+      setSessions((prev) => {
+        if (result.session.serial == null) return prev;
+        const next2 = prev.filter((item) => item.serial !== result.session.serial);
+        return [...next2, result.session].sort((a, b) => (a.serial ?? "").localeCompare(b.serial ?? ""));
+      });
       setApplyNotice(result.applied ? "新设置已生效：镜像窗口已按新设置重新打开。" : result.note ?? "设置与当前会话一致，未重启镜像窗口。");
     } catch (error) {
       setApplyNotice(errorMessage(error, "无法应用新设置。"));
@@ -618,6 +707,27 @@ function App() {
     void refreshEntitlement();
   }, []);
 
+  // 设备列表自动轮询：无线设备（尤其同 Wi-Fi 自动重连、或手机端已配对的连接回连）
+  // 常在本客户端的显式连接流程之外出现，不轮询就只有手动点「重新检查」才看得到。
+  // 走 silent=true，只刷新界面、不写诊断日志。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await invoke<AdbCheck>("check_adb_devices", { silent: true });
+        if (!disposed) setCheck(next);
+      } catch {
+        // 轮询失败保持上一次结果，不闪烁、不打断。
+      }
+    }, 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   async function refreshEntitlement() {
     try {
       setEntitlement(await invoke<EntitlementView>("entitlement_status"));
@@ -681,6 +791,37 @@ function App() {
     }
   }
 
+  // 一键清空全部最近使用记录（物理删除，落盘空列表）。同样只影响本地记录本身。
+  async function clearRecentDevices() {
+    setRecentMessage(null);
+    try {
+      await invoke("clear_recent_devices");
+      setRecentDevices([]);
+      setRecentMessage("已清空全部最近使用记录。之后再次镜像会重新记入用过的设备。");
+    } catch (error) {
+      setRecentMessage(errorMessage(error, "无法清空最近设备记录。"));
+    }
+  }
+
+  // 客户端侧取消授权（X10-32）：关手机调试开关 + 断开全部无线连接 + 清本机记录，
+  // 并打开手机的开发者选项引导本人完成「撤销 USB 调试授权」（清除授权记录
+  // 只能手机端做，这是 Android 的安全设计）。
+  async function revokeDeviceAccess(serial: string) {
+    setRevoking(true);
+    setRevokeArmedSerial(null);
+    setRevokeNotice(null);
+    try {
+      const receipt = await invoke<{ steps: string[] }>("revoke_device_access", { serial });
+      setRevokeNotice({ text: receipt.steps.join(" "), error: false });
+      await refreshDevices();
+      await refreshRecentDevices();
+    } catch (error) {
+      setRevokeNotice({ text: errorMessage(error, "无法完成取消授权，请稍后重试。"), error: true });
+    } finally {
+      setRevoking(false);
+    }
+  }
+
   // 无线设备的连接端口每次重新开启无线调试都可能变化，因此这里不承诺一定能连上。
   async function reconnectRecentDevice(endpoint: string) {
     setRecentMessage(null);
@@ -705,6 +846,7 @@ function App() {
   async function startMirroring(serial: string) {
     setSelectedSerial(serial);
     setIsLaunching(true);
+    setLaunchingSerial(serial);
     setLaunchError(null);
     setApplyNotice(null);
     try {
@@ -721,20 +863,25 @@ function App() {
       setLaunchError(errorMessage(error, "无法启动镜像窗口。请重新检查连接后再试。"));
     } finally {
       setIsLaunching(false);
+      setLaunchingSerial(null);
     }
   }
 
-  async function stopMirroring() {
+  // 结束镜像：默认结束全部会话；传入 serial 时只结束该设备的会话（X10-27）。
+  // stoppingSerial 让「这台设备的结束按钮」单独显示进行中，其它设备不受影响。
+  async function stopMirroring(serial?: string) {
     setIsStopping(true);
+    setStoppingSerial(serial ?? null);
     setLaunchError(null);
     try {
-      await invoke("stop_mirroring");
+      await invoke("stop_mirroring", { serial: serial ?? null });
       // 会话已结束，上一次「新设置已生效」的提示不再有意义。
       setApplyNotice(null);
     } catch (error) {
       setLaunchError(errorMessage(error, "无法结束镜像会话，请手动关闭镜像窗口。"));
     } finally {
       setIsStopping(false);
+      setStoppingSerial(null);
     }
   }
 
@@ -1161,10 +1308,70 @@ function App() {
 
   const readyDevices = check?.devices.filter((device) => device.state === "ready") ?? [];
   const readyDevice = readyDevices.find((device) => device.serial === selectedSerial) ?? readyDevices[0];
+  // 同型号多台设备重名时追加 -1、-2 后缀，便于区分（基于全部设备统一编号）。
+  const displayLabels = buildDisplayLabels(check?.devices ?? []);
   const scrcpyReady = check?.scrcpy_available ?? false;
   const readySerial = readyDevice?.serial ?? null;
   // 快捷键处理器读取的最新 serial。
   shortcutsRef.current.readySerial = readySerial;
+  // 拖拽安装的目标设备：拖放回调是长生命周期闭包，读 ref 拿最新就绪设备，
+  // 避免注册后设备插拔导致指向过期。
+  const dragTargetRef = useRef<{ serial: string; label: string } | null>(null);
+  dragTargetRef.current = readyDevice
+    ? { serial: readyDevice.serial, label: displayLabels[readyDevice.serial] ?? readyDevice.label }
+    : null;
+  // 拖入的文件里挑出 APK 安装包安装到当前就绪手机；多个时只装第一个并说明，
+  // 不静默批量安装。结果走右下角浮层反馈（拖拽可发生在任何页签）。
+  async function installDroppedApk(paths: string[]) {
+    const apks = paths.filter((path) => path.toLowerCase().endsWith(".apk"));
+    if (apks.length === 0) {
+      setDropInstallNotice({ kind: "error", text: "拖入的文件里没有 APK 安装包，未执行安装。" });
+      return;
+    }
+    const target = dragTargetRef.current;
+    if (!target) {
+      setDropInstallNotice({ kind: "error", text: "请先在「连接」页连接手机，再拖拽安装 APK。" });
+      return;
+    }
+    const fileName = apks[0].split(/[\\/]/).pop() ?? apks[0];
+    setDropInstallNotice({ kind: "info", text: `正在把 ${fileName} 安装到 ${target.label}…` });
+    try {
+      const receipt = await invoke<ApkInstallReceipt>("install_apk_to_device", { serial: target.serial, apkPath: apks[0] });
+      setDropInstallNotice({
+        kind: "info",
+        text: `${receipt.summary}已交给 ${target.label} 安装。手机上可能出现「安装未知应用」等确认，需要你本人同意。${apks.length > 1 ? `（拖入了 ${apks.length} 个 APK，只安装了第一个）` : ""}`,
+      });
+    } catch (error) {
+      setDropInstallNotice({ kind: "error", text: errorMessage(error, "安装没有完成。") });
+    }
+  }
+  // 拖拽安装监听：仅真实 Tauri 环境有拖放事件；浏览器/测试环境直接跳过。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setApkDragOver(true);
+        } else if (event.payload.type === "leave") {
+          setApkDragOver(false);
+        } else if (event.payload.type === "drop") {
+          setApkDragOver(false);
+          void installDroppedApk(event.payload.paths);
+        }
+      })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 选中设备变化时重新探测能力与锁屏状态。两者都只读取设备信息，不启动镜像。
   useEffect(() => {
     if (!readySerial) {
@@ -1215,11 +1422,22 @@ function App() {
   const detectedGuide = detectBrand((check?.devices ?? []).map((device) => device.label));
   const shownGuide: BrandGuide | null =
     brandGuides.find((guide) => guide.key === (guideKey ?? detectedGuide?.key)) ?? null;
+  // 会话当前属于哪台设备（含显示名），用于顶栏与按钮文案说清「镜像运行中」的主语。
+  const sessionDevice = sessionSerial
+    ? (check?.devices ?? []).find((device) => device.serial === sessionSerial)
+    : undefined;
+  const sessionDeviceLabel = sessionDevice
+    ? (displayLabels[sessionDevice.serial] ?? sessionDevice.label)
+    : sessionSerial ?? null;
   // 顶栏状态：一句话说清“现在这台电脑能不能用手机”。
   const topbarStatus = isChecking
     ? "正在检查连接…"
     : sessionActive
-      ? "镜像运行中"
+      ? activeSessionCount > 1
+        ? `${activeSessionCount} 台设备镜像中`
+        : sessionDeviceLabel
+          ? `镜像运行中：${sessionDeviceLabel}`
+          : "镜像运行中"
       : readyDevice
         ? readyDevice.label
         : check?.devices.length
@@ -1259,12 +1477,30 @@ function App() {
             <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
             <span>{topbarStatus}</span>
           </div>
-          {sessionActive && (
+          {/* 单会话时设备卡片上已有唯一的「结束镜像」；顶栏只在多台同停时才出现。 */}
+          {activeSessionCount > 1 && (
             <button className="secondary-button" type="button" onClick={() => void stopMirroring()} disabled={isStopping}>
-              {isStopping ? "正在结束…" : "结束镜像"}
+              {isStopping ? "正在结束…" : `结束全部（${activeSessionCount} 台）`}
             </button>
           )}
         </header>
+
+        {/* 拖拽安装反馈浮层：右下角，任何页签都能看到结果。 */}
+        {dropInstallNotice && (
+          <div className={`drop-toast ${dropInstallNotice.kind === "error" ? "drop-toast-error" : ""}`} role="status">
+            <span>{dropInstallNotice.text}</span>
+            <button className="text-button" type="button" onClick={() => setDropInstallNotice(null)}>知道了</button>
+          </div>
+        )}
+        {/* 拖入 APK 时的全屏提示：说明松手后会发生什么、装到哪台手机。 */}
+        {apkDragOver && (
+          <div className="drop-overlay" aria-hidden="true">
+            <div className="drop-overlay-card">
+              <strong>松开鼠标，安装 APK</strong>
+              <p>{dragTargetRef.current ? `将安装到：${dragTargetRef.current.label}` : "请先连接一台手机"}</p>
+            </div>
+          </div>
+        )}
 
         <div className="content">
           {/* -- 连接（主页） ------------------------------------------------ */}
@@ -1277,8 +1513,26 @@ function App() {
             <section className="connection-card" aria-live="polite">
               <div className="connection-heading">
                 <div>
-                  <p className="eyebrow">{sessionActive ? "镜像运行中" : "第一步：连接手机"}</p>
-                  <h2>{isChecking ? "正在检查 USB 连接…" : readyDevice ? "手机已准备就绪" : "等待连接手机"}</h2>
+                  <p className="eyebrow">
+                    {sessionActive
+                      ? activeSessionCount > 1
+                        ? `镜像运行中：${activeSessionCount} 台设备`
+                        : sessionDeviceLabel
+                          ? `镜像运行中：${sessionDeviceLabel}`
+                          : "镜像运行中"
+                      : "第一步：连接手机"}
+                  </p>
+                  <h2>
+                    {isChecking
+                      ? "正在检查 USB 连接…"
+                      : sessionActive
+                        ? activeSessionCount > 1
+                          ? "多台设备同时镜像中"
+                          : "镜像进行中"
+                        : readyDevice
+                          ? "手机已准备就绪"
+                          : "等待连接手机"}
+                  </h2>
                 </div>
                 <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
                   {isChecking ? "检查中…" : "重新检查"}
@@ -1291,30 +1545,105 @@ function App() {
                 {launchError && <p className="diagnostic">{launchError}</p>}
                 {sessionError && <p className="diagnostic" role="alert">{sessionError}</p>}
                 {statusMessage && <p className="diagnostic" role={statusRole}>{statusMessage}</p>}
+                {revokeNotice && <p className="diagnostic" role={revokeNotice.error ? "alert" : "status"}>{revokeNotice.text}</p>}
                 {settingsNotice && <p className="diagnostic">{settingsNotice}</p>}
               </div>
 
-              {readyDevice ? (
-                <>
-                {readyDevices.length > 1 && <div className="device-picker" aria-label="选择要镜像的设备">
-                  {readyDevices.map((device) => <button className={device.serial === readyDevice.serial ? "device-choice selected" : "device-choice"} type="button" key={device.serial} onClick={() => setSelectedSerial(device.serial)}>{device.label}</button>)}
-                </div>}
-                <div className="ready-panel">
-                  <span className="status-dot ready" aria-hidden="true" />
-                  <div>
-                    <strong>{readyDevice.label}</strong>
-                    <p>已授权，可以开始镜像。</p>
-                  </div>
-                  <button className="secondary-button ready-wake" type="button" disabled={lockBusy} onClick={() => void wakeDevice(readyDevice.serial)}>
-                    {lockBusy ? "正在唤醒…" : "屏幕唤醒"}
-                  </button>
-                  <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || sessionActive} onClick={() => void startMirroring(readyDevice.serial)}>
-                    {sessionActive ? "会话进行中" : isLaunching ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
-                  </button>
+              {/* 设备卡片列表：一台设备一张卡，状态即操作——每个动作全页只出现一次。
+                  镜像中 →「结束镜像」；就绪 →「开始镜像」；待授权/离线 → 文字说明。
+                  会话仍在但设备已从列表消失（如无线瞬断）时，补一张兜底卡保留结束入口。 */}
+              {!isChecking && check?.devices && check.devices.length > 0 && (
+                <div className="device-cards" aria-label="已连接的设备">
+                  {check.devices.map((device) => {
+                    const badge = connectionLabel(device);
+                    const own = sessionFor(device.serial);
+                    const owned = own?.phase === "connecting" || own?.phase === "streaming";
+                    return (
+                      <div className={`device-card ${owned ? "device-card-active" : ""}`} key={device.serial}>
+                        <span className={`status-dot ${owned ? "ready" : device.state}`} aria-hidden="true" />
+                        <div>
+                          <strong>
+                            {displayLabels[device.serial] ?? device.label}
+                            {badge && <span className="conn-badge inline">{badge}</span>}
+                          </strong>
+                          <p>
+                            {owned
+                              ? own.phase === "connecting"
+                                ? "画面正在启动…若几秒后未出现，请看手机屏幕是否亮起并确认授权。"
+                                : "镜像进行中。直接关闭电脑上的镜像窗口也可以结束。"
+                              : stateCopy[device.state].detail}
+                          </p>
+                        </div>
+                        {device.state === "ready" ? (
+                          <span className="device-card-actions">
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              disabled={lockBusy}
+                              onClick={() => { setSelectedSerial(device.serial); void wakeDevice(device.serial); }}
+                            >
+                              {lockBusy && selectedSerial === device.serial ? "正在唤醒…" : "屏幕唤醒"}
+                            </button>
+                            {owned ? (
+                              <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
+                                {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
+                              </button>
+                            ) : (
+                              <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
+                                {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
+                              </button>
+                            )}
+                            {revokeArmedSerial === device.serial ? (
+                              <>
+                                <button className="text-button danger" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
+                                  {revoking ? "正在执行…" : "确认取消"}
+                                </button>
+                                <button className="text-button" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
+                                  算了
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                className="text-button"
+                                type="button"
+                                title="关闭手机调试开关、断开本机连接并清理记录；最后一步需在手机上点「撤销 USB 调试授权」"
+                                onClick={() => setRevokeArmedSerial(device.serial)}
+                              >
+                                取消授权
+                              </button>
+                            )}
+                          </span>
+                        ) : looksLikeWirelessEndpoint(device.serial) && device.state === "offline" ? (
+                          <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
+                        ) : (
+                          <span className="status-label">{stateCopy[device.state].label}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {activeSessionList
+                    .filter((item) => !check.devices.some((device) => device.serial === item.serial))
+                    .map((item) => (
+                      <div className="device-card device-card-active" key={item.serial}>
+                        <span className="status-dot ready" aria-hidden="true" />
+                        <div>
+                          <strong>{displayLabels[item.serial] ?? item.serial}</strong>
+                          <p>镜像会话仍在进行，设备暂时未出现在连接列表。</p>
+                        </div>
+                        <span className="device-card-actions">
+                          <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(item.serial)}>
+                            {stoppingSerial === item.serial ? "正在结束…" : "结束镜像"}
+                          </button>
+                        </span>
+                      </div>
+                    ))}
                 </div>
+              )}
+
+              {readyDevice && (
                 <div className="panel-grid">
                   <div className="capability-panel" aria-live="polite">
-                    <strong>手机当前的锁屏状态</strong>
+                    <strong>{displayLabels[readyDevice.serial] ?? readyDevice.label}当前的锁屏状态</strong>
                     {lockReport ? (
                       <>
                         <p className="capability-summary">{lockSummary(lockReport)}</p>
@@ -1333,8 +1662,9 @@ function App() {
                     )}
                   </div>
                 </div>
-                </>
-              ) : (
+              )}
+
+              {(!isChecking && !readyDevice) && (
                 <ol className="setup-steps">
                   <li><span>1</span><div><strong>使用可传输数据的数据线连接手机</strong><p>如果手机弹出 USB 用途选择，请选择“文件传输”。</p></div></li>
                   <li><span>2</span><div><strong>在手机上开启“USB 调试”</strong><p>这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
@@ -1380,24 +1710,19 @@ function App() {
                 </div>
               )}
 
-              {!isChecking && check?.devices && check.devices.length > 0 && !readyDevice && (
-                <div className="device-list">
-                  {check.devices.map((device) => (
-                    <div className="device-row" key={device.serial}>
-                      <span className={`status-dot ${device.state}`} aria-hidden="true" />
-                      <div><strong>{device.label}</strong><p>{stateCopy[device.state].detail}</p></div>
-                      <span className="status-label">{stateCopy[device.state].label}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               {/* 列表清空后仍要显示反馈，否则移除最后一条记录会静默消失，用户不知道操作是否生效。 */}
               {(recentDevices.length > 0 || recentMessage) && (
                 <div className="recent-devices" aria-label="最近使用过的设备">
-                  {recentDevices.length > 0 && <strong>最近使用过的设备</strong>}
+                  {recentDevices.length > 0 && (
+                    <div className="recent-head">
+                      <strong>最近使用过的设备</strong>
+                      <button className="text-button danger" type="button" onClick={() => void clearRecentDevices()}>
+                        清空记录
+                      </button>
+                    </div>
+                  )}
                   {recentDevices.map((device) => {
-                    const connected = check?.devices.find((item) => item.serial === device.serial);
+                    const connected = findConnectedDevice(check?.devices, device.serial);
                     return (
                       <div className="recent-device" key={device.serial}>
                         <div className="recent-device-info">
@@ -1407,8 +1732,10 @@ function App() {
                           </p>
                         </div>
                         <span>
-                          {connected?.state === "ready" ? (
-                            <button className="text-button" type="button" disabled={isLaunching || sessionActive} onClick={() => void startMirroring(device.serial)}>开始镜像</button>
+                          {connected ? (
+                            // 已连接的设备在上面的设备卡片里有唯一操作入口，
+                            // 这里只呈现状态与「移除记录」，不再重复放开始/结束按钮。
+                            <span className="recent-hint">{stateCopy[connected.state].label}</span>
                           ) : looksLikeWirelessEndpoint(device.serial) ? (
                             <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
                           ) : (
@@ -1659,7 +1986,7 @@ function App() {
                 <div>
                   <p className="eyebrow">伴侣 App（实验）</p>
                   <h2>扫码配对</h2>
-                  <p>扫码不便时，用伴侣 App 扫码或手动填写地址和 6 位配对码（一次有效，不保存）。</p>
+                  <p>用伴侣 App 扫码，与电脑建立一条加密助手通道（一次有效，不保存）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。</p>
                 </div>
               </div>
               <span>
@@ -1676,6 +2003,9 @@ function App() {
                     配对状态：{pairingStatus?.phase === "connected" ? "伴侣已连接" : pairingStatus?.phase === "listening" ? "等待伴侣扫码" : "未开始"}
                     {" · 一次性配对码 "}
                     <code>{pairingOffer.token}</code>
+                    {pairingStatus?.phase === "connected" && (
+                      <span className="capability-pending">（这是伴侣助手通道；镜像连接请在设备卡片上操作）</span>
+                    )}
                   </p>
                   {pairingQr
                     ? <img src={pairingQr} alt="伴侣 App 配对二维码" width={220} height={220} />

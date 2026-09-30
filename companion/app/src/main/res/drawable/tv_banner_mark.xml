@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TV 桌面（leanback 启动器）图标主视觉：白色 M 字 + 青碧圆点，与桌面图标同语。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:pathData="M28,84 L28,32 L60,64 L92,32 L92,84"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="11"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M60,98 m-7,0 a7,7 0 1,1 14,0 a7,7 0 1,1 -14,0"
+        android:fillColor="#6FE3E8" />
+</vector>

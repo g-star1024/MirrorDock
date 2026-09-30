@@ -220,6 +220,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .status-dot.unauthorized { background: #e0940f; box-shadow: 0 0 0 4px #fdf0d7; }
 .status-dot.offline { background: #d2504a; }
 .status-label { margin-left: auto; color: #5d6878; font-size: 13px; font-weight: 650; text-align: right; }
+.conn-badge { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; background: #eaf0fb; color: #2f6bd8; font-size: 12px; font-weight: 650; line-height: 1.6; white-space: nowrap; }
+.conn-badge:last-child { margin-left: auto; }
+.conn-badge.inline { margin-left: 6px; padding: 1px 7px; font-size: 11px; line-height: 1.5; }
 
 .capability-panel { display: grid; gap: 8px; align-content: start; margin-top: 14px; padding: 14px 16px; border: 1px solid #e6eaf2; border-radius: 14px; background: #fbfcfe; }
 .capability-panel > strong { color: #253041; font-size: 14px; }
@@ -282,3 +285,27 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .trusted-device, .recent-device { align-items: flex-start; flex-direction: column; }
   .recent-device span { flex-wrap: wrap; }
 }
+
+/* -- 按设备结束镜像（X10-27 复测反馈）与拖拽安装 APK ----------------------- */
+.secondary-button.danger-stop { color: #c0453e; background: #fbeeed; }
+.drop-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(46, 107, 230, 0.14); border: 2px dashed #2e6be6; pointer-events: none; }
+.drop-overlay-card { padding: 18px 28px; border-radius: 14px; background: #fff; box-shadow: 0 10px 30px rgba(23, 43, 77, 0.18); text-align: center; }
+.drop-overlay-card strong { font-size: 15px; color: #1f4fc4; }
+.drop-overlay-card p { margin: 6px 0 0; font-size: 13px; color: #6b7686; }
+.drop-toast { position: fixed; right: 18px; bottom: 18px; z-index: 70; display: flex; align-items: center; gap: 12px; max-width: 440px; padding: 12px 14px; border-radius: 12px; background: #fff; border: 1px solid #d7e3f4; box-shadow: 0 8px 24px rgba(23, 43, 77, 0.14); font-size: 13.5px; color: #33415a; }
+.drop-toast .text-button { white-space: nowrap; }
+.drop-toast-error { border-color: #eccfcd; background: #fdf6f5; color: #9c3f39; }
+
+/* -- 统一设备卡片（X10-29 设计精简）：一台设备一张卡，状态即操作 ------------- */
+.device-cards { display: grid; gap: 10px; margin-top: 14px; }
+.device-card { display: flex; align-items: center; gap: 13px; padding: 14px 16px; border: 1px solid #e3e8f0; border-radius: 14px; background: #fff; }
+.device-card-active { border-color: #cfe3d9; background: #f4faf6; }
+.device-card > div { flex: 1; min-width: 0; }
+.device-card strong { display: flex; align-items: center; gap: 8px; }
+.device-card p { margin: 4px 0 0; color: #6b7686; font-size: 13.5px; line-height: 1.45; }
+.device-card-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.device-card .secondary-button, .device-card .primary-button { padding: 8px 14px; }
+.device-card .primary-button { margin-left: 0; }
+
+.recent-head { display: flex; align-items: center; justify-content: space-between; }
+.recent-head strong { display: block; }

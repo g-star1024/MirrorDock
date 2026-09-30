@@ -380,6 +380,75 @@
   - CI 实证：companion.yml 构建成功，apksigner 核验产物指纹与固定密钥完全一致。**自此 Release/CI 产物均可直接覆盖安装，不再卸载重装。**
   - 手机侧完成固定签名版换装（卸旧装新一次），配对数据需重新配对。
 
+- [x] X10-22 无线连接设备客户端不显示（修复 A+B）。
+  - 现象：另一台设备手机端无线调试显示「已连接」，但客户端设备列表不出现新设备（之前已确认 `adb devices -l` 中 `192.168.2.224:33153` 在线，排查曾被 API 429 限流打断）。
+  - 根因：① 前端设备列表**从不自动轮询**，`refreshDevices()` 只在挂载与显式动作（配对并连接/重新连接/重新检查）后调用；无线设备若在本客户端显式流程外连上（同 Wi-Fi 自动重连、已配对回连），界面不重新读取。② 设备列表块带 `!readyDevice` 守卫——已有一台就绪设备（如 USB）时，新连上的无线设备若处于 `unauthorized`（手机还要点允许）或 `offline`，整条列表被跳过，用户既看不到设备也看不到「待授权」状态。
+  - 修复 A（后端+前端）：`check_adb_devices` 新增 `silent: Option<bool>` 参数；前端 `App.tsx` 新增 5s 静默轮询（`silent=true`，只刷新界面不写诊断日志），新设备无需手动「重新检查」即出现，状态变化（unauthorized→ready）也会自动拉出。
+  - 修复 B（前端）：取消 `!readyDevice` 守卫，已就绪设备存在时仍列出其余非就绪设备，确保新无线设备的「待授权/离线」始终可见。
+  - 验证：`tsc --noEmit` 通过、`cargo check` 通过、`cargo test parse_adb_devices` 通过（无回归）。待真机回归：连第二台无线设备，确认不点「重新检查」也自动出现，且未授权时显示「待授权」。
+
+- [x] X10-23 同一台设备经 USB 与无线并存时只显示一条。
+  - 需求：无论 USB 还是无线，如果是同一台设备，列表只显示一台，不能因连接方式不同而重复出现。
+  - 鉴别方式：读设备硬件序列号 `ro.serialno`——同一台手机无论经 USB 还是无线都一致；USB 连接时它恰好等于 adb 序列号，无线连接时 adb 序列号是 `IP:端口`。这是跨连接方式识别「同一台设备」的唯一可靠依据（型号相同不足以去重）。
+  - 实现（后端 `src-tauri/src/lib.rs`）：① `AdbDevice` 新增 `physical_serial: Option<String>` 与 `connections: Vec<ConnectionEndpoint>`（`kind: usb|wireless`+`state`）；② `AdbRuntime` 新增 `physical_serial()`（仅已授权设备可 `getprop ro.serialno`，失败/未授权返回 `Ok(None)`）；③ `AppRuntimes` 加 `serial_cache`（Mutex<HashMap>）避免每轮询重复 `getprop`，序列号消失即清理；④ 新增 `dedup_devices()`：按 `physical_serial` 分组合并，`physical_serial` 为 `None` 的绝不合（未授权同型号也保持独立），合并后 `serial` 取首选通道（状态最优、并列优先 USB）、`state` 取所有通道最优、`connections` 保留全部通道；⑤ `endpoint_is_ready()` 同时匹配合并后的 `connections` 原始端点，避免无线端点被判未就绪。
+  - 实现（前端 `src/App.tsx` + `App.css`）：`Device` 类型补充 `physical_serial`/`connections`；用 `deviceKey()`（硬件序列号优先）作 React key 防重复渲染；新增 `connectionLabel()` 显示「USB + 无线 / 无线」徽标；新增 `findConnectedDevice()` 让最近设备按硬件序列号或任一通道匹配；就绪面板与设备列表均展示通道徽标。
+  - 验证：`tsc --noEmit` 通过；`cargo test --lib` **151 项全过**（含新增 3 个去重单测：`merges_same_physical_device_across_usb_and_wireless` / `does_not_merge_devices_missing_physical_serial` / `endpoint_is_ready_matches_merged_connection_serial`）。
+  - 待真机回归：同一台手机同时插 USB 并开无线调试，确认列表只出现一台且显示「USB + 无线」徽标；启动镜像走 USB（首选通道）。
+  - 版本：0.2.3 → 0.2.4（tauri.conf.json / package.json / Cargo.toml 三处同步）。本地 release 打包（scrcpy 经 prepare-runtime.sh 打入 bundle）已发起，待用户真机测试通过后推送 tag v0.2.4-beta。
+
+- [x] X10-24 修复「仅 Wi-Fi 连接却被误标 USB + 无线」与就绪面板/列表错位。
+  - 现象（用户真机截图）：同一台手机只用 Wi-Fi 连接，列表却标「USB + 无线」；就绪面板与下方列表对同一台设备呈现不一致（一个有徽标、一个没有/各显示一条）。
+  - 根因：① `connectionLabel()` 只看通道类型、不看通道状态——adb 拔除 USB 后残留的 `offline` 陈旧条目（ghost）被当成有效 USB 通道，导致徽标误写「USB + 无线」；② `dedup_devices()` 把未就绪（`offline`/`unauthorized`）通道也一并并入合并设备，使同一物理设备的不同状态各自成行、面板与列表对不上。
+  - 修复（后端 `lib.rs`）：`dedup_devices()` 改为**仅合并「已就绪（`Ready`）且已知硬件序列号」的通道**；陈旧/offline/未授权条目各自独立成行（界面标「离线/待授权」），绝不污染已就绪设备的通道徽标。合并后 `connections` 只含已就绪通道。
+  - 修复（前端 `App.tsx`/`App.css`）：`connectionLabel()` 仅统计 `state==="ready"` 的通道；React key 与「其余设备」过滤统一改用实际端点 `serial`（不再用会随去重变化的 `physical_serial` 派生 key），保证就绪面板与列表指向同一台设备、不重复不错位；选择器按钮也补通道徽标保持一致。
+  - 验证：`tsc --noEmit` 通过；`cargo test --lib` **152 项全过**（新增 `stale_offline_usb_does_not_merge_into_ready_wireless` 锁定 ghost 不并入徽标）。待用户用「仅 Wi-Fi」真机复测。
+  - 说明：若 adb 确实仍残留陈旧 USB 条目，用户可在刷新前执行 `adb disconnect <ghost>` 或重启 adb server 以彻底清除；本次修复已保证陈旧条目不再影响徽标与合并。
+- [x] X10-25 复测仍误标「USB + 无线」的真正根因：mDNS 发现条目被误判为 USB；同型号多台设备重名加 `-1`/`-2` 后缀。
+  - 真机证据：`adb devices -l` 里纯 Wi-Fi 设备有两条条目——`192.168.2.224:46289`（无线端点）+ `adb-<id>._adb-tls-connect._tcp`（无线调试的 mDNS/TLS 发现条目，**不含冒号**）。旧判定「含冒号=无线，否则 USB」把后者误归为 USB；两条又是同一物理机（ro.serialno 相同）被正确合并 → 徽标错写「USB + 无线」。X10-24 的 ghost 假设不是本次现场的主因。
+  - 修复（后端 `lib.rs`）：`is_wireless_endpoint` 增加 mDNS 识别（含 `._adb-tls` / `._tcp` 即无线）；新增 `endpoint_preference`（USB > 无线 `IP:端口` > mDNS 名），合并组首选通道不再可能落到不稳定的 mDNS 名上；前端 `looksLikeWirelessEndpoint` 同步同一判定。
+  - 新增（前端 `App.tsx`）：`buildDisplayLabels()`——多台设备型号名相同时按列表顺序追加 `-1`、`-2` 后缀，应用于设备选择器、就绪面板与设备列表。
+  - 验证：`tsc --noEmit` 通过；`cargo test --lib` **153 项全过**（新增 `mdns_tls_entry_is_wireless_and_never_usb`：mDNS 条目归无线、合并首选 IP:端口、不含 USB 通道）。待用户真机复测。
+- [x] X10-26 单会话下的「切换设备」流（方案 A，用户拍板 A 先做、B 排期）。
+  - 现象：会话属于设备 X 时切到设备 Y，主按钮只显示禁用的「会话进行中」，不说明会话在哪台、也无换台路径（只能手动去顶栏「结束镜像」再回来）。后端 `SessionStore` 为全局单实例，`reserve_session` 对任何新会话返回 `session_busy`，属既定设计。
+  - 修复（前端 `App.tsx`）：① 新增 `switchMirroring(serial)`——先 `stop_mirroring` 成功后立即 `start_mirroring`，一步完成切换；② 会话在另一台设备上时，就绪面板/最近设备列表的主按钮由禁用「会话进行中」升级为**「切换到此设备」**（同一设备仍显示禁用「会话进行中」）；③ 顶栏与首页眉文案带上当前会话设备名（如「镜像运行中：M2104K10AC -1」，用重名后缀显示名）。
+  - 验证：`tsc --noEmit` 通过。待真机复测：会话中选另一台 → 按钮为「切换到此设备」，点击后旧窗口关闭、新设备镜像启动。
+- [x] X10-27（用户拍板：TV 完成后开工）并发多设备镜像——里程碑 1（后端每设备一会话）已实现。
+  - 架构：`SessionStore` 由全局单状态改为 `BTreeMap<serial, SessionState>` 会话表；互斥只收在**同一台设备**（同 serial 仍 `session_busy`），不同设备可同时各持一个镜像会话（scrcpy 原生多实例）。
+  - 后端改动（`lib.rs`）：`reserve_session/mark_session/attach_process/take_running_process/begin_session_restart/running_session_options` 全部按 serial 键控；新增 `take_all_running_processes`（托盘断开/退出回收）、`prune_idle_entry`、`primary_session_serial`（主会话=持有进程者优先，向后兼容）；`check_adb_devices` 顺手清理「设备消失且无活动会话」的残条目。
+  - 亮屏补偿多会话化：账本按设备各持一份；落盘文件从单对象升级为 `Vec<KeepAwakeBackup>`（兼容解析旧单条文件，崩溃残留不丢）；应用退出还原全部设备。
+  - 命令面：`stop_mirroring` 增加可选 `serial`（None=主会话）；新增 `mirror_sessions`（全部设备会话快照，已注册 handler）；`update_session_options` 增加可选 `serial`（None=主会话）；`mirror_session`/`current_recording` 保留主会话语义向后兼容；托盘「断开连接」= 结束所有会话；录制删除校验扫描全部会话。
+  - 前端（`App.tsx`）：轮询改 `mirror_sessions`；`sessionOwnedBy` 按设备各自的会话判断；**会话中其它设备的「开始镜像」按钮可用**（X10-26 的「切换到此设备」被真正的并发启动取代，函数已删）；顶栏多会话时显示「N 台设备镜像中」；`stop_mirroring` 支持按设备停止。
+  - 验证：`cargo test --lib` **155 项全过**（新增 `two_devices_hold_concurrent_sessions_and_do_not_block_each_other`；更新同设备互斥测试适配按设备 Idle 语义）；`tsc --noEmit` 通过。待双设备真机验证。
+  - 里程碑 2（待做）：设置应用/托盘/录制的多会话 UI 细化（当前设置作用于主会话）。
+- [x] X10-28（用户拍板提前）伴侣 App TV 模式（第一期：可安装、可启动、可配对）。
+  - 调研结论（2026-09-30）：Android TV/Google TV/Fire TV **可行**——开发者选项隐藏但可用遥控器开启（设置→设备偏好→关于→连点「版本」7 次），开启「ADB/网络调试」后电视盒通常可直接 `adb connect IP:5555`（无需 USB），Android 11+ 支持无线调试配对（与手机同流程，现有配对链路可复用）；MirrorDock 现有无线连接 + scrcpy 镜像控制 + APK 安装能力对 Android TV 原样适用。**不可行边界**：非 Android 电视（三星 Tizen / LG webOS 等）无 ADB，Android APK 与 adb 控制均不可能，替代方案是外接 Android TV 盒子。
+  - 实现：① Manifest 加 `LEANBACK_LAUNCHER` 入口 + `android:banner`（320×180 墨色渐变 + 白 M + 青碧点，`tv_banner.xml`/`tv_banner_mark.xml`）；声明 `android.software.leanback required=false`（不排斥手机）与 `android.hardware.touchscreen required=false`（电视无触屏也能装）；② MainActivity 增加 `isTv()`（UiModeManager）分支：TV 上隐藏「扫码」（无相机）、默认展开「手动输入配对码」（电视配对唯一路径，不强制弹键盘）；③ 文件行背景改 `bg_file_row` 状态选择器——D-pad 聚焦时青碧描边高亮，焦点可见；④ 版本 8→9（0.1.8-tv）。
+  - 验证：`gradle :app:assembleDebug` BUILD SUCCESSFUL；merged manifest 已核验含 leanback/touchscreen/banner/LEANBACK_LAUNCHER 全部声明。**真机验证待做**：电视桌面图标（banner 显示）、遥控器完成手动输入配对。
+  - 模拟器实证（2026-09-30，本机 Android TV 16 Google TV x86_64 AVD，测后已清理）：① APK 安装 Success（touchscreen required=false 生效，无触屏可装）；② 启动后 UI 正常渲染，TV 分支触发——扫码按钮隐藏、手动输入默认展开（截图 test-runs/x10-28-tv-emulator/01_main.png）；③ D-pad 导航可用——5 次方向键焦点依次穿越按钮/输入框/文件区直到日志区（uiautomator dump 证据 ui.xml），DPAD_CENTER 点击「查看」成功展开日志（04_log_expand.png）；④ `cmd package resolve-activity` 以 LEANBACK_LAUNCHER 类别解析到 MainActivity 且 banner 资源在位（banner=0x7f070077）。已知局限：无头 swiftshader 下系统 TV 桌面黑屏（模拟器渲染问题，与 App 无关），桌面图标视觉效果留真机验证；测试 AVD 与 1.2GB 系统镜像已删净，证据落 test-runs/x10-28-tv-emulator/。
+- [x] X10-29（复测反馈三件套）按设备结束镜像 + 伴侣 APK 真机安装 + 拖拽安装 APK。
+  - ① 按设备结束（复测反馈：多会话时顶栏只有一个「结束镜像」，不知道结束谁）：前端 `App.tsx` 新增 `activeSessionList`（serial 非空的进行中会话）+「正在镜像的设备」面板——每台设备一行，各自带「结束镜像」按钮（`stop_mirroring(serial)`，只结束那一台）；就绪面板主按钮会话中由禁用「会话进行中」改为红色「结束镜像」（就地对当前选中设备结束）；最近设备行同理；`stoppingSerial` 让按钮各自显示「正在结束…」；顶栏按钮多会话时改为「结束全部（N 台）」，单会话仍为「结束镜像」。
+  - ② 伴侣 APK 真机安装（versionCode 10 / 0.1.9-icon，本机 2026-09-30 13:52 构建）：无线端 `192.168.2.224:46289` `install -r -t` **Success**（可看新图标）；USB 端 `79j7kn9tkjt8rwss` 先遇 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`（旧版为另一把 debug key 签名，已 `uninstall` 清掉）→ 重装遇 `INSTALL_FAILED_USER_RESTRICTED`（MIUI 拦截），**需在手机「开发者选项」开启「USB 安装」后重装**。注意：USB 那台是卸载重装，配对数据已清，需重新配对。
+  - ③ 拖拽安装 APK：把电脑上的 `.apk` 拖进 MirrorDock 主窗口任意位置即可安装到当前就绪手机。前端用 `getCurrentWebview().onDragDropEvent`（Tauri v2 webview 拖放事件，`core:default` 权限已覆盖）；拖入时全屏虚线浮层提示「松开鼠标，安装 APK / 将安装到：<设备名>」；drop 后过滤 `.apk`（大小写不敏感），无 APK / 无就绪设备给明确错误提示；多个 APK 只装第一个并说明（不静默批量安装）；结果走右下角 toast（任何页签可见，含后端 receipt.summary 与「需要你本人同意」提醒）。目标设备读 `dragTargetRef`（每次渲染同步最新就绪设备），避免闭包过期。
+  - 顺手修复（X10-27 遗留，测试暴露）：`App.test.tsx` 兜底 mock 补 `mirror_sessions`（返回 `[]`，漏 mock 时组件拿到 `{}` 渲染崩溃）；设备夹具补 `physical_serial`/`connections` 字段（`Device` 模型多通道合并新增，缺字段让 `connectionLabel` 渲染期崩溃）；两个用例的 mock 从旧命令 `mirror_session` 补到 `mirror_sessions`。
+  - 验证：`tsc --noEmit` 通过；**vitest 40 项全过**。待真机复测：双会话时逐台结束互不影响、拖 APK 进窗口安装成功。
+  - **设计精简（同日二次反馈：结束按钮一屏出现 3~4 个，冗余）**：主页重构为**统一设备卡片列表**——一台设备一张卡、状态即操作、每个动作全页只出现一次。删除：`session-list`「正在镜像的设备」面板、设备选择器 chips、独立就绪面板、「其余设备」device-list；最近设备里**已连接**的手机不再重复放开始/结束按钮（只留状态+移除记录）。卡片右侧唯一主操作按状态切换：镜像中→「结束镜像」（红）、就绪→「开始镜像」（+「屏幕唤醒」次操作）、待授权→纯文字、无线离线→「重新连接」；新增 `launchingSerial`/`stoppingSerial` 让「正在启动/正在结束」只显示在被点的那张卡上。顶栏「结束全部（N 台）」仅在 ≥2 台同时镜像时出现；会话还在但设备从列表消失时补一张兜底卡保留结束入口；锁屏状态面板保留（标题带设备名）。验证同上。
+  - **最近设备支持物理删除（三次反馈）**：后端新增 `clear_recent_devices` 命令（把 recent-devices.json 落盘为空列表，注册 handler；与逐条移除同一边界——不断开连接、不撤销授权、不清无线配对，再次镜像会重新记入）；前端「最近使用过的设备」标题行加红色「清空记录」按钮。后端测试 `clearing_recent_devices_wipes_the_file_physically` 验证落盘物理删除。`cargo test --lib` 155 项全过、`tsc` 通过、vitest 40 项全过。
+- [x] X10-30 Windows 客户端镜像运行时后台反复弹黑色控制台窗口（用户反馈）。
+  - 根因：主程序 release 已是 `windows_subsystem = "windows"`（无主控制台），但 **adb.exe 是控制台子系统程序**——Rust `std::process::Command` 在 Windows 上默认为控制台子进程分配（或继承）一个新控制台，镜像会话期间监视线程高频轮询 adb，导致黑框反复闪烁。
+  - 修复（`lib.rs`）：新增 `quiet_command()` 辅助——Windows 上对子进程附加 `CREATE_NO_WINDOW`（0x08000000，只为不分配新控制台，不影响 GUI 窗口本身），非 Windows 原样返回；全部 11 处生产 spawn 点替换（9 处 adb 调用 + scrcpy 启动 + scrcpy 版本探测）。scrcpy 为 GUI 子系统，加该标志无副作用，镜像画面窗口不受影响。测试代码与 macOS codesign 调用不变。
+  - 验证：macOS `cargo test --lib` 155 项全过（Windows cfg 分支本地无法编译，待 CI Windows 打包验证）。
+  - 待办：触发 CI 产出 Windows 包供用户验证黑框消失。
+- [x] X10-31 伴侣 App 扫码「提示成功但连接列表不出现设备」（用户二次追问，定性为产品断层而非故障）。
+  - 定性：客户端存在**两条独立通道**——①镜像通道（ADB：数据线 / 无线调试配对，连接列表只认它）；②伴侣加密会话（MDP1 TLS，C4-01 POC，用于后续助手能力）。伴侣扫码成功建立的是②，①未建立，故设备不出现。Android 安全设计决定第三方 App 无法替手机完成首次 ADB 配对授权。
+  - 修复一（自动回连桥）：伴侣会话「设备报到」时，桌面端以伴侣端来源 IP 在 `adb mdns services` 里匹配该手机的 `_adb-tls-connect._tcp` 广播并自动 `adb connect`——已配对过且开着无线调试的手机扫码后**自动进入连接列表**；找不到广播/连接失败/无匹配时在伴侣事件流里如实告知两条通道的差别与正确入口（`companion_bridge_events` + `PairingState::set_device_bridge` 钩子，伴侣模块不感知 adb；spawn_blocking 避免阻塞会话循环）。`AppRuntimes.adb` Box→Arc 以支持后台任务共享。
+  - 修复二（文案纠偏）：帮助中心「无线连接」原来写着「…或直接用伴侣 App 扫码」——这是误导（伴侣 App 扫的是 MDP1 载荷，扫 ADB 二维码会报「格式不正确」），已改为配对码填入步骤 + 两条通道独立说明；连接页伴侣区块描述与「已连接」状态补充边界提示；伴侣 App 配对成功日志追加「这是伴侣助手通道，不等于镜像连接」提示。
+  - 验证：`cargo test --lib` **159 项全过**（新增 4 项桥接测试：按 IP 匹配只连目标设备、未发现服务不发起 connect、他人设备 IP 不误连、connect 失败如实上报）；tsc 通过；vitest 40 项全过。
+  - 正确用法（已同步进帮助中心）：首次连接 = 数据线授权，或「无线」页填手机「无线调试 → 使用配对码配对设备」的 IP/端口/6 位码；配对一次后，后续可由伴侣扫码自动回连（手机需开着无线调试）。
+- [x] X10-32 同机多卡去重失效 + 客户端侧取消授权（用户第四次反馈：2 台手机出 4 张卡；授权只能手机取消不合理）。
+  - **同机多卡**：`dedup_devices()` 此前只合并「就绪且已知硬件序列号」的通道，离线/陈旧端点（拔线 ghost、无线调试重启后的旧端口、旧 mDNS 条目）各自成卡 → 2 台手机显示 3~4 张。改为**影子端点归并**：非就绪条目能判定属于某就绪组（① 硬件序列号相同；② mDNS 实例名内嵌该组 USB 序列号；③ 无线端点同 IP 不同端口）即不再单独成卡；都判不了才保留（离线必须如实可见）。整台手机离线时 USB 残影与 mDNS 残影也归并为一张离线卡。徽标口径不受影响（connections 只含就绪通道）。新增 `wireless_ip_endpoint`/`mdns_serial_contains_usb`/`group_usb_serials`/`group_wireless_ips`/`device_shadows_group`/`merge_offline_shadows`。
+  - **取消授权**：设备卡新增「取消授权」（两段式确认）。执行链：①`am start` 打开手机开发者选项（趁通道活着先做）→ ②`settings put global adb_wifi_enabled 0` 关无线调试 → ③`settings put global adb_enabled 0` 关 USB 调试（等效收回所有电脑的访问权）→ ④`adb disconnect` 全部无线端点 → ⑤清理本机受信无线/最近设备记录。每步逐端点重试（USB 优先，无线死了 USB 兜底），执行回执逐条展示。**边界如实声明**：Android 授权记录存于手机（root 才能直接清除），「撤销 USB 调试授权」必须本人在手机上点——客户端负责把页面打开。镜像进行中的设备拒绝取消授权（先结束会话）。新 trait 方法 `open_developer_settings`/`disable_wireless_debugging`/`disable_usb_debugging`（固定参数、可审计）。
+  - 验证：`cargo test --lib` **167 项全过**（新增 5 项影子归并 + 3 项取消授权：全步执行、端点收集 USB 优先、端点失败兜底）；tsc 通过；vitest 40 项全过。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

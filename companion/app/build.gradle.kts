@@ -11,8 +11,8 @@ android {
         applicationId = "com.mirrordock.companion"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.1.7-poc"
+        versionCode = 10
+        versionName = "0.1.9-icon"
     }
 
     // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本
