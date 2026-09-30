@@ -474,6 +474,12 @@
   - **文档同步**：帮助中心 FAQ 新增条目「电脑上打字没反应或字符全错？」——指认 Ctrl+空格 布局循环、给出只保留标准英语（美国）的修复路径与 Mod+k 入口。
   - **待办（候选增强，未实现）**：会话建立时探测 scrcpy UHID 的启用布局，非标准布局时在设备卡便签/状态栈提示一键打开实体键盘设置页；或在键盘配置面板内直接展示当前启用布局清单。
   - 环境备忘：沙箱内执行 `/Applications/MirrorDock.app/.../adb` 部分命令被 sandbox-center 拦截（`decisionRecord missing actual resource subject`），改用 `.tools/scrcpy/macos-x86_64/adb` 可用；`adb shell dumpsys input`、`wm size` 带引号/管道形式会被拦，改「无引号 + 输出重定向到文件再本地分析」可绕过。
+- [x] X10-38 排障：Mac 第三方输入法（微信输入法 WeType）下镜像打字失效——可行性结论 + 文档同步（用户问询，2026-09-30）。
+  - **现象**：Mac 装第三方输入法后镜像窗口打字无效；切回 macOS 自带输入法即恢复。
+  - **取证**：当前输入源 `com.tencent.inputmethod.wetype`（微信输入法）；`kCGSSessionSecureInputPID` 无进程持有（排除「安全输入」全局吞键）。
+  - **机理与可行性结论**：①UHID 模式是物理键盘语义，按键原始键码直送手机、不经过 Mac 输入法组字（scrcpy 官方文档明确 UHID「works for all characters and IME」是靠手机端输入法）；②`--keyboard=sdk`（原 scrcpy 模式）对中文**静默丢弃**——v4.1 服务端 `Controller.injectText` 逐字符走 `KeyCharacterMap.getEvents`，映射不到（中文/Emoji）即 `getEvents()==null` 跳过并记警告，**无剪贴板兜底**（剪贴板粘贴是独立的 `TYPE_SET_CLIPBOARD` 消息，需显式 paste 标志）；③第三方输入法（WeType/搜狗等）激活时把 keyDown 消费进自身组字缓冲，SDL 收不到原始键，UHID/sdk 两条路都断。**结论：无法在客户端层「支持第三方输入法直接打字」，这是 scrcpy/macOS 生态限制，Escrcpy/QtScrcpy 同样存在；正确姿势 = Mac 切系统自带输入法 + 中文由手机端输入法组字，或 Mod+v 粘贴中文。**
+  - **文档同步**：帮助中心 FAQ 新增「Mac 上装了第三方输入法时打字没反应？」条目（机理 + 切换系统输入法恢复 + 中文两种推荐姿势）。
+  - **候选增强（未实现，待拍板）**：会话启动时只读检测当前输入源（`defaults read com.apple.HIToolbox AppleSelectedInputSources`，bundle id 非 `com.apple.*` 判为第三方），在状态栈如实提示「第三方输入法可能导致打字无效」并给切换建议；不代切输入法（改用户系统状态违反「引导不绕过」哲学）。
 
 ## 最终成品退出条件
 
