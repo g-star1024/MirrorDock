@@ -488,6 +488,12 @@
   - **前端提示**：监听 `host-input-source-switched` 事件，状态栈显示可关闭通知「已临时切换到系统输入法，镜像结束后自动恢复」。
   - **文档**：README 功能列表补「macOS 输入法自动托管」；帮助中心 FAQ X10-38 条目改写为自动处理说明（0.2.9 起生效）。
   - 验证：`cargo test --lib` **172 项全过**（新增 `input_source` 模块 4 项纯逻辑测试：第三方判定/切换触发条件/恢复触发条件）；tsc 待跑见下；版本 0.2.9，tag `v0.2.9-beta` 走 CI 发布。
+- [x] X10-40 修复：0.2.9 开始镜像即 SIGSEGV 三连崩（用户真机反馈 2026-09-30 22:23~22:27 崩溃报告实锤）。
+  - **现象**：安装 0.2.9 后 ①顶部托盘图标消失 ②镜像异常卡顿 ③「打字闪退」。崩溃报告 `mirrordock-2026-09-30-222754.ips`：`EXC_BAD_ACCESS` 于 `TISGetInputSourceProperty → CFEqual → objc_msgSend → realizeClass`，调用栈 `current_bundle_id ← maybe_switch_host_input_source ← start_mirroring`。
+  - **根因**：`kTISPropertyBundleID` 是导出数据符号（槽位存 CFStringRef），X10-39 误用 `addr_of!` 把**槽位地址**当属性 key 传给 TIS——Carbon 把垃圾指针当 CFString 解引用即崩。三症状归一：开始镜像即崩 → 应用进程死 → 托盘图标消失；崩溃循环里每次重试 spawn 的 scrcpy 成孤儿并存抢编码器 → 卡顿；「打字闪退」实为应用崩溃带崩镜像会话。
+  - **修复**：属性 key 统一改为按值读取（`tis_property_bundle_id_key()`：`unsafe { kTISPropertyBundleID }` 加载槽位里的 CFStringRef），三处调用点同改。
+  - **防回归**：新增走**真实 Rust FFI** 的只读冒烟测试 `current_bundle_id_smoke_test_via_real_ffi`（断言读到非空 bundle id）——上一轮只用 Python ctypes 验证了语义、未覆盖 Rust 侧传参，这是教训；cargo test 在测试进程内直接调用 TIS，传参再错会当场崩。
+  - 版本 0.2.10，tag `v0.2.10-beta` 重发 CI；`cargo test --lib` **173 项全过**。
 
 ## 最终成品退出条件
 

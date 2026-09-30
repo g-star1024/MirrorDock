@@ -79,6 +79,15 @@ mod imp {
     /// 系统自带的美式英文布局：恢复镜像输入能力的首选目标。
     const PREFERRED_ASCII_LAYOUT: &str = "com.apple.keylayout.ABC";
 
+    /// `kTISPropertyBundleID` 的正确取值。它是一个**导出的数据符号**，槽位里
+    /// 存的是 CFStringRef——属性 key 必须传「槽位里的值」。X10-40 教训：曾用
+    /// `addr_of!` 把槽位地址当 key 传给 TIS，Carbon 拿垃圾指针当 CFString 解引用，
+    /// `CFEqual → objc_msgSend → SIGSEGV`，开始镜像即崩（崩溃报告实锤）。
+    fn tis_property_bundle_id_key() -> *const c_void {
+        // extern static 的按值读取必须落在 unsafe 里；load 一次缓存于调用栈。
+        unsafe { kTISPropertyBundleID }
+    }
+
     fn cfstring_to_string(value: *const c_void) -> Option<String> {
         if value.is_null() {
             return None;
@@ -103,7 +112,7 @@ mod imp {
             }
             let value = TISGetInputSourceProperty(
                 source,
-                std::ptr::addr_of!(kTISPropertyBundleID) as *const c_void,
+                tis_property_bundle_id_key(),
             );
             let result = cfstring_to_string(value);
             CFRelease(source as *const c_void);
@@ -133,7 +142,7 @@ mod imp {
                 }
                 let value = TISGetInputSourceProperty(
                     item as *mut c_void,
-                    std::ptr::addr_of!(kTISPropertyBundleID) as *const c_void,
+                    tis_property_bundle_id_key(),
                 );
                 let Some(id) = cfstring_to_string(value) else {
                     continue;
@@ -180,7 +189,7 @@ mod imp {
                 }
                 let value = TISGetInputSourceProperty(
                     item as *mut c_void,
-                    std::ptr::addr_of!(kTISPropertyBundleID) as *const c_void,
+                    tis_property_bundle_id_key(),
                 );
                 let Some(id) = cfstring_to_string(value) else {
                     continue;
@@ -262,5 +271,19 @@ mod tests {
         assert!(!should_attempt_restore(0, false));
         // 最后一台结束且有备份 → 恢复。
         assert!(should_attempt_restore(0, true));
+    }
+
+    /// 走真实 FFI 的只读冒烟测试（X10-40 教训）：上一轮只用 Python ctypes
+    /// 验证了语义，Rust 侧 `addr_of!` 传错指针导致「开始镜像即 SIGSEGV」，
+    /// 交付前未发现。本测试在 macOS 上直接调用 `current_bundle_id`，一旦
+    /// 属性 key 传参再次出错，会在测试里当场崩溃而不是等用户真机踩雷。
+    /// 只读不写：不切换、不恢复，对测试环境零副作用。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn current_bundle_id_smoke_test_via_real_ffi() {
+        let bundle = current_bundle_id().expect("TIS should always report the current keyboard input source");
+        assert!(!bundle.is_empty());
+        // 合法 bundle id 至少包含一个点（com.apple.* / com.tencent.* 等）。
+        assert!(bundle.contains('.'), "unexpected bundle id: {bundle}");
     }
 }
