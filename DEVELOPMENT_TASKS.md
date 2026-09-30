@@ -520,6 +520,12 @@
   - **X10-52 资产命名不一致**（run 36774581840，tag 9cd6bc1）：4 平台打包全绿、Release 已发布（29 资产），仅 latest.json 生成失败——脚本按 tag 版本 `0.3.0-beta` 拼名，而 tauri 打包产物（exe/AppImage/deb/rpm/dmg）用 conf 版本 `0.3.0`，macOS `.app.tar.gz` 因 X10-47 改名步骤用 tag 版本反而带 `-beta`，四平台两种命名混用致 fail-closed 落空。
   - **修复口径（定案）**：资产名一律用基础版本号（tag 预发布后缀 `-beta` 不进文件名）；macOS 改名步骤与 latest.json 脚本统一 `VERSION="${VERSION%%-*}"`；latest.json `version` 字段=conf 版本。tag 重打触发第 6 次 run。
 
+- [x] X10-53 updater 端点恒 404（prerelease 不进 `releases/latest` 别名）（2026-10-01 凌晨，自动化守卫轮发现并修复）。
+  - **根因（实测）**：编译进客户端的端点 `https://github.com/g-star1024/MirrorDock/releases/latest/download/latest.json` 恒 404——GitHub 的 `releases/latest` 别名**只解析非 prerelease、非 draft 的 Release**，而本仓库所有 Release 均以 `--prerelease` 发布（beta 语义，产品决策不动）。tag 直链（`releases/download/v0.3.0-beta/latest.json`）内容有效（4 平台、全带签名、URL 均可用）。即 v0.3.0-beta 起全部已装客户端「检查更新」必然失败。
+  - **修复**：①release job 新增步骤「发布 latest.json 到 updater 分支（常驻端点）」——经 GitHub Contents API 把 latest.json 建/更到常驻分支 `updater`（单文件提交，release job 已有 `contents: write`，无需新凭据），随后 curl+JSON 自校验端点可取且版本一致（25s 重试窗口）；②`tauri.conf.json` 端点改为 `https://raw.githubusercontent.com/g-star1024/MirrorDock/updater/latest.json`（raw CDN 约 5 分钟缓存，对用户手动检查更新可接受）。
+  - **验证**：build.yml YAML 解析通过、步骤顺序正确（latest.json 资产上传 → updater 分支发布 → Release 校验）；tauri.conf.json JSON 有效。端到端生效需下一次 tag 构建（首个验证轮 = 下个 release 的 release job 全绿 + `updater` 分支 raw URL 可取）。
+  - **遗留（外部/待用户拍板）**：v0.4.0-beta tag 构建（run 36778123621，2026-10-01 05:14 发起）使用修复前的 tag 提交 dddf131——若该构建先于本修复完成，其产物客户端仍带 404 端点，需重打 tag 或接受手动下载升级一次；是否重打由用户/发版会话决定（涉及已发布制品，守卫轮不代行）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

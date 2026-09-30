@@ -465,6 +465,42 @@ jobs:
           PY
           gh release upload "${TAG}" latest.json --clobber
 
+      # X10-53：updater 端点修复。本仓库所有 Release 均为 prerelease，而 GitHub 的
+      # releases/latest 别名**不包含** prerelease——编译进客户端的
+      # .../releases/latest/download/latest.json 恒 404（2026-10-01 实测，
+      # v0.3.0-beta 起全部已装客户端的「检查更新」必然失败）。
+      # 修复：把 latest.json 另行发布到常驻分支 updater（经 GitHub Contents API
+      # 建/更新单文件提交，release job 已有 contents:write，无需新凭据），
+      # 客户端端点改用 raw.githubusercontent.com 直链该分支（tauri.conf.json）。
+      # raw 有约 5 分钟 CDN 缓存，对用户手动「检查更新」可接受。
+      - name: 发布 latest.json 到 updater 分支（常驻端点）
+        env:
+          BRANCH: updater
+        run: |
+          set -euo pipefail
+          content_b64=$(base64 -w0 latest.json)
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/contents/latest.json?ref=${BRANCH}" \
+                  --jq '.sha' 2>/dev/null || true)
+          args=(-f message="latest.json for ${TAG}" -f content="${content_b64}" -f branch="${BRANCH}")
+          if [ -n "${sha}" ]; then
+            args+=(-f sha="${sha}")
+          fi
+          commit=$(gh api -X PUT "repos/${GITHUB_REPOSITORY}/contents/latest.json" "${args[@]}" --jq '.commit.sha')
+          echo "updater 分支已更新：commit ${commit}"
+          # 自校验：常驻端点必须可取回且 JSON 可解析（raw 首次拉取即生效，稍候重试）
+          url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${BRANCH}/latest.json"
+          for i in 1 2 3 4 5; do
+            if curl -fsSL "${url}" -o /tmp/served-latest.json 2>/dev/null; then
+              expected=$(python3 -c "import json; print(json.load(open('latest.json'))['version'])")
+              served=$(python3 -c "import json; print(json.load(open('/tmp/served-latest.json'))['version'])")
+              echo "常驻端点校验通过：version=${served}（期望 ${expected}）"
+              [ "${served}" = "${expected}" ] || { echo "端点版本与本次清单不一致"; exit 1; }
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "常驻端点 ${url} 在 25 秒内不可取回"; exit 1
+
       # 发布后自校验：既查「该 tag 下 Release 唯一且已对外发布」，也查资产数量，
       # 同时防住两类历史故障——同 tag 多 Release（草稿偷藏资产）、发空包显示成功。
       - name: 校验 Release
