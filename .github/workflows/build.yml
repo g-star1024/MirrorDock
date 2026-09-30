@@ -72,6 +72,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 90
+    # X10-47：应用内自动更新需要 updater 签名私钥（minisign）。私钥只存在
+    # GitHub secrets，本地备份在仓库外内部文档目录；无密码（密钥本身即机密）。
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +117,10 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libgtk-3-dev
+            libgtk-3-dev \
+            gcc pkg-config meson ninja-build \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libsdl2-dev libusb-1.0-0 libusb-1.0-0-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -158,6 +166,49 @@ jobs:
           tar -xzf scrcpy.download -C tmp-scrcpy
           mv "tmp-scrcpy/${NAME%.tar.gz}"/* src-tauri/resources/scrcpy/
 
+      # X10-48（用户拍板）：Linux 也随包分发 scrcpy。Linux 没有官方预编译包，
+      # 改为在 runner 上从官方源码编译 v4.1（固定 tag + 固定源码哈希），
+      # 配套 scrcpy-server（用 GitHub 官方 release 元数据里的 SHA-256 digest
+      # 校验，与写死常量同样 fail-closed）与 Google 官方 platform-tools 的 adb
+      # （固定版本 + 固定哈希）。全部下载在**校验失败时立即终止构建**。
+      # 运行时动态库依赖（SDL2/FFmpeg）不随包，见 README 的 Linux 说明。
+      - name: 编译并组装 scrcpy 运行时（Linux）
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ① 源码（codeload 直链，SHA-256 写死）
+          curl -sL -o scrcpy-src.tar.gz "https://codeload.github.com/Genymobile/scrcpy/tar.gz/refs/tags/v4.1"
+          echo "537b2ade623cb94b6edddfa5c61bf0b0af21484aa8365ea2531b686ea573249a  scrcpy-src.tar.gz" | sha256sum -c -
+          tar -xzf scrcpy-src.tar.gz
+          # ② scrcpy-server：下载 + 官方 release digest 校验（sha256:<hex>）
+          curl -sL -o scrcpy-server-v4.1 "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-server-v4.1"
+          expected=$(gh api repos/Genymobile/scrcpy/releases/tags/v4.1 \
+            --jq '.assets[] | select(.name == "scrcpy-server-v4.1") | .digest' \
+            | sed 's/^sha256://')
+          actual=$(sha256sum scrcpy-server-v4.1 | cut -d' ' -f1)
+          echo "server digest: expected=${expected} actual=${actual}"
+          if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+            echo "scrcpy-server SHA-256 与官方 release digest 不符"; exit 1
+          fi
+          # ③ adb（platform-tools 固定版本，SHA-256 写死）
+          curl -sL -o platform-tools.zip "https://dl.google.com/android/repository/platform-tools_r34.0.5-linux.zip"
+          echo "362f8f6218af0f4c61e5aaafb8e255a426c7a0ee00127dfab7371775081d3124  platform-tools.zip" | sha256sum -c -
+          unzip -q platform-tools.zip
+          # ④ 编译 scrcpy（动态链接 SDL2/FFmpeg）
+          cd scrcpy-4.1
+          meson setup build --buildtype=release -Dprebuilt_server=../scrcpy-server-v4.1 -Dcompile_server=false
+          ninja -C build
+          cd ..
+          # ⑤ 组装进随包资源目录（与 Win/macOS 同构：scrcpy + scrcpy-server + adb）
+          mkdir -p src-tauri/resources/scrcpy
+          cp scrcpy-4.1/build/scrcpy src-tauri/resources/scrcpy/scrcpy
+          cp scrcpy-server-v4.1 src-tauri/resources/scrcpy/scrcpy-server
+          cp platform-tools/adb src-tauri/resources/scrcpy/adb
+          chmod +x src-tauri/resources/scrcpy/scrcpy src-tauri/resources/scrcpy/adb
+          ls -la src-tauri/resources/scrcpy/
+
       - name: 构建安装包
         run: pnpm tauri build --target ${{ matrix.target }}
 
@@ -187,6 +238,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
 
       - name: 上传哈希与 SBOM
         uses: actions/upload-artifact@v4
@@ -325,6 +377,54 @@ jobs:
             exit 1
           fi
           gh release upload "${TAG}" "${files[@]}" --clobber
+
+      # X10-47 应用内自动更新：生成 latest.json（updater 清单）并上传。
+      # signature 从各平台 updater 产物的 .sig sidecar 读取；url 用可预测的
+      # release download 地址。任何平台产物缺失都会使本步骤失败（fail-closed）。
+      - name: 生成并上传 latest.json（自动更新清单）
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          python3 - "$VERSION" "$GITHUB_REPOSITORY" "$TAG" <<'PY'
+          import json, sys, pathlib, datetime
+
+          version, repo, tag = sys.argv[1], sys.argv[2], sys.argv[3]
+          base = pathlib.Path("release-files")
+
+          def asset(name):
+              matches = list(base.rglob(name))
+              if len(matches) != 1:
+                  raise SystemExit(f"updater 资产缺失或不唯一: {name} -> {matches}")
+              return matches[0]
+
+          platforms = {
+              "darwin-aarch64": "MirrorDock_{v}_aarch64.app.tar.gz",
+              "darwin-x86_64": "MirrorDock_{v}_x64.app.tar.gz",
+              "linux-x86_64": "MirrorDock_{v}_amd64.AppImage",
+              "windows-x86_64": "MirrorDock_{v}_x64-setup.exe",
+          }
+          entries = {}
+          for key, pattern in platforms.items():
+              name = pattern.format(v=version)
+              artifact = asset(name)
+              signature = asset(name + ".sig").read_text().strip()
+              entries[key] = {
+                  "signature": signature,
+                  "url": f"https://github.com/{repo}/releases/download/{tag}/{name}",
+              }
+
+          notes_path = pathlib.Path(f"docs/releases/{tag}.md")
+          notes = notes_path.read_text().strip() if notes_path.exists() else f"MirrorDock {tag}"
+          manifest = {
+              "version": version,
+              "notes": notes[:2000],
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": entries,
+          }
+          pathlib.Path("latest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          PY
+          gh release upload "${TAG}" latest.json --clobber
 
       # 发布后自校验：既查「该 tag 下 Release 唯一且已对外发布」，也查资产数量，
       # 同时防住两类历史故障——同 tag 多 Release（草稿偷藏资产）、发空包显示成功。

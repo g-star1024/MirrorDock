@@ -374,6 +374,12 @@ trait AdbRuntime: Send + Sync {
     /// 真正清除手机保存的授权必须由本人在手机上操作（Android 安全设计），
     /// 客户端只负责把页面带到用户面前。
     fn open_developer_settings(&self, serial: &str) -> Result<(), std::io::Error>;
+    /// 在手机上打开「实体键盘」设置页（`am start`，固定 action，无用户输入）。
+    ///
+    /// UHID 物理键盘的字符映射依赖手机上为 scrcpy 键盘启用的键盘布局（X10-37
+    /// 真机定案：布局被切走/未启用「英语（美国）」时打字无效或字符全错）。
+    /// 布局启用集合没有可靠的只读探测面，客户端不猜、只把页面带到用户面前。
+    fn open_keyboard_layout_settings(&self, serial: &str) -> Result<(), std::io::Error>;
     /// 关闭手机上的「无线调试」开关（`settings put global adb_wifi_enabled 0`）。
     /// 关闭后所有电脑的无线连接立即失效；等效于收回无线通道的访问权。
     fn disable_wireless_debugging(&self, serial: &str) -> Result<(), std::io::Error>;
@@ -524,6 +530,12 @@ struct SessionOptions {
     /// 模式/退出应用），或直接结束镜像」。
     #[serde(default)]
     read_only: bool,
+    /// 帧率上限（scrcpy `--max-fps`，X10-44）。
+    ///
+    /// `None`（默认）＝ 跟随设备，不传参数。给老设备降载/省电（长会话）的用户
+    /// 一个明确上限：白名单 24/30/60，白名单外的值一律拒绝，不透传任意数字。
+    #[serde(default)]
+    max_fps: Option<u32>,
 }
 
 impl Default for SessionOptions {
@@ -541,6 +553,7 @@ impl Default for SessionOptions {
             show_touches: false,
             keyboard_uhid: true,
             read_only: false,
+            max_fps: None,
         }
     }
 }
@@ -598,6 +611,17 @@ impl SessionOptions {
         }
         if self.show_touches {
             args.push("--show-touches".into());
+        }
+        if let Some(fps) = self.max_fps {
+            // 白名单校验：不把任意数字透传进 scrcpy 参数（X10-44）。
+            if ![24, 30, 60].contains(&fps) {
+                return Err(AppError::new(
+                    "max_fps_invalid",
+                    "帧率上限无效。",
+                    "请选择「跟随设备」、24、30 或 60。",
+                ));
+            }
+            args.push(format!("--max-fps={fps}"));
         }
         if self.read_only {
             args.push("--no-control".into());
@@ -888,6 +912,19 @@ impl AdbRuntime for SystemAdbRuntime {
             "start",
             "-a",
             "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+        ])
+    }
+
+    fn open_keyboard_layout_settings(&self, serial: &str) -> Result<(), std::io::Error> {
+        // X10-37 真机实证：该 action 直接落到「实体键盘」页（HARD_KEYBOARD_SETTINGS）。
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "am",
+            "start",
+            "-a",
+            "android.settings.HARD_KEYBOARD_SETTINGS",
         ])
     }
 
@@ -1333,6 +1370,7 @@ fn device_readiness_error(lookup: DeviceLookup) -> Option<AppError> {
 fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
     std::thread::spawn(move || loop {
         std::thread::sleep(MONITOR_INTERVAL);
+        let mut exit_success = false;
         let finished = {
             let Ok(mut map) = store.0.lock() else {
                 return;
@@ -1348,6 +1386,7 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             };
             match process.try_wait() {
                 Some(success) => {
+                    exit_success = success;
                     state.process = None;
                     state.session = resolve_process_exit(&serial, success);
                     true
@@ -1374,6 +1413,141 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                     .map(|map| count_running_processes(&map))
                     .unwrap_or(usize::MAX);
                 maybe_restore_host_input_source(app, running);
+            }
+            // 无线断线自动重连（X10-45）：只在「异常退出」（手机/网络掉线）时触发；
+            // 用户主动关闭镜像窗口是正常退出，不打扰。
+            if let Some(app) = TRAY_APP.get() {
+                let enabled = app_settings_path(app)
+                    .map(|path| load_app_settings(&path).auto_reconnect)
+                    .unwrap_or(true);
+                if should_auto_reconnect(exit_success, &serial, enabled) {
+                    spawn_wireless_reconnect(app, store, epoch, &serial);
+                }
+            }
+            return;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 无线断线自动重连（X10-45）
+//
+// 已实证的无线痛点：手机熄屏十余分钟后整台从网络消失（ping 100% 丢包 +
+// mDNS 无广播 + adb transport offline），用户感知为「镜像卡住/挂了」；等用户
+// 点亮手机、设备回网后，还要手动重连一遍才能回到镜像。这里的实现目标：
+// **用户点亮手机的那一刻，镜像自动回来。**
+// ---------------------------------------------------------------------------
+
+/// 重连探测间隔。太密会打扰 adb，太疏则「点亮手机 → 镜像回来」的延迟明显；
+/// 5 秒是点亮手机后可接受的等待上限。
+const RECONNECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 重连总预算。手机可能只是暂时锁屏掉网，也可能被拿走换网；15 分钟覆盖
+/// 「熄屏下网 → 用户回身点亮」的典型间隔，之后如实放弃并告知。
+const RECONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// 是否值得自动重连：仅**异常退出**（进程非 0 退出，对应手机/网络掉线）+
+/// 无线端点 + 用户没有关闭该功能。用户主动关闭镜像窗口是正常退出（0），
+/// 不重连——那是「我不看了」，不是「断了」。
+fn should_auto_reconnect(process_success: bool, endpoint: &str, enabled: bool) -> bool {
+    !process_success && enabled && is_wireless_endpoint(endpoint)
+}
+
+/// 单次重连探测的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconnectProbe {
+    /// 设备已在 adb 设备表且就绪——可以重建会话。
+    Ready,
+    /// 还没回来（不在表里 / offline / unauthorized）——继续等。
+    NotReady,
+    /// adb 本身不可用——继续等（adb 服务可能正在重启）。
+    Unavailable,
+}
+
+fn classify_reconnect_probe(adb: &dyn AdbRuntime, endpoint: &str) -> ReconnectProbe {
+    // connect 失败不致命：transport 可能半死但设备表里仍有条目。
+    let _ = adb.connect(endpoint);
+    match adb.list_devices() {
+        Err(_) => ReconnectProbe::Unavailable,
+        Ok(devices) => match devices.into_iter().find(|device| device.serial == endpoint) {
+            Some(device) if device.state == DeviceState::Ready => ReconnectProbe::Ready,
+            _ => ReconnectProbe::NotReady,
+        },
+    }
+}
+
+/// 后台等待设备回网并自动重建镜像会话。
+///
+/// 退出条件（任一）：
+/// * 用户自己动了这台设备（重新开会话 → epoch 变化 / 会话条目被移除）——交还控制权；
+/// * 预算（15 分钟）用完——如实告知后放弃；
+/// * 设备回网 → 用**原会话参数**重建。唯一例外：录制不再续录（原录像文件已
+///   收尾，追加录制既不安全也不符合预期），重建的会话 `record = false`，
+///   并在通知里如实说明。
+fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64, endpoint: &str) {
+    let app = app.clone();
+    let endpoint = endpoint.to_owned();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        // 会话状态里的错误改写为「正在等待」，前端轮询即可见，无需新状态——
+        // phase 保持 Failed（连接确实断了），恢复动作变成「等我们自动重连」。
+        if let Ok(mut map) = sessions.0.lock() {
+            if let Some(state) = map.get_mut(&endpoint) {
+                state.session.error = Some(AppError::new(
+                    "wireless_reconnect_waiting",
+                    "无线连接已断开，正在等待手机重新上线。",
+                    "手机点亮并回到同一 Wi-Fi 后会自动恢复镜像（最多等 15 分钟）；也可以手动重新连接。",
+                ));
+            }
+        }
+        let _ = app.emit(
+            "wireless-reconnect-status",
+            serde_json::json!({ "status": "waiting", "endpoint": endpoint }),
+        );
+        loop {
+            std::thread::sleep(RECONNECT_POLL_INTERVAL);
+            // 先查用户意图：会话条目消失（忘记设备/清空）或已被用户重新占用，
+            // 都说明用户在自己处理，自动重连立即让位。
+            let session_options = {
+                let Ok(map) = sessions.0.lock() else { return; };
+                match map.get(&endpoint) {
+                    Some(state) => {
+                        if state.epoch != epoch || state.process.is_some() {
+                            return;
+                        }
+                        state.options.clone()
+                    }
+                    None => return,
+                }
+            };
+            if started.elapsed() >= RECONNECT_BUDGET {
+                let _ = app.emit(
+                    "wireless-reconnect-status",
+                    serde_json::json!({ "status": "gave_up", "endpoint": endpoint }),
+                );
+                return;
+            }
+            let Some(runtimes) = app.try_state::<AppRuntimes>() else {
+                return;
+            };
+            if !matches!(
+                classify_reconnect_probe(runtimes.adb.as_ref(), &endpoint),
+                ReconnectProbe::Ready
+            ) {
+                continue;
+            }
+            // 设备回来了：用原参数重建会话（录制不续录，见函数注释）。
+            let mut options = session_options;
+            options.record = false;
+            let outcome =
+                start_mirroring_with(&runtimes, &sessions, endpoint.clone(), options, None);
+            let status = if outcome.is_ok() { "succeeded" } else { "gave_up" };
+            let _ = app.emit(
+                "wireless-reconnect-status",
+                serde_json::json!({ "status": status, "endpoint": endpoint }),
+            );
+            if outcome.is_ok() {
+                refresh_tray_menu(&app);
             }
             return;
         }
@@ -1547,13 +1721,23 @@ fn save_trusted_devices(path: &Path, devices: &[TrustedWirelessDevice]) -> Resul
 // ---------------------------------------------------------------------------
 
 /// 本机应用偏好。与 SessionOptions 的区别：这些设置不进镜像子进程参数，
-/// 只影响客户端自身的行为（窗口、图标）。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// 只影响客户端自身的行为（窗口、图标、自动重连）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 struct AppSettings {
     /// 仅 macOS：隐藏 Dock 图标，只保留菜单栏图标与菜单。
     /// Windows/Linux 上恒为 false（写了也不生效，读出原样返回）。
     hide_dock_icon: bool,
+    /// 无线镜像因链路断开**异常退出**时，自动等待设备回网并重建会话（X10-45）。
+    /// 默认开启：无线掉线（尤其手机熄屏后整台下网）是无线场景第一痛点，
+    /// 用户点亮手机的那一刻应当直接回到镜像，而不是再手动连一遍。
+    auto_reconnect: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self { hide_dock_icon: false, auto_reconnect: true }
+    }
 }
 
 fn app_settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
@@ -1658,6 +1842,7 @@ fn set_app_settings(app: AppHandle, settings: AppSettings) -> Result<AppSettings
     // 防止手改 JSON 后在 Windows/Linux 上出现「勾了但没有任何效果」的假开关）。
     let settings = AppSettings {
         hide_dock_icon: cfg!(target_os = "macos") && settings.hide_dock_icon,
+        auto_reconnect: settings.auto_reconnect,
     };
     apply_dock_icon_policy(&app, &settings);
     save_app_settings(&app_settings_path(&app)?, &settings)?;
@@ -2067,18 +2252,35 @@ fn input_source_backup_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 ///
 /// 幂等：已托管（多台并发/会话重启）时是空操作。切换只在「确实切走了」时落盘
 /// 与通知，任何失败都静默跳过——输入法问题绝不能阻断镜像本身。
+/// TIS 调用全部走主线程（2026-10-01 崩溃实锤：macOS 15 后台线程调 TIS 直接
+/// SIGILL）；因此「读当前源」与「切换」都放在 backup 锁之外，避免后台线程
+/// 持锁等主线程、而主线程（托盘退出路径）也要拿这把锁形成等待环。
 fn maybe_switch_host_input_source(app: &AppHandle) {
+    let current = input_source::current_bundle_id_on_main(app);
+    let should_switch = {
+        let Ok(backup) = host_input_source_backup_cell().lock() else {
+            return;
+        };
+        input_source::should_attempt_switch(current.as_deref(), backup.is_some())
+    };
+    if !should_switch {
+        return;
+    }
+    if !input_source::switch_to_system_ascii_on_main(app) {
+        return;
+    }
+    let current = match current {
+        Some(id) => id,
+        None => return,
+    };
+    // 重新拿锁写状态：并发启动的另一个会话可能已抢先完成切换并记账；那样我们
+    // 只是把 ABC 又选中了一次（幂等），不再重复落盘与通知。
     let Ok(mut backup) = host_input_source_backup_cell().lock() else {
         return;
     };
-    let current = input_source::current_bundle_id();
-    if !input_source::should_attempt_switch(current.as_deref(), backup.is_some()) {
+    if backup.is_some() {
         return;
     }
-    if !input_source::switch_to_system_ascii() {
-        return;
-    }
-    let current = current.expect("should_attempt_switch guarantees Some");
     // 账本先落盘再改内存：进程在两者之间被杀，下次启动仍能恢复。
     if let Ok(path) = input_source_backup_path(app) {
         if let Ok(payload) = serde_json::to_vec(&InputSourceBackupEntry { bundle_id: current.clone() }) {
@@ -2107,7 +2309,9 @@ fn maybe_restore_host_input_source(app: &AppHandle, running_processes: usize) {
         return;
     }
     // 选不回（比如输入法被卸载）也照样清理：留在英文布局无害，用户手动可切。
-    let _ = input_source::switch_to_bundle(&bundle_id);
+    // TIS 必须在主线程调（2026-10-01 崩溃实锤）；此时未持有 backup 锁，不存在
+    // 与主线程的锁等待环。
+    let _ = input_source::switch_to_bundle_on_main(app, &bundle_id);
     if let Ok(path) = input_source_backup_path(app) {
         let _ = fs::remove_file(path);
     }
@@ -2119,7 +2323,8 @@ fn count_running_processes(map: &BTreeMap<String, SessionState>) -> usize {
 }
 
 /// 应用启动时调用：恢复上次崩溃残留的输入源账本（读取 → 恢复 → 删除）。
-fn restore_persisted_input_source(path: &Path) {
+/// setup 回调在主线程执行，但恢复动作仍统一走主线程包装器，线程纪律只有一条。
+fn restore_persisted_input_source(app: &AppHandle, path: &Path) {
     let Ok(bytes) = fs::read(path) else {
         return;
     };
@@ -2127,7 +2332,7 @@ fn restore_persisted_input_source(path: &Path) {
     let Ok(entry) = serde_json::from_slice::<InputSourceBackupEntry>(&bytes) else {
         return;
     };
-    let _ = input_source::switch_to_bundle(&entry.bundle_id);
+    let _ = input_source::switch_to_bundle_on_main(app, &entry.bundle_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -5517,6 +5722,35 @@ fn wake_device(runtimes: State<AppRuntimes>, serial: String) -> Result<(), AppEr
     wake_screen_for_serial(&runtimes, &serial)
 }
 
+/// 安装完更新后重启应用（X10-47）。`restart()` 不返回（进程被替换）。
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
+/// 在手机上打开「实体键盘」设置页（X10-46）。
+///
+/// UHID 键盘打字依赖手机端为 scrcpy 键盘启用的布局；用户反馈「打字没反应/字符
+/// 全错」时，把这个页面带到用户面前（确认「英语（美国）」已启用），并提醒镜像
+/// 窗口里 MOD+k 也能打开同一页面（scrcpy 内置快捷键）。
+#[tauri::command]
+fn open_keyboard_settings(runtimes: State<AppRuntimes>, serial: String) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    runtimes
+        .adb
+        .open_keyboard_layout_settings(&serial)
+        .map_err(|_| {
+            AppError::new(
+                "keyboard_settings_open_failed",
+                "无法在手机上打开「实体键盘」设置。",
+                "请解锁手机后重试；也可以在手机上手动进入 设置 → 系统与更新 → 实体键盘。",
+            )
+        })
+}
+
 #[tauri::command]
 fn device_lock_report(
     runtimes: State<AppRuntimes>,
@@ -6239,6 +6473,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // 应用内自动更新（X10-47）：更新包经 minisign 验签后才安装，
+        // 公钥编译在 tauri.conf.json 里，端点指向本仓库 Release 的 latest.json。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // 应用级设置（含 macOS 隐藏 Dock）要在任何窗口展示前生效。
             // setup 闭包的错误类型是 Box<dyn StdError>，而 AppError 没实现
@@ -6257,7 +6494,7 @@ pub fn run() {
             }
             // 上次运行若因崩溃残留了「临时切换的输入源」账本，这里恢复原输入法。
             if let Ok(path) = input_source_backup_path(app.handle()) {
-                restore_persisted_input_source(&path);
+                restore_persisted_input_source(app.handle(), &path);
             }
             Ok(())
         })
@@ -6281,6 +6518,8 @@ pub fn run() {
             mirror_sessions,
             update_session_options,
             wake_device,
+            open_keyboard_settings,
+            restart_app,
             device_lock_report,
             probe_pin_pad_state,
             list_recent_devices,
@@ -6317,16 +6556,27 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
-                reclaim_children(app_handle);
-                // 应用退出：还原**所有**设备的无线亮屏补偿（X10-27 多会话）。
-                // 失败时备份文件还在，下次启动会再试——不因还原失败阻塞退出。
-                if let Some(sessions) = app_handle.try_state::<SessionStore>() {
-                    disable_all_wireless_keep_awake(&SystemAdbRuntime, &sessions);
+            match event {
+                // `code == None` 是「最后一个窗口被关闭/销毁」触发的**隐式退出
+                // 请求**：一律拒绝（2026-10-01 用户报「关闭镜像窗口后整个客户端
+                // 被关掉」，此为系统性兜底）。应用的唯一出口是托盘菜单的退出项
+                // ——它走 `app.exit(0)`，`code = Some(0)`，不受本拦截影响。
+                // 副作用：macOS 的 Cmd+Q 也不再直接杀进程（与「明确出口只有一个」
+                // 的设计一致：误触 Cmd+Q 本会连带杀掉镜像会话）。
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
                 }
+                tauri::RunEvent::Exit => {
+                    reclaim_children(app_handle);
+                    // 应用退出：还原**所有**设备的无线亮屏补偿（X10-27 多会话）。
+                    // 失败时备份文件还在，下次启动会再试——不因还原失败阻塞退出。
+                    if let Some(sessions) = app_handle.try_state::<SessionStore>() {
+                        disable_all_wireless_keep_awake(&SystemAdbRuntime, &sessions);
+                    }
+                }
+                _ => {}
             }
         });
 }
@@ -6750,6 +7000,17 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("open_developer_settings {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
+            Ok(())
+        }
+
+        fn open_keyboard_layout_settings(&self, serial: &str) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("open_keyboard_layout_settings {serial}"));
             if *self.device_writes_fail.lock().unwrap() {
                 return Err(std::io::Error::other("device offline"));
             }
@@ -7185,6 +7446,7 @@ mod tests {
             fn connect(&self, _endpoint: &str) -> Result<(), std::io::Error> { Ok(()) }
             fn disconnect(&self, _endpoint: &str) -> Result<(), std::io::Error> { Ok(()) }
             fn open_developer_settings(&self, _serial: &str) -> Result<(), std::io::Error> { Ok(()) }
+            fn open_keyboard_layout_settings(&self, _serial: &str) -> Result<(), std::io::Error> { Ok(()) }
             fn disable_wireless_debugging(&self, serial: &str) -> Result<(), std::io::Error> {
                 if serial.contains(':') {
                     Err(std::io::Error::other("wireless transport dead"))
@@ -7643,6 +7905,7 @@ mod tests {
                 show_touches: false,
                 keyboard_uhid: true,
                 read_only: false,
+                max_fps: None,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
@@ -9469,7 +9732,7 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
         let path = directory.join("app-settings.json");
 
-        let enabled = AppSettings { hide_dock_icon: true };
+        let enabled = AppSettings { hide_dock_icon: true, auto_reconnect: true };
         save_app_settings(&path, &enabled).unwrap();
         assert_eq!(load_app_settings(&path), enabled);
 
@@ -9588,6 +9851,68 @@ mod tests {
         assert!(!parsed.show_touches);
         assert!(!parsed.read_only);
         assert!(parsed.shortcut_mod.is_none());
+    }
+
+    #[test]
+    fn auto_reconnect_only_for_abnormal_wireless_exits() {
+        // 异常退出 + 无线端点 + 开关开 → 重连。
+        assert!(should_auto_reconnect(false, "192.168.2.224:46289", true));
+        // 用户主动关闭镜像窗口（正常退出）→ 不打扰。
+        assert!(!should_auto_reconnect(true, "192.168.2.224:46289", true));
+        // USB 端点不重连（拔线是有意动作，插回授权还在）。
+        assert!(!should_auto_reconnect(false, "ABC123456", true));
+        // 用户关闭了自动重连。
+        assert!(!should_auto_reconnect(false, "192.168.2.224:46289", false));
+    }
+
+    #[test]
+    fn reconnect_probe_classifies_device_readiness() {
+        let endpoint = "192.168.2.224:46289";
+        // 设备就绪 → Ready。
+        let ready = FakeAdb {
+            devices: vec![device(endpoint, DeviceState::Ready)],
+            ..FakeAdb::default()
+        };
+        assert_eq!(classify_reconnect_probe(&ready, endpoint), ReconnectProbe::Ready);
+        // 设备在表里但未授权 → 继续等。
+        let unauthorized = FakeAdb {
+            devices: vec![device(endpoint, DeviceState::Unauthorized)],
+            ..FakeAdb::default()
+        };
+        assert_eq!(classify_reconnect_probe(&unauthorized, endpoint), ReconnectProbe::NotReady);
+        // 设备还没回来 → 继续等。
+        let absent = FakeAdb::default();
+        assert_eq!(classify_reconnect_probe(&absent, endpoint), ReconnectProbe::NotReady);
+        // adb 服务不可用 → 继续等（服务可能正在重启）。
+        let down = FakeAdb { unavailable: true, ..FakeAdb::default() };
+        assert_eq!(classify_reconnect_probe(&down, endpoint), ReconnectProbe::Unavailable);
+    }
+
+    #[test]
+    fn max_fps_defaults_to_unlimited_and_whitelists_values() {
+        // 默认不限帧率：不传任何 --max-fps 参数（跟随设备）。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(!args.iter().any(|argument| argument.contains("max-fps")));
+
+        // 白名单内的值原样透传。
+        for fps in [24, 30, 60] {
+            let limited = SessionOptions {
+                max_fps: Some(fps),
+                ..Default::default()
+            };
+            assert!(limited.arguments().unwrap().contains(&format!("--max-fps={fps}")));
+        }
+
+        // 白名单外一律拒绝，不透传任意数字。
+        let hostile = SessionOptions {
+            max_fps: Some(999),
+            ..Default::default()
+        };
+        assert_eq!(hostile.arguments().unwrap_err().code, "max_fps_invalid");
+
+        // 旧配置（缺字段）经 serde 默认视为不限帧率。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
+        assert!(parsed.max_fps.is_none());
     }
 
     #[test]

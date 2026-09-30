@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
 import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plugin-dialog";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 // 会话中的系统级快捷键：镜像窗口（scrcpy 窗口）持有焦点时主窗口收不到键盘事件，
 // 只有全局快捷键能不切回主窗口就触发截图/录制/旋转。
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
@@ -135,7 +136,7 @@ export type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean; max_fps: number | null };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
@@ -160,8 +161,8 @@ type PairingStatus = {
 type WirelessServices = { pairing: string[]; connect: string[] };
 
 // 应用级设置（后端持久化到 app-settings.json）：只影响客户端自身行为
-// （窗口、图标），与镜像会话参数（SessionOptions）严格分开。
-export type AppSettingsView = { hide_dock_icon: boolean };
+// （窗口、图标、无线自动重连），与镜像会话参数（SessionOptions）严格分开。
+export type AppSettingsView = { hide_dock_icon: boolean; auto_reconnect: boolean };
 // 平台判断：只有 macOS 提供「隐藏 Dock 图标」。做成纯函数方便测试。
 export function isMacPlatform(userAgent: string): boolean {
   return /Macintosh|Mac OS X/.test(userAgent);
@@ -202,7 +203,7 @@ type Screenshot = { file_name: string; path: string; bytes: number };
 type TransferReceipt = { file_name: string; path: string; bytes: number };
 // 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
 type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null };
 export function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
@@ -222,6 +223,7 @@ export function readOptions(): SessionOptions {
         show_touches: typeof value.show_touches === "boolean" ? value.show_touches : false,
         keyboard_uhid: typeof value.keyboard_uhid === "boolean" ? value.keyboard_uhid : true,
         read_only: typeof value.read_only === "boolean" ? value.read_only : false,
+        max_fps: [24, 30, 60].includes(value.max_fps) ? value.max_fps : null,
       };
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
@@ -490,6 +492,7 @@ function App() {
   // macOS 宿主输入源被自动托管时的提示（X10-39）：第三方输入法会吞掉镜像输入
   // 的原始键码，后端已临时切到系统输入源，会话结束后自动恢复。
   const [hostImNotice, setHostImNotice] = useState<string | null>(null);
+  const [reconnectNotice, setReconnectNotice] = useState<string | null>(null);
   // 取消授权成功后立即把这台设备从列表隐藏（X10-33）：调试开关已关，adb 列表
   // 通常几秒内自己消失，隐藏让它不闪一下「离线」。设备重新就绪（重新授权）即自动恢复显示。
   // 隐藏清单持久化到本机存储（X10-35）：离线设备的取消授权指令往往送不到手机，
@@ -575,7 +578,7 @@ function App() {
     };
   }, [sessionActive, sessionSerial]);
   // 通用设置：开机自启（autostart 插件持久化）与 macOS 隐藏 Dock（后端持久化）。
-  const [appSettings, setAppSettings] = useState<AppSettingsView>({ hide_dock_icon: false });
+  const [appSettings, setAppSettings] = useState<AppSettingsView>({ hide_dock_icon: false, auto_reconnect: true });
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [generalNotice, setGeneralNotice] = useState<string | null>(null);
   const isMac = isMacPlatform(navigator.userAgent);
@@ -587,8 +590,8 @@ function App() {
     void (async () => {
       try {
         const settings = await invoke<Partial<AppSettingsView>>("get_app_settings");
-        if (!disposed) setAppSettings({ hide_dock_icon: settings.hide_dock_icon === true });
-      } catch { if (!disposed) setAppSettings({ hide_dock_icon: false }); }
+        if (!disposed) setAppSettings({ hide_dock_icon: settings.hide_dock_icon === true, auto_reconnect: settings.auto_reconnect !== false });
+      } catch { if (!disposed) setAppSettings({ hide_dock_icon: false, auto_reconnect: true }); }
       try {
         const enabled = await invoke<unknown>("plugin:autostart|is_enabled");
         if (!disposed) setAutostartEnabled(enabled === true);
@@ -616,17 +619,65 @@ function App() {
 
   async function toggleHideDockIcon(hide: boolean) {
     const previous = appSettings;
-    setAppSettings({ hide_dock_icon: hide });
+    setAppSettings({ ...appSettings, hide_dock_icon: hide });
     setGeneralNotice(null);
     try {
-      const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { hide_dock_icon: hide } });
-      setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true });
+      const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, hide_dock_icon: hide } });
+      setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true, auto_reconnect: saved.auto_reconnect !== false });
       setGeneralNotice(hide ? "已隐藏 Dock 图标，从屏幕顶部菜单栏图标使用 MirrorDock。" : "已恢复 Dock 图标。");
     } catch (error) {
       setAppSettings(previous);
       setGeneralNotice(errorMessage(error, "无法修改 Dock 图标设置。"));
     }
   }
+
+  async function toggleAutoReconnect(enabled: boolean) {
+    const previous = appSettings;
+    setAppSettings({ ...appSettings, auto_reconnect: enabled });
+    setGeneralNotice(null);
+    try {
+      const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, auto_reconnect: enabled } });
+      setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true, auto_reconnect: saved.auto_reconnect !== false });
+      setGeneralNotice(enabled ? "无线镜像意外断开时，会等待手机回网并自动恢复（最多 15 分钟）。" : "已关闭自动重连：无线断开后需要手动重新连接。");
+    } catch (error) {
+      setAppSettings(previous);
+      setGeneralNotice(errorMessage(error, "无法修改自动重连设置。"));
+    }
+  }
+  // 检查更新（X10-47）：check → 发现新版则下载安装（验签由后端 updater 完成）→ 重启。
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "installing">("idle");
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  async function checkForUpdates() {
+    setUpdateMessage(null);
+    setUpdateState("checking");
+    try {
+      const update = await checkForUpdate();
+      if (!update) {
+        setUpdateMessage("当前已是最新版本。");
+        setUpdateState("idle");
+        return;
+      }
+      setUpdateState("installing");
+      setUpdateMessage(`发现新版本 ${update.version}，正在下载并安装…`);
+      await update.downloadAndInstall();
+      setUpdateMessage("更新已安装，应用即将重启…");
+      await invoke("restart_app");
+    } catch (error) {
+      setUpdateMessage(errorMessage(error, "检查或安装更新失败，请稍后再试，也可以到 GitHub 仓库的 Releases 页手动下载。"));
+      setUpdateState("idle");
+    }
+  }
+
+  // 在手机上打开「实体键盘」设置页（X10-46）：UHID 打字依赖手机端启用的布局。
+  async function openKeyboardSettings() {    if (!readySerial) return;
+    try {
+      await invoke("open_keyboard_settings", { serial: readySerial });
+      setSettingsNotice("已在手机上打开「实体键盘」设置：请确认 scrcpy 键盘已启用「英语（美国）」布局，镜像窗口里按 MOD+k 也能打开这个页面。");
+    } catch (error) {
+      setSettingsNotice(errorMessage(error, "无法打开手机的键盘设置（设备可能未连接）。"));
+    }
+  }
+
   function updateOptions(next: SessionOptions) {
     setOptions(next);
     // 设置一旦被改动，上一次「已应用 / 无需重启」的结论就不再适用，先清掉避免误导。
@@ -1425,6 +1476,34 @@ function App() {
       if (unlisten) unlisten();
     };
   }, []);
+  // 无线断线自动重连进度（X10-45）：断开 → 等待回网 → 成功恢复 / 放弃。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ status: "waiting" | "succeeded" | "gave_up"; endpoint: string }>(
+      "wireless-reconnect-status",
+      (event) => {
+        const status = event.payload?.status;
+        if (status === "waiting") {
+          setReconnectNotice("无线连接已断开，正在等待手机重新上线，回网后会自动恢复镜像（最多等 15 分钟）。");
+        } else if (status === "succeeded") {
+          setReconnectNotice("手机已回网，镜像会话已自动恢复。");
+        } else {
+          setReconnectNotice("等待手机回网超时，已停止自动重连。需要时请手动重新连接。");
+        }
+      },
+    )
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
   // 选中设备变化时重新探测能力信息。只读取设备信息，不启动镜像。
   // 探测结果用于设置页「转发手机声音」开关的一致性；能力说明文案在帮助中心。
   useEffect(() => {
@@ -1627,6 +1706,12 @@ function App() {
                   </div>
                 )}
                 {lockError && <p className="diagnostic" role="alert">{lockError}</p>}
+                {reconnectNotice && (
+                  <p className="diagnostic" role="status">
+                    {reconnectNotice}
+                    <button type="button" className="dismiss-button" aria-label="关闭这条通知" title="关闭" onClick={() => setReconnectNotice(null)}>×</button>
+                  </p>
+                )}
                 {sessionActive && pinPadActive && (
                   <p className="diagnostic" role="status">🔒 此画面受系统安全保护，无法镜像。请在手机上直接输入密码解锁，解锁后画面自动恢复。</p>
                 )}
@@ -2084,6 +2169,13 @@ function App() {
                     <label className="setting-toggle"><input type="checkbox" aria-label="隐藏 Dock 图标" checked={appSettings.hide_dock_icon} onChange={e => void toggleHideDockIcon(e.target.checked)} /></label>
                   </div>
                 )}
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">无线断线自动重连</span>
+                    <span className="setting-desc">无线镜像意外断开（如手机熄屏后从网络消失）时，自动等待手机回网并恢复镜像（最多 15 分钟）。手动关闭镜像窗口不会触发。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="无线断线自动重连" checked={appSettings.auto_reconnect} onChange={e => void toggleAutoReconnect(e.target.checked)} /></label>
+                </div>
                 <p className="setting-note">点窗口关闭按钮 = 最小化到菜单栏/托盘，不会结束镜像会话。菜单栏/托盘里可以：连接/断开、开始/结束屏幕录制、屏幕唤醒、手机截图。</p>
                 <p className="setting-note">镜像画面黑屏（手机熄屏）时，在镜像窗口上点右键即可直接点亮屏幕，不必回到本窗口。</p>
                 {generalNotice && <p className="setting-note apply-notice" role="status">{generalNotice}</p>}
@@ -2110,6 +2202,18 @@ function App() {
                   </div>
                   <select className="setting-control" value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>
                     <option value="smooth">流畅 · 1024 / 2 Mbps</option><option value="balanced">均衡 · 1920 / 8 Mbps</option><option value="sharp">清晰 · 2560 / 16 Mbps</option>
+                  </select>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">帧率上限</span>
+                    <span className="setting-desc">默认跟随设备帧率。老手机发烫卡顿时选 30，长会话省电选 24。</span>
+                  </div>
+                  <select className="setting-control" aria-label="帧率上限" value={options.max_fps ?? 0} onChange={e => updateOptions({...options, max_fps: Number(e.target.value) === 0 ? null : Number(e.target.value)})}>
+                    <option value={0}>跟随设备（不限）</option>
+                    <option value={60}>最高 60 帧</option>
+                    <option value={30}>最高 30 帧</option>
+                    <option value={24}>最高 24 帧（最省电）</option>
                   </select>
                 </div>
                 <div className="setting-row">
@@ -2162,9 +2266,12 @@ function App() {
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">键盘直输（手机不弹全屏键盘）</span>
-                    <span className="setting-desc">开启后手机把电脑当作外接键盘：点输入框不再弹出全屏软键盘，只在屏幕底部留一条小候选栏，直接用电脑键盘打字即可。关闭则由电脑把组好的文字直接注入手机，手机软键盘照常弹出。更改后重启会话生效。</span>
+                    <span className="setting-desc">开启后手机把电脑当作外接键盘：点输入框不再弹出全屏软键盘，只在屏幕底部留一条小候选栏，直接用电脑键盘打字即可。关闭则由电脑把组好的文字直接注入手机，手机软键盘照常弹出。更改后重启会话生效。打字没反应或字符全错时，通常是手机端「实体键盘」布局未启用「英语（美国）」——点右侧按钮到手机上确认。</span>
                   </div>
-                  <label className="setting-toggle"><input type="checkbox" aria-label="键盘直输（手机不弹全屏键盘）" checked={options.keyboard_uhid} onChange={e => updateOptions({...options, keyboard_uhid: e.target.checked})} /></label>
+                  <div className="settings-actions">
+                    <button type="button" className="secondary-button" disabled={!readySerial} aria-label="打开手机的实体键盘设置" onClick={() => void openKeyboardSettings()}>手机键盘设置</button>
+                    <label className="setting-toggle"><input type="checkbox" aria-label="键盘直输（手机不弹全屏键盘）" checked={options.keyboard_uhid} onChange={e => updateOptions({...options, keyboard_uhid: e.target.checked})} /></label>
+                  </div>
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
@@ -2267,6 +2374,16 @@ function App() {
                 <p className="setting-note">开发者：MirrorDock 项目（g-star1024），个人开源项目，欢迎在仓库提 Issue 反馈问题。</p>
                 <p className="setting-note">开源许可：Apache-2.0。镜像引擎基于 scrcpy（Apache-2.0）；全部第三方组件的版权声明见安装目录内的 THIRD_PARTY_NOTICES 文件。</p>
                 <p className="setting-note">隐私承诺：本地优先，画面与文件只经过你的数据线或局域网，不经过任何服务器。</p>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">检查更新</span>
+                    <span className="setting-desc">发现新版本后自动下载安装（更新包经数字签名校验），安装完成后重启应用即完成升级。</span>
+                  </div>
+                  <button type="button" className="secondary-button" disabled={updateState !== "idle"} onClick={() => void checkForUpdates()}>
+                    {updateState === "idle" ? "检查更新" : updateState === "checking" ? "正在检查…" : "正在更新…"}
+                  </button>
+                </div>
+                {updateMessage && <p className="setting-note apply-notice" role="status">{updateMessage}</p>}
                 <div className="settings-actions">
                   <button type="button" className="secondary-button" onClick={() => void openUrl("https://g-star1024.github.io/MirrorDock/")}>
                     打开官网

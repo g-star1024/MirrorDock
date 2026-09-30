@@ -18,6 +18,10 @@ vi.mock("@tauri-apps/api/app", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
+// updater 插件（X10-47）：测试环境无 Tauri 运行时；check 默认「无更新」。
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: vi.fn().mockResolvedValue(null),
+}));
 // 全局快捷键插件在测试环境中没有 Tauri 运行时；App 内部会先探测
 // __TAURI_INTERNALS__ 再注册，这里 mock 掉以保证双保险。
 vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
@@ -285,6 +289,7 @@ describe("readOptions", () => {
       show_touches: false,
       keyboard_uhid: true,
       read_only: false,
+      max_fps: null,
     });
   });
 

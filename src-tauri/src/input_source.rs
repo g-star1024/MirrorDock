@@ -12,6 +12,16 @@
 //!
 //! 平台边界：只在 macOS 实现；Windows/Linux 编译为空操作（调用方会得到
 //! `None`/`false`，自然跳过一切逻辑）。
+//!
+//! ## 线程纪律（2026-10-01 崩溃实锤，必须遵守）
+//!
+//! macOS 15 起，HIToolbox 对 TIS 调用强制**主队列断言**：在后台线程调
+//! `TISCreateInputSourceList` 会触发 `dispatch_assert_queue_fail`，进程以
+//! SIGILL 当场被杀（真机崩溃报告：`TISCreateInputSourceList →
+//! islGetInputSourceListWithAdditions → dispatch_assert_queue_fail`，
+//! 用户表现为「结束镜像后整个客户端消失」）。因此**一切 TIS FFI 调用都必须
+//! 经由 `*_on_main` 包装器在主线程执行**；调用方最多等 3 秒，超时放弃——
+//! 输入法留在 ABC 无害，绝不为主线程调度挂死镜像线程。
 
 /// ABC 布局的 InputSourceID（新版 macOS 上布局的 bundle id 统一收敛成
 /// `com.apple.keyboardlayout.all`，只能靠 InputSourceID 区分，真机实测）。
@@ -307,7 +317,76 @@ mod imp {
     }
 }
 
+// mac 路径下 lib.rs 只使用 *_on_main 包装器，底层函数仅供非 macOS 与测试引用。
+#[allow(unused_imports)]
 pub use imp::{current_bundle_id, switch_to_bundle, switch_to_system_ascii};
+
+// ---------------------------------------------------------------------------
+// 主线程调度层（macOS 15+ 的 TIS 主队列断言，见模块顶部「线程纪律」）
+// ---------------------------------------------------------------------------
+
+/// 在应用主线程同步执行 `job` 并拿回结果。
+///
+/// * 主线程忙或应用正在退出时最多等 `MAIN_THREAD_DISPATCH_TIMEOUT`，超时返回
+///   `None`——调用方按「放弃本次输入源操作」降级，绝不阻塞镜像线程。
+/// * 当前已经在主线程时（托盘事件、setup 回调），Tauri 会直接同步执行，语义不变。
+#[cfg(target_os = "macos")]
+pub fn on_main_thread<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const MAIN_THREAD_DISPATCH_TIMEOUT: Duration = Duration::from_secs(3);
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let _ = sender.send(job());
+    })
+    .ok()?;
+    receiver.recv_timeout(MAIN_THREAD_DISPATCH_TIMEOUT).ok()
+}
+
+/// 读当前输入源身份串（主线程版）。读不到时 `None`。
+pub fn current_bundle_id_on_main(app: &tauri::AppHandle) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        on_main_thread(app, imp::current_bundle_id).flatten()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        imp::current_bundle_id()
+    }
+}
+
+/// 切到 ABC 布局（主线程版）。系统拒绝或主线程调度失败时 `false`。
+pub fn switch_to_system_ascii_on_main(app: &tauri::AppHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        on_main_thread(app, imp::switch_to_system_ascii).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        imp::switch_to_system_ascii()
+    }
+}
+
+/// 恢复到备份的身份串（主线程版）。系统拒绝或主线程调度失败时 `false`。
+pub fn switch_to_bundle_on_main(app: &tauri::AppHandle, bundle_id: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let bundle_id = bundle_id.to_string();
+        on_main_thread(app, move || imp::switch_to_bundle(&bundle_id)).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        imp::switch_to_bundle(bundle_id)
+    }
+}
 
 #[cfg(test)]
 mod tests {

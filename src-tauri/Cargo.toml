@@ -1,6 +1,6 @@
 [package]
 name = "mirrordock"
-version = "0.2.11"
+version = "0.3.0"
 description = "Local-first Android desktop mirroring"
 authors = ["MirrorDock"]
 edition = "2021"
@@ -27,6 +27,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 # 开机自动启动（设置中心「通用」）。
 tauri-plugin-autostart = "2"
+# 应用内自动更新（X10-47，用户拍板「直接全自动更新」）：检查 GitHub Release 上的
+# latest.json → 下载 → 验签（公钥编译进二进制）→ 安装 → 重启。无需证书与预算。
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

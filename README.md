@@ -8,7 +8,7 @@ MirrorDock 是一个**本地优先**的 Android 桌面镜像与控制工具，�
 
 画面、音频与控制仅在电脑与已授权手机之间点对点传输。**不依赖云端、不默认上传任何数据、不收集遥测。**
 
-当前版本：`0.2.11`（桌面端）· `0.1.9`（伴侣 App）。
+当前版本：`0.3.0`（桌面端）· `0.1.9`（伴侣 App）。
 
 ## 功能特性
 
@@ -63,7 +63,11 @@ MirrorDock 的安全模型是一条明确的红线，也是产品差异化所在
 | --- | --- |
 | 电脑 | Windows 10+（x64）/ macOS 12+（Intel 或 Apple Silicon）/ 主流 Linux 发行版 |
 | 手机 | Android 7.0+（USB 镜像）；Android 11+（无线调试配对） |
-| 依赖 | 无需安装。Windows / macOS 安装包内置 scrcpy 与 adb；Linux 需发行版提供 `scrcpy` 与 `adb` |
+| 依赖 | 无需安装。Windows / macOS 安装包内置 scrcpy 与 adb；Linux 安装包同样内置 scrcpy 与 adb（源码编译随包），但需要发行版提供运行库：`sudo apt install libsdl2-2.0-0 libavcodec58 libavformat58 libavutil56 libswscale5 libusb-1.0-0`（Ubuntu 22.04+，Fedora/Arch 对应包名不同） |
+
+## 自动更新
+
+客户端内置应用内更新（可关闭思路见「设置 → 关于 MirrorDock → 检查更新」）：启动检查或手动检查 → 发现新版本后下载 → **minisign 数字签名校验**（公钥编译进二进制，私钥不进构建环境）→ 安装 → 重启完成升级。更新包清单（latest.json）来自本仓库 GitHub Release。
 
 ## 本地开发
 
