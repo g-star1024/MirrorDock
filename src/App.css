@@ -309,3 +309,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 
 .recent-head { display: flex; align-items: center; justify-content: space-between; }
 .recent-head strong { display: block; }
+
+/* -- X10-33：锁屏状态便签 + 取消授权按钮统一样式 --------------------------- */
+.lock-badge { background: #eef3fb; color: #5a6b85; border-color: #dde6f3; }
+.revoke-button { color: #5a6b85; }

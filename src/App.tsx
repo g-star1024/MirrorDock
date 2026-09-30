@@ -297,19 +297,20 @@ export function lockSummary(report: DeviceLockReport) {
   return `${keyguard} · ${screen}`;
 }
 
-/** 面板里只留一句「现在该做什么」；完整说明在页面底部的「关于锁屏与解锁」。 */
-export function lockActionHint(report: DeviceLockReport): string {
-  if (report.screen === "asleep") {
-    return "屏幕没亮：点「屏幕唤醒」即可点亮；解锁需要你本人在手机上输入。";
-  }
-  if (report.keyguard === "locked") {
-    return "请在手机上解锁；解锁凭据只会输入在手机或镜像窗口里，MirrorDock 不记录。";
-  }
-  if (report.keyguard === "unlocked") {
-    return "手机已解锁，可以直接开始镜像。";
-  }
-  return "锁屏状态读取不完整，不影响开始镜像；遇到异常请解锁手机后重试。";
+/** 设备卡上的锁屏便签（X10-33）：短语级，替代原先的整块锁屏状态面板。 */
+export function lockTag(report: DeviceLockReport): string {
+  const keyguard =
+    report.keyguard === "locked"
+      ? report.secure_lock === true
+        ? "安全锁屏"
+        : "已锁屏"
+      : report.keyguard === "unlocked"
+        ? "已解锁"
+        : "锁屏未知";
+  const screen = report.screen === "awake" ? "亮屏" : report.screen === "asleep" ? "熄屏" : "屏幕未知";
+  return `${keyguard} · ${screen}`;
 }
+
 export function errorMessage(error: unknown, fallback: string) {
   if (typeof error === "object" && error !== null && "message" in error && "recovery" in error) {
     const detail = error as AppError;
@@ -431,7 +432,8 @@ function App() {
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
-  const [lockReport, setLockReport] = useState<DeviceLockReport | null>(null);
+  // 锁屏状态按设备记录：多台并发时每张设备卡都要显示各自的锁屏便签（X10-33）。
+  const [lockReports, setLockReports] = useState<Record<string, DeviceLockReport>>({});
   const [lockError, setLockError] = useState<string | null>(null);
   const [lockBusy, setLockBusy] = useState(false);
   const [screenshot, setScreenshot] = useState<Screenshot | null>(null);
@@ -482,6 +484,9 @@ function App() {
   const [revokeArmedSerial, setRevokeArmedSerial] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeNotice, setRevokeNotice] = useState<{ text: string; error: boolean } | null>(null);
+  // 取消授权成功后立即把这台设备从列表隐藏（X10-33）：调试开关已关，adb 列表
+  // 通常几秒内自己消失，隐藏让它不闪一下「离线」。设备重新就绪（重新授权）即自动恢复显示。
+  const [hiddenRevokedSerials, setHiddenRevokedSerials] = useState<string[]>([]);
   // 启动中的会话归属：多张设备卡同时可见时，「正在启动…」只出现在点下的那张卡上。
   const [launchingSerial, setLaunchingSerial] = useState<string | null>(null);
   // 拖拽安装 APK：拖入时显示全屏提示；安装结果以右下角浮层反馈（任何页签可见）。
@@ -805,7 +810,7 @@ function App() {
 
   // 客户端侧取消授权（X10-32）：关手机调试开关 + 断开全部无线连接 + 清本机记录，
   // 并打开手机的开发者选项引导本人完成「撤销 USB 调试授权」（清除授权记录
-  // 只能手机端做，这是 Android 的安全设计）。
+  // 只能手机端做，这是 Android 的安全设计）。成功后这台设备立即从列表移除（X10-33）。
   async function revokeDeviceAccess(serial: string) {
     setRevoking(true);
     setRevokeArmedSerial(null);
@@ -813,6 +818,7 @@ function App() {
     try {
       const receipt = await invoke<{ steps: string[] }>("revoke_device_access", { serial });
       setRevokeNotice({ text: receipt.steps.join(" "), error: false });
+      setHiddenRevokedSerials((prev) => (prev.includes(serial) ? prev : [...prev, serial]));
       await refreshDevices();
       await refreshRecentDevices();
     } catch (error) {
@@ -909,10 +915,10 @@ function App() {
 
   async function refreshLockReport(serial: string) {
     try {
-      setLockReport(await invoke<DeviceLockReport>("device_lock_report", { serial }));
-      setLockError(null);
-    } catch (error) {
-      setLockError(errorMessage(error, "无法读取手机当前的锁屏状态。"));
+      const report = await invoke<DeviceLockReport>("device_lock_report", { serial });
+      setLockReports((prev) => ({ ...prev, [serial]: report }));
+    } catch {
+      // 锁屏便签读不到就不显示该设备的便签，不打断其它状态展示。
     }
   }
 
@@ -1372,39 +1378,42 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // 选中设备变化时重新探测能力与锁屏状态。两者都只读取设备信息，不启动镜像。
+  // 选中设备变化时重新探测能力信息。只读取设备信息，不启动镜像。
   useEffect(() => {
     if (!readySerial) {
       setCapabilities(null);
       setCapabilitiesError(null);
-      setLockReport(null);
-      setLockError(null);
       return;
     }
     let disposed = false;
     setCapabilities(null);
     setCapabilitiesError(null);
-    setLockReport(null);
-    setLockError(null);
     invoke<DeviceCapabilities>("probe_device_capabilities", { serial: readySerial })
       .then((value) => { if (!disposed) setCapabilities(value); })
       .catch((error) => {
         if (!disposed) setCapabilitiesError(errorMessage(error, "无法读取这台手机的能力信息。"));
       });
-    invoke<DeviceLockReport>("device_lock_report", { serial: readySerial })
-      .then((value) => { if (!disposed) setLockReport(value); })
-      .catch((error) => {
-        if (!disposed) setLockError(errorMessage(error, "无法读取手机当前的锁屏状态。"));
-      });
-    // 锁屏状态会随使用变化（点亮/解锁/熄屏），面板不能停留在旧状态：
-    // 每 5 秒轻量复查一次；「屏幕唤醒」成功后另有立即刷新。复查失败保持上一次结果。
+    return () => { disposed = true; };
+  }, [readySerial]);
+  // 每张就绪设备卡的锁屏便签（X10-33）：按就绪设备集合轮询，5 秒一刷；
+  // 某台读不到就不更新它的便签，不影响其它设备。
+  const readySerialsKey = readyDevices.map((device) => device.serial).join(",");
+  useEffect(() => {
+    const serials = readySerialsKey ? readySerialsKey.split(",") : [];
+    if (serials.length === 0) return;
+    let disposed = false;
+    for (const serial of serials) void refreshLockReport(serial);
     const timer = window.setInterval(() => {
-      invoke<DeviceLockReport>("device_lock_report", { serial: readySerial })
-        .then((value) => { if (!disposed) setLockReport(value); })
-        .catch(() => { /* 保持上一次结果，不刷错误打断面板 */ });
+      for (const serial of serials) {
+        if (disposed) break;
+        invoke<DeviceLockReport>("device_lock_report", { serial })
+          .then((value) => { if (!disposed) setLockReports((prev) => ({ ...prev, [serial]: value })); })
+          .catch(() => { /* 保持上一次结果 */ });
+      }
     }, 5000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [readySerial]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readySerialsKey]);
   // 探测确认这台手机不支持系统音频转发（Android < 11）时，把「转发手机声音」
   // 如实关掉并禁用：scrcpy 在这类设备上会自动禁用音频，界面必须与之一致，
   // 而不是留一个开了也不生效的开关。
@@ -1546,16 +1555,28 @@ function App() {
                 {sessionError && <p className="diagnostic" role="alert">{sessionError}</p>}
                 {statusMessage && <p className="diagnostic" role={statusRole}>{statusMessage}</p>}
                 {revokeNotice && <p className="diagnostic" role={revokeNotice.error ? "alert" : "status"}>{revokeNotice.text}</p>}
+                {lockError && <p className="diagnostic" role="alert">{lockError}</p>}
+                {sessionActive && pinPadActive && (
+                  <p className="diagnostic" role="status">🔒 此画面受系统安全保护，无法镜像。请在手机上直接输入密码解锁，解锁后画面自动恢复。</p>
+                )}
+                {sessionActive && activeSessionList.some((item) => lockReports[item.serial]?.screen === "asleep") && (
+                  <p className="diagnostic" role="status">有手机的屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
+                )}
                 {settingsNotice && <p className="diagnostic">{settingsNotice}</p>}
               </div>
 
               {/* 设备卡片列表：一台设备一张卡，状态即操作——每个动作全页只出现一次。
                   镜像中 →「结束镜像」；就绪 →「开始镜像」；待授权/离线 → 文字说明。
+                  任何状态都有「取消授权」按钮（X10-33）；取消成功后该设备立即从列表移除，
+                  重新就绪（用户重新授权）时自动恢复显示。
                   会话仍在但设备已从列表消失（如无线瞬断）时，补一张兜底卡保留结束入口。 */}
               {!isChecking && check?.devices && check.devices.length > 0 && (
                 <div className="device-cards" aria-label="已连接的设备">
-                  {check.devices.map((device) => {
+                  {check.devices
+                    .filter((device) => device.state === "ready" || !hiddenRevokedSerials.includes(device.serial))
+                    .map((device) => {
                     const badge = connectionLabel(device);
+                    const lockStamp = device.state === "ready" ? lockReports[device.serial] : undefined;
                     const own = sessionFor(device.serial);
                     const owned = own?.phase === "connecting" || own?.phase === "streaming";
                     return (
@@ -1565,6 +1586,7 @@ function App() {
                           <strong>
                             {displayLabels[device.serial] ?? device.label}
                             {badge && <span className="conn-badge inline">{badge}</span>}
+                            {lockStamp && <span className="conn-badge inline lock-badge">{lockTag(lockStamp)}</span>}
                           </strong>
                           <p>
                             {owned
@@ -1574,50 +1596,54 @@ function App() {
                               : stateCopy[device.state].detail}
                           </p>
                         </div>
-                        {device.state === "ready" ? (
-                          <span className="device-card-actions">
-                            <button
-                              className="secondary-button"
-                              type="button"
-                              disabled={lockBusy}
-                              onClick={() => { setSelectedSerial(device.serial); void wakeDevice(device.serial); }}
-                            >
-                              {lockBusy && selectedSerial === device.serial ? "正在唤醒…" : "屏幕唤醒"}
-                            </button>
-                            {owned ? (
-                              <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
-                                {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
-                              </button>
-                            ) : (
-                              <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
-                                {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
-                              </button>
-                            )}
-                            {revokeArmedSerial === device.serial ? (
-                              <>
-                                <button className="text-button danger" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
-                                  {revoking ? "正在执行…" : "确认取消"}
-                                </button>
-                                <button className="text-button" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
-                                  算了
-                                </button>
-                              </>
-                            ) : (
+                        <span className="device-card-actions">
+                          {device.state === "ready" && (
+                            <>
                               <button
-                                className="text-button"
+                                className="secondary-button"
                                 type="button"
-                                title="关闭手机调试开关、断开本机连接并清理记录；最后一步需在手机上点「撤销 USB 调试授权」"
-                                onClick={() => setRevokeArmedSerial(device.serial)}
+                                disabled={lockBusy}
+                                onClick={() => { setSelectedSerial(device.serial); void wakeDevice(device.serial); }}
                               >
-                                取消授权
+                                {lockBusy && selectedSerial === device.serial ? "正在唤醒…" : "屏幕唤醒"}
                               </button>
-                            )}
-                          </span>
-                        ) : looksLikeWirelessEndpoint(device.serial) && device.state === "offline" ? (
-                          <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
-                        ) : (
-                          <span className="status-label">{stateCopy[device.state].label}</span>
-                        )}
+                              {owned ? (
+                                <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
+                                  {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
+                                </button>
+                              ) : (
+                                <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
+                                  {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {!owned && device.state !== "ready" && looksLikeWirelessEndpoint(device.serial) && device.state === "offline" && (
+                            <button className="secondary-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
+                          )}
+                          {!owned && device.state !== "ready" && (
+                            <span className="status-label">{stateCopy[device.state].label}</span>
+                          )}
+                          {!owned && (revokeArmedSerial === device.serial ? (
+                            <>
+                              <button className="secondary-button danger-stop" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
+                                {revoking ? "正在执行…" : "确认取消"}
+                              </button>
+                              <button className="secondary-button" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
+                                算了
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              className="secondary-button revoke-button"
+                              type="button"
+                              title="关闭手机调试开关、断开本机连接并清理记录；最后一步需在手机上点「撤销 USB 调试授权」"
+                              onClick={() => setRevokeArmedSerial(device.serial)}
+                            >
+                              取消授权
+                            </button>
+                          ))}
+                        </span>
                       </div>
                     );
                   })}
@@ -1637,30 +1663,6 @@ function App() {
                         </span>
                       </div>
                     ))}
-                </div>
-              )}
-
-              {readyDevice && (
-                <div className="panel-grid">
-                  <div className="capability-panel" aria-live="polite">
-                    <strong>{displayLabels[readyDevice.serial] ?? readyDevice.label}当前的锁屏状态</strong>
-                    {lockReport ? (
-                      <>
-                        <p className="capability-summary">{lockSummary(lockReport)}</p>
-                        <p className="capability-pending">{lockActionHint(lockReport)}</p>
-                      </>
-                    ) : lockError ? (
-                      <p className="capability-pending" role="alert">{lockError}</p>
-                    ) : (
-                      <p className="capability-pending">正在读取手机当前的锁屏状态…</p>
-                    )}
-                    {sessionActive && lockReport?.screen === "asleep" && (
-                      <p className="capability-pending" role="status">屏幕已关闭：在镜像窗口上点右键即可直接点亮屏幕（scrcpy 内置手势），无需回到本窗口。</p>
-                    )}
-                    {sessionActive && pinPadActive && (
-                      <p className="capability-pending" role="status">🔒 此画面受系统安全保护，无法镜像。请在手机上直接输入密码解锁，解锁后画面自动恢复。</p>
-                    )}
-                  </div>
                 </div>
               )}
 
@@ -1781,12 +1783,12 @@ function App() {
               </div>
             )}
 
-            {/* 锁屏长说明沉底：面板里只留状态与一句行动提示，想细看再到下面看。 */}
-            {readyDevice && lockReport && (
+            {/* 锁屏长说明沉底：卡片上只留便签，想细看再到下面看。 */}
+            {readySerial && lockReports[readySerial] && (
               <div className="capability-panel" aria-live="polite">
                 <strong>关于锁屏与解锁</strong>
-                <p className="capability-pending">{lockReport.explanation}</p>
-                <p className="capability-pending">{lockReport.recovery}</p>
+                <p className="capability-pending">{lockReports[readySerial].explanation}</p>
+                <p className="capability-pending">{lockReports[readySerial].recovery}</p>
                 <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁；设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
                 <p className="capability-pending">开了「会话期间保持手机唤醒」后，镜像进行中屏幕不会自动熄灭，锁屏页可以慢慢输入密码。无线连接时这一项会临时把手机置为「充电时保持唤醒」，因此手机状态栏可能显示充电中——这只是为了让系统不熄屏，会话结束后会自动恢复原设置。</p>
                 <p className="capability-pending">反过来，如果没开这一项：无线连接下手机熄屏十几秒后屏幕就会熄灭，镜像窗口随之变黑无法点击；熄屏时间过长，无线连接还可能整条掉线，需要重新配对。</p>

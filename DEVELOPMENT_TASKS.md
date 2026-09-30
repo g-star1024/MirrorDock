@@ -448,6 +448,11 @@
   - **同机多卡**：`dedup_devices()` 此前只合并「就绪且已知硬件序列号」的通道，离线/陈旧端点（拔线 ghost、无线调试重启后的旧端口、旧 mDNS 条目）各自成卡 → 2 台手机显示 3~4 张。改为**影子端点归并**：非就绪条目能判定属于某就绪组（① 硬件序列号相同；② mDNS 实例名内嵌该组 USB 序列号；③ 无线端点同 IP 不同端口）即不再单独成卡；都判不了才保留（离线必须如实可见）。整台手机离线时 USB 残影与 mDNS 残影也归并为一张离线卡。徽标口径不受影响（connections 只含就绪通道）。新增 `wireless_ip_endpoint`/`mdns_serial_contains_usb`/`group_usb_serials`/`group_wireless_ips`/`device_shadows_group`/`merge_offline_shadows`。
   - **取消授权**：设备卡新增「取消授权」（两段式确认）。执行链：①`am start` 打开手机开发者选项（趁通道活着先做）→ ②`settings put global adb_wifi_enabled 0` 关无线调试 → ③`settings put global adb_enabled 0` 关 USB 调试（等效收回所有电脑的访问权）→ ④`adb disconnect` 全部无线端点 → ⑤清理本机受信无线/最近设备记录。每步逐端点重试（USB 优先，无线死了 USB 兜底），执行回执逐条展示。**边界如实声明**：Android 授权记录存于手机（root 才能直接清除），「撤销 USB 调试授权」必须本人在手机上点——客户端负责把页面打开。镜像进行中的设备拒绝取消授权（先结束会话）。新 trait 方法 `open_developer_settings`/`disable_wireless_debugging`/`disable_usb_debugging`（固定参数、可审计）。
   - 验证：`cargo test --lib` **167 项全过**（新增 5 项影子归并 + 3 项取消授权：全步执行、端点收集 USB 优先、端点失败兜底）；tsc 通过；vitest 40 项全过。
+- [x] X10-33 取消授权全覆盖 + 锁屏状态便签化（用户第五次反馈，2026-09-30）。
+  - **取消授权扩到全部状态**：非就绪（待授权/离线）设备卡同样提供「取消授权」，成功后该设备立即从设备列表移除（前端 `hiddenRevokedSerials` 隐藏，adb 列表随后自然消失；设备重新就绪即自动恢复显示）；镜像进行中的卡不显示（后端本就拒绝）。
+  - **样式统一**：取消授权从纯文字链改为与「屏幕唤醒」同款 `secondary-button`；两段确认改为「确认取消」（danger-stop）+「算了」双按钮。
+  - **锁屏面板 → 便签**：删除主页整块「xx 当前的锁屏状态」面板（单设备视角不适配多台并发）；锁屏状态改为设备卡上连接徽标后的便签（`lock-badge`，`lockTag()` 短语：已解锁/已锁屏/安全锁屏/锁屏未知 · 亮屏/熄屏/屏幕未知），按就绪设备集合 5 秒轮询各自刷新。`lockReports` 状态从单值改 `Record<serial, DeviceLockReport>`；唤醒失败提示移入状态栈；熄屏右键提示与 FLAG_SECURE 提示移入状态栈；底部「关于锁屏与解锁」长说明保留。删除不再使用的 `lockActionHint`。
+  - 验证：tsc 通过；vitest **41 项全过**（新增 `lockTag` 用例）。Rust 无改动（167 项维持）。版本 0.2.5，tag `v0.2.5-beta` 走 CI 发布。
 
 ## 最终成品退出条件
 

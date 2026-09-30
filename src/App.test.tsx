@@ -33,6 +33,7 @@ import App, {
   formatBytes,
   isProEdition,
   lockSummary,
+  lockTag,
   readOptions,
   readShortcuts,
   recordingFileName,
@@ -199,6 +200,24 @@ describe("lockSummary", () => {
     expect(lockSummary({ ...base, keyguard: "unlocked", screen: "asleep" })).toBe(
       "已解锁 · 屏幕已关闭",
     );
+  });
+});
+
+describe("lockTag", () => {
+  it("renders_short_tag_for_each_lock_state", () => {
+    const base: DeviceLockReport = {
+      keyguard: "unlocked",
+      secure_lock: false,
+      screen: "awake",
+      explanation: "",
+      recovery: "",
+    };
+    expect(lockTag(base)).toBe("已解锁 · 亮屏");
+    expect(lockTag({ ...base, keyguard: "locked", secure_lock: true, screen: "awake" })).toBe(
+      "安全锁屏 · 亮屏",
+    );
+    expect(lockTag({ ...base, keyguard: "locked", screen: "asleep" })).toBe("已锁屏 · 熄屏");
+    expect(lockTag({ ...base, keyguard: "unknown", screen: "unknown" })).toBe("锁屏未知 · 屏幕未知");
   });
 });
 
