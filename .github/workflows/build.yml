@@ -215,7 +215,7 @@ jobs:
           cd ..
           # ⑤ 组装进随包资源目录（与 Win/macOS 同构：scrcpy + scrcpy-server + adb）
           mkdir -p src-tauri/resources/scrcpy
-          cp scrcpy-4.1/build/scrcpy src-tauri/resources/scrcpy/scrcpy
+          cp scrcpy-4.1/build/app/scrcpy src-tauri/resources/scrcpy/scrcpy
           cp scrcpy-server-v4.1 src-tauri/resources/scrcpy/scrcpy-server
           cp platform-tools/adb src-tauri/resources/scrcpy/adb
           chmod +x src-tauri/resources/scrcpy/scrcpy src-tauri/resources/scrcpy/adb
