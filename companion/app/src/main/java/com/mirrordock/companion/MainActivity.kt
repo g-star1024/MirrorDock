@@ -240,15 +240,21 @@ class MainActivity : AppCompatActivity() {
         statusText.text = "正在连接 ${payload.hosts.first()}:${payload.port} …"
         setStatusConnected(false)
         log("使用一次性配对码 ${payload.token}（不会保存）")
+        log("电脑身份指纹 ${payload.fingerprint.take(16)}…（与桌面长期身份核对）")
         val c = PairingClient(payload) { line -> runOnUiThread { log(line) } }
         client = c
         PairingBus.attach(c)
         Thread {
             c.connect(object : PairingClient.Listener {
                 override fun onWelcome() = runOnUiThread {
-                    statusText.text = "已与电脑建立加密会话。"
+                    statusText.text = "正在与电脑完成身份互验…"
+                }
+
+                override fun onPaired(pairingId: String) = runOnUiThread {
+                    statusText.text = "已与电脑建立互信会话。"
                     setStatusConnected(true)
-                    log("配对成功（加密会话已建立）")
+                    log("配对成功（互信已建立，本机身份已登记到电脑）")
+                    rememberComputer(pairingId, payload)
                     // 边界如实告知（X10-31）：这条会话是伴侣通道，不等于镜像连接。
                     log("提示：这是伴侣助手通道，不会让手机出现在电脑的连接列表里；要镜像请用数据线或在电脑端完成无线调试配对。")
                 }
@@ -271,6 +277,23 @@ class MainActivity : AppCompatActivity() {
                 }
             })
         }.start()
+    }
+
+    /**
+     * 本地记住这台电脑（M4-1）：pairing_id + 桌面身份指纹 + 最近主机。
+     * M4-2 常驻通道上线后，重连将凭它免扫码直连；桌面端「移除互信」后
+     * 这份记录随之作废（对端会拒绝 RECONNECT）。
+     */
+    private fun rememberComputer(pairingId: String, payload: PairingPayload) {
+        if (pairingId.isBlank()) return
+        runCatching {
+            getSharedPreferences("paired_computers", MODE_PRIVATE).edit()
+                .putString("pairing_id", pairingId)
+                .putString("desktop_fingerprint", payload.fingerprint)
+                .putString("last_host", payload.hosts.firstOrNull())
+                .putLong("paired_at", System.currentTimeMillis())
+                .apply()
+        }
     }
 
     private fun setStatusConnected(connected: Boolean) {

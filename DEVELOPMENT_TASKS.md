@@ -535,10 +535,10 @@
   - 关于卡：「检查更新」从独立行移入按钮行，顺序 = 打开官网 / GitHub 仓库 / 检查更新（原独立说明行改为普通 note）。
   - 托盘 GUI 自动化：沙箱 System Events 被 TCC 拦（-10004，与键击结论一致），无法端到端；交付宿主机脚本 `MirrorDock-内部文档/托盘GUI验证.applescript`（自动验证菜单结构 + 动态文案 + 打开主窗口行为；连接/录制/唤醒/截图/退出仅列出不自动点击，避免真实改会话）。Rust 侧已有 pick_tray_target 3 项测试。
 - [ ] M4 伴侣 App 产品化（用户授权排期，2026-10-01；范围拆解如下，逐项实现前先给方案再动手）。
-  - **M4-1 配对产品化**：扫码配对协议定稿（桌面生成 QR + ed25519 签发设备身份凭证；伴侣 App 扫码入信，凭证落 Android Keystore）。
-  - **M4-2 常驻通道**：伴侣 App 前台服务 + 与桌面端心跳（mDNS 广播已有 companion_bridge_events 自动连接，补断连退避重试与 Android 13 通知权限引导）。
-  - **M4-3 状态通知**：连接建立/断开/录制开始结束的系统通知（可关），App 内显示当前信任的桌面端列表。
-  - **M4-4 互信撤销**：伴侣 App 侧「解除这台电脑」按钮（删除本机凭证），与桌面端 revoke_device_access 双向对齐。
+  - [x] **M4-1 配对产品化（2026-10-01 完成，X10-55，提交 c6831c5+后续）**：配对协议 MDP1→MDP2，从「一次性会话」升级为「持久互信」。桌面侧：EC P-256 长期身份（rcgen 自签证书，落 `app_data_dir/companion-identity/` 三文件 identity.key/.der/.fp，key 0600；指纹=SHA-256(SPKI)）；挑战-响应互信握手（桌面发 32B nonce 挑战 → 伴侣 `SHA256withECDSA` 签名 → 桌面验签 → 登记台账 `paired-companions.json`）；`RECONNECT <pairing_id>` 重连路径（凭台账公钥挑战验签，免扫码）；新命令 `companion_paired_devices`/`companion_unpair_device`（40 命令）+ 前端「已配对的伴侣设备」列表（移除互信）。伴侣侧：Android Keystore 生成不可导出 EC P-256 身份（PairingIdentity.kt），MDP2 握手客户端（device_hello 带 SPKI → challenge → SHA256withECDSA 应答 → paired_ok 存 SharedPreferences）。签名验证兼容 DER（Java）与定宽 r||s 双编码（p256 默认特性不开 ecdsa/der，`to_vec()` 出定宽——两端编码约定不一致的坑）。cargo 178 / vitest 41 / 伴侣 APK 构建全绿。真机待验：扫码配对 → 事件流「互信已建立」→ 桌面台账出现设备 → 移除互信后重连被拒。
+  - **M4-2 常驻通道**：伴侣 App 前台服务 + 与桌面端心跳（mDNS 广播已有 companion_bridge_events 自动连接，补断连退避重试与 Android 13 通知权限引导）；RECONNECT 免扫码直连的用户入口（桌面端常驻监听端口）。
+  - **M4-3 状态通知**：连接建立/断开/录制开始结束的系统通知（可关），App 内显示当前信任的桌面端列表（读取 SharedPreferences paired_computers）。
+  - **M4-4 互信撤销**：伴侣 App 侧「解除这台电脑」按钮（删除本机 Keystore 身份 + paired_computers 记录），与桌面端 companion_unpair_device 双向对齐。
   - **M4-5 发版对齐**：companion.yml 产出 APK 命名带版本号、与桌面 Release 同 tag 上传（现仅 artifact）；版本号与桌面端分离维护（当前 0.1.9）。
   - 硬性依赖：真机联调（配对/心跳/通知行为）；Keystore 签名发布配置已就位（mirrordock-companion.keystore）。
 

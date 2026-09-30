@@ -544,7 +544,7 @@ describe("companion pairing", () => {
 
   it("pairingPayload_encodes_hosts_port_token_fingerprint", () => {
     expect(pairingPayload(offer)).toBe(
-      "MDP1|192.168.1.5,127.0.0.1|45123|AB234567CDEF2345|" + "a".repeat(64)
+      "MDP2|192.168.1.5,127.0.0.1|45123|AB234567CDEF2345|" + "a".repeat(64)
     );
   });
 

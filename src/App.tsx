@@ -180,11 +180,15 @@ export const qrPairingStageCopy: Record<string, string> = {
   ended: "已取消",
 };
 
-/// 二维码载荷格式：MDP1|主机列表(逗号分隔)|端口|一次性配对码|SPKI SHA-256。
+/// 二维码载荷格式：MDP2|主机列表(逗号分隔)|端口|一次性配对码|桌面身份 SPKI SHA-256。
 /// 伴侣 App 与桌面侧共享同一约定（见 companion_pairing.rs 模块注释）。
+/// MDP2 起：指纹对应桌面长期身份（重连免扫码），配对后设备进入互信台账。
 export function pairingPayload(offer: Pick<PairingOffer, "hosts" | "port" | "token" | "fingerprint">): string {
-  return `MDP1|${offer.hosts.join(",")}|${offer.port}|${offer.token}|${offer.fingerprint}`;
+  return `MDP2|${offer.hosts.join(",")}|${offer.port}|${offer.token}|${offer.fingerprint}`;
 }
+/// 已配对伴侣设备（桌面互信台账条目，M4-1）。
+export type PairedCompanion = { pairing_id: string; model: string; pubkey_hex: string; added_at: number; last_seen: number };
+
 // 本地权益状态：无账户、无激活服务器，后端验签后回传。edition 只有 free/pro。
 export type EntitlementView = { edition: string; key_id: string | null; expires_at: number | null };
 export function editionLabel(edition: string | undefined | null) {
@@ -479,6 +483,7 @@ function App() {
   const [pairingQr, setPairingQr] = useState<string | null>(null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingError, setPairingError] = useState<string | null>(null);
+  const [pairedDevices, setPairedDevices] = useState<PairedCompanion[]>([]);
   const [sessions, setSessions] = useState<MirrorSession[]>([]);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
@@ -1143,6 +1148,7 @@ function App() {
     try {
       const offer = await invoke<PairingOffer>("companion_begin_pairing");
       setPairingOffer(offer);
+      void loadPairedDevices();
       setPairingStatus({ phase: "listening", events: [], offer });
       try {
         setPairingQr(await QRCode.toDataURL(pairingPayload(offer), { width: 220, margin: 1 }));
@@ -1169,6 +1175,26 @@ function App() {
       setPairingBusy(false);
     }
   }
+
+  // 已配对设备列表：进页面加载一次；配对/移除后手动刷新。
+  async function loadPairedDevices() {
+    try {
+      setPairedDevices(await invoke<PairedCompanion[]>("companion_paired_devices"));
+    } catch { /* 台账读不到就保持现有显示，不挡主流程。 */ }
+  }
+
+  async function unpairDevice(pairingId: string) {
+    try {
+      setPairedDevices(await invoke<PairedCompanion[]>("companion_unpair_device", { pairingId }));
+    } catch (error) {
+      setPairingError(errorMessage(error, "移除配对设备失败。"));
+    }
+  }
+
+  useEffect(() => {
+    void loadPairedDevices();
+    return () => {};
+  }, []);
 
   useEffect(() => {
     if (!pairingOffer) return;
@@ -2119,7 +2145,7 @@ function App() {
                 <div>
                   <p className="eyebrow">伴侣 App（实验）</p>
                   <h2>扫码配对</h2>
-                  <p>用伴侣 App 扫码，与电脑建立一条加密助手通道（一次有效，不保存）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。</p>
+                  <p>用伴侣 App 扫码，与电脑建立加密助手通道并互相记住身份（桌面端与手机端都保存互信凭据，之后重连无需再扫码）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。</p>
                 </div>
               </div>
               <span>
@@ -2153,6 +2179,16 @@ function App() {
                 </div>
               )}
               {pairingError && <p className="capability-pending" role="alert">{pairingError}</p>}
+              {pairedDevices.length > 0 && <div className="trusted-devices" aria-label="已配对的伴侣设备">
+                <strong>已配对的伴侣设备</strong>
+                {pairedDevices.map((device) => <div className="trusted-device" key={device.pairing_id}>
+                  <code>{device.model}</code>
+                  <span>
+                    <button className="text-button danger" type="button" onClick={() => void unpairDevice(device.pairing_id)}>移除互信</button>
+                  </span>
+                </div>)}
+                <p className="capability-pending">移除后，该设备再次连接需要重新扫码配对。</p>
+              </div>}
             </section>
           </section>
 

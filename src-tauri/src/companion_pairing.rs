@@ -363,7 +363,7 @@ pub fn begin_pairing(
     .port();
 
     let offer = PairingOffer {
-        version: 1,
+        version: 2,
         hosts,
         port,
         token: token.clone(),
