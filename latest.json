@@ -1,0 +1,23 @@
+{
+  "version": "0.4.1",
+  "notes": "- **修复：桌面模式白屏**。部分机型（如 MIUI）的桌面不在虚拟屏上渲染，导致桌面模式黑/白屏——现支持「虚拟屏 + 指定应用」组合：在「设置 → 镜像窗口 → 虚拟屏启动的应用」填入应用包名（输入框自动联想手机已装应用），虚拟屏直接打开该应用。\n- **界面调整**：「关于」卡片中「检查更新」按钮移入按钮行（与「打开官网」「GitHub 仓库」并排）。",
+  "pub_date": "2026-09-30T23:30:59Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXpSQUFwcjZZajJTSFhwRE5pZlpqbEEwYUdZYnJNVHhmTHc5ZTFlR2l5NFZaclpyMmc3VzByTmJXVnl1VXQzOUtmc05oSVQyckdqNGxxT0FVU1JLTXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODEwNTQzCWZpbGU6TWlycm9yRG9ja18wLjQuMV94NjQtc2V0dXAuZXhlCXZlcnNpb246MC40LjEKSElsbGRxMlRJeDFhUzhMVWJLRUdPR1VEVlRuUGw4WnMxV0dCcHVpQWpqbHBkNzhxYUtrLzZka3JtVkVDVWt3NTdIc3lQNCtFRzQvZStZVzhHMkIxQ3c9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.1-beta/MirrorDock_0.4.1_x64-setup.exe"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXd5aHZIRkxzc3hpU0tibFFVRGd6T3RHY0Jab1Rvc3BLZUhqTlM4VzAwdTRPdTg5eDhsUUtEKzFscVJIQVJFN2oyOFpoMEhPZXR1aXQ1TzZKc2JReWdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODEwNzI5CWZpbGU6TWlycm9yRG9ja18wLjQuMV9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuNC4xCnZZOEFyd0JLK0k3NlpodUhMRFdaQjc3dE03NGVoaHcxL2k4Tkl3STR2ekxiOFN5K3JWeVRTaVEycTJVbEhBVGprcERTMlZIUkJRQTNpd1NpQjZMVUFRPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.1-beta/MirrorDock_0.4.1_amd64.AppImage"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaStUVC9ML2JIbElRc0thdFYzbkI5N3I0WXp0WERUVkVRRVZSWC90U2FKY0tYaHN3Q3NmQzRvRElzM0dQbXVXaHlHYzJ6dHpWR1RKYjNBTE9md3BqMEEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODEwNzAwCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjEKU25GOHQ1TFdwRmk3M1lmWG1CQUVxclBjMU5nc2M2diszZFI0d0VPMXVOcUt4b3dnL0NOeXNacDZxdTFzQmhKYXE4dHJGV2NNV2RNZEEzankvVmZKQ0E9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.1-beta/MirrorDock_0.4.1_x64.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTVOU3pLcFljMVJienV1WVAxV2QxbThLVE9rdktLTGQ1ZFRnSFcrTWgvY0QzemJHem9kOXlSNWpTRXBldjFKSFZ3dG02NWZTY1hPK1JZcGJnNGNtbkFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwODEwNTc1CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjEKTUkxdmtha01kR0hFNE4wcnRVcHY1aVhIcTZGQ25qYzJIQmFFVFN1WXdoNVUrejNNTUI4YzAzYVpYUWFFQ0VSd0J2ZENBNFFLNHZuWUY5RmJ4enhDQ3c9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.1-beta/MirrorDock_0.4.1_aarch64.app.tar.gz"
+    }
+  }
+}
