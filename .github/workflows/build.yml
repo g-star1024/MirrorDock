@@ -184,7 +184,8 @@ jobs:
           curl -sL -o sdl3.tar.gz "https://codeload.github.com/libsdl-org/SDL/tar.gz/refs/tags/release-3.4.16"
           echo "c2ee715e42ec520c4d11fd8d249ef1d2b2baf4ad31148b72b3b000276c0b3633  sdl3.tar.gz" | sha256sum -c -
           tar -xzf sdl3.tar.gz
-          cmake -S SDL3-3.4.16 -B sdl3-build -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF
+          # codeload 的顶层目录带 tag 前缀：SDL-release-3.4.16
+          cmake -S SDL-release-3.4.16 -B sdl3-build -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF
           cmake --build sdl3-build -j2
           sudo cmake --install sdl3-build
           sudo ldconfig
