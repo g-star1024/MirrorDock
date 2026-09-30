@@ -178,6 +178,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # ⓪ SDL3：scrcpy 4.x 依赖 SDL3（v0.3.0 首跑实锤：meson 报 sdl3 not
+          #   found，Ubuntu 22.04 仓库只有 SDL2），从官方源码编译安装（固定 tag
+          #   + 固定源码哈希）。
+          curl -sL -o sdl3.tar.gz "https://codeload.github.com/libsdl-org/SDL/tar.gz/refs/tags/release-3.4.16"
+          echo "c2ee715e42ec520c4d11fd8d249ef1d2b2baf4ad31148b72b3b000276c0b3633  sdl3.tar.gz" | sha256sum -c -
+          tar -xzf sdl3.tar.gz
+          cmake -S SDL3-3.4.16 -B sdl3-build -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF
+          cmake --build sdl3-build -j2
+          sudo cmake --install sdl3-build
+          sudo ldconfig
           # ① 源码（codeload 直链，SHA-256 写死）
           curl -sL -o scrcpy-src.tar.gz "https://codeload.github.com/Genymobile/scrcpy/tar.gz/refs/tags/v4.1"
           echo "537b2ade623cb94b6edddfa5c61bf0b0af21484aa8365ea2531b686ea573249a  scrcpy-src.tar.gz" | sha256sum -c -

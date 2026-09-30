@@ -8,7 +8,7 @@ MirrorDock 是一个**本地优先**的 Android 桌面镜像与控制工具，�
 
 画面、音频与控制仅在电脑与已授权手机之间点对点传输。**不依赖云端、不默认上传任何数据、不收集遥测。**
 
-当前版本：`0.4.0`（桌面端）· `0.1.9`（伴侣 App）。
+当前版本：`0.3.0`（桌面端）· `0.1.9`（伴侣 App）。
 
 ## 功能特性
 
@@ -63,7 +63,19 @@ MirrorDock 的安全模型是一条明确的红线，也是产品差异化所在
 | --- | --- |
 | 电脑 | Windows 10+（x64）/ macOS 12+（Intel 或 Apple Silicon）/ 主流 Linux 发行版 |
 | 手机 | Android 7.0+（USB 镜像）；Android 11+（无线调试配对） |
-| 依赖 | 无需安装。Windows / macOS 安装包内置 scrcpy 与 adb；Linux 安装包同样内置 scrcpy 与 adb（源码编译随包），但需要发行版提供运行库：`sudo apt install libsdl2-2.0-0 libavcodec58 libavformat58 libavutil56 libswscale5 libusb-1.0-0`（Ubuntu 22.04+，Fedora/Arch 对应包名不同） |
+| 依赖 | 无需安装。Windows / macOS 安装包内置 scrcpy 与 adb；Linux 安装包同样内置 scrcpy 与 adb（源码编译随包），但需要发行版提供运行库：Ubuntu 25.04+ 可 `sudo apt install libsdl3-0 libavcodec61 libavformat61 libavutil59 libswresample5 libusb-1.0-0`，Ubuntu 22.04/24.04 需先获取 SDL3（见下）。 |
+
+### Linux 运行库说明（诚实版本）
+
+scrcpy 4.x 依赖 **SDL3**，Ubuntu 22.04/24.04 的官方仓库尚未收录。安装 MirrorDock 后若镜像无法启动：
+
+```sh
+# 方式一：升级到 Ubuntu 25.04+ / Debian 13+ / Fedora 42+ 等已收录 SDL3 的发行版
+# 方式二：手动编译 SDL3（约 3 分钟）：
+#   git clone --depth 1 -b release-3.4.16 https://github.com/libsdl-org/SDL
+#   cmake -S SDL -B SDL/build -DCMAKE_BUILD_TYPE=Release && cmake --build SDL/build -j4
+#   sudo cmake --install SDL/build && sudo ldconfig
+```
 
 ## 自动更新
 

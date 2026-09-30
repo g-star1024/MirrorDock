@@ -4,7 +4,7 @@
 
 - **用途：** MirrorDock 使用 `scrcpy` 进程启动已授权 Android 设备的镜像窗口。以固定 `--serial <serial>` 参数直接执行，不使用 shell，不执行设备或网络提供的内容。
 - **上游：** [Genymobile/scrcpy](https://github.com/Genymobile/scrcpy)
-- **开发基线：** v4.1（固定）。**Windows 与 macOS 安装包随包分发该版本**；Linux 自 v0.3.0 起同样随包分发——由构建流水线从官方源码（固定 tag + 固定源码 SHA-256）编译，配套 scrcpy-server（按 GitHub 官方 release 元数据中的 SHA-256 digest 校验）与 Google platform-tools 的 adb（固定版本 + 固定 SHA-256），校验不符即终止构建。编译产物动态链接 SDL2/FFmpeg 运行库，这些库不随包，由用户的发行版提供（见 README 系统要求）。
+- **开发基线：** v4.1（固定）。**Windows 与 macOS 安装包随包分发该版本**；Linux 自 v0.3.0 起同样随包分发——由构建流水线从官方源码（固定 tag + 固定源码 SHA-256）编译，配套 scrcpy-server（按 GitHub 官方 release 元数据中的 SHA-256 digest 校验）与 Google platform-tools 的 adb（固定版本 + 固定 SHA-256），校验不符即终止构建。**scrcpy 4.x 依赖 SDL3**：构建流水线一并从官方源码（release-3.4.16 + 固定 SHA-256）编译；SDL3 与 FFmpeg 等运行时动态库不随包，由用户的发行版提供（见 README 的 Linux 运行库说明）。
 - **许可证：** Apache License 2.0。随包分发的安装包内置 scrcpy 官方包内的 `LICENSE` 原件与 `THIRD_PARTY_NOTICES.md` 说明。
 - **供应链校验（构建流水线强制执行，哈希不符即终止构建）：**
 
