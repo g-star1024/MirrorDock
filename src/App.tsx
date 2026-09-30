@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
@@ -483,6 +484,9 @@ function App() {
   const [revokeArmedSerial, setRevokeArmedSerial] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeNotice, setRevokeNotice] = useState<{ text: string; error: boolean } | null>(null);
+  // macOS 宿主输入源被自动托管时的提示（X10-39）：第三方输入法会吞掉镜像输入
+  // 的原始键码，后端已临时切到系统输入源，会话结束后自动恢复。
+  const [hostImNotice, setHostImNotice] = useState<string | null>(null);
   // 取消授权成功后立即把这台设备从列表隐藏（X10-33）：调试开关已关，adb 列表
   // 通常几秒内自己消失，隐藏让它不闪一下「离线」。设备重新就绪（重新授权）即自动恢复显示。
   // 隐藏清单持久化到本机存储（X10-35）：离线设备的取消授权指令往往送不到手机，
@@ -1394,6 +1398,26 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // 宿主输入源托管提示（X10-39）：仅真实 Tauri 环境有事件通道。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen("host-input-source-switched", () => {
+      setHostImNotice(
+        "你正在使用第三方输入法，它会导致镜像窗口收不到键盘输入。已临时切换到系统输入法，镜像结束后会自动恢复你的输入法。",
+      );
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
   // 选中设备变化时重新探测能力信息。只读取设备信息，不启动镜像。
   // 探测结果用于设置页「转发手机声音」开关的一致性；能力说明文案在帮助中心。
   useEffect(() => {
@@ -1576,6 +1600,20 @@ function App() {
                       aria-label="关闭这条通知"
                       title="关闭"
                       onClick={() => setRevokeNotice(null)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                {hostImNotice && (
+                  <div className="notice-dismissable" role="status">
+                    <p className="diagnostic">{hostImNotice}</p>
+                    <button
+                      className="notice-close"
+                      type="button"
+                      aria-label="关闭这条通知"
+                      title="关闭"
+                      onClick={() => setHostImNotice(null)}
                     >
                       ×
                     </button>

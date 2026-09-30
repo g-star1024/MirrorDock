@@ -480,6 +480,14 @@
   - **机理与可行性结论**：①UHID 模式是物理键盘语义，按键原始键码直送手机、不经过 Mac 输入法组字（scrcpy 官方文档明确 UHID「works for all characters and IME」是靠手机端输入法）；②`--keyboard=sdk`（原 scrcpy 模式）对中文**静默丢弃**——v4.1 服务端 `Controller.injectText` 逐字符走 `KeyCharacterMap.getEvents`，映射不到（中文/Emoji）即 `getEvents()==null` 跳过并记警告，**无剪贴板兜底**（剪贴板粘贴是独立的 `TYPE_SET_CLIPBOARD` 消息，需显式 paste 标志）；③第三方输入法（WeType/搜狗等）激活时把 keyDown 消费进自身组字缓冲，SDL 收不到原始键，UHID/sdk 两条路都断。**结论：无法在客户端层「支持第三方输入法直接打字」，这是 scrcpy/macOS 生态限制，Escrcpy/QtScrcpy 同样存在；正确姿势 = Mac 切系统自带输入法 + 中文由手机端输入法组字，或 Mod+v 粘贴中文。**
   - **文档同步**：帮助中心 FAQ 新增「Mac 上装了第三方输入法时打字没反应？」条目（机理 + 切换系统输入法恢复 + 中文两种推荐姿势）。
   - **候选增强（未实现，待拍板）**：会话启动时只读检测当前输入源（`defaults read com.apple.HIToolbox AppleSelectedInputSources`，bundle id 非 `com.apple.*` 判为第三方），在状态栈如实提示「第三方输入法可能导致打字无效」并给切换建议；不代切输入法（改用户系统状态违反「引导不绕过」哲学）。
+- [x] X10-39 macOS 宿主输入源自动托管：镜像会话期间临时切换到系统输入源、结束后恢复（用户裁定 X10-38 候选增强方案：「只提示用户体验太差」，要求自动切换，2026-09-30）。
+  - **决策变更说明**：X10-38 曾以「不代切输入法」为由只做提示；用户明确否决（「只提示用户体验太差，应该是镜像输入时自动切换到系统自带输入法，输入完毕后切回」）。范围界定为**会话粒度**的托管：开始镜像时切、最后一台会话结束（或退出/崩溃恢复）时还原；打字起止无法可靠探测，会话粒度是稳妥实现。
+  - **新模块 `src-tauri/src/input_source.rs`**：Carbon TIS FFI（`TISCopyCurrentKeyboardInputSource` / `TISGetInputSourceProperty` / `TISSelectInputSource` / `TISCreateInputSourceList`，链接 Carbon + CoreFoundation，无新依赖、无权限要求）。`is_third_party`＝bundle id 不以 `com.apple.` 开头；切换目标三级偏好：`com.apple.keylayout.ABC` → 任意 Apple 布局 → **Apple 自家输入法**（`com.apple.inputmethod.*`）——真机取证发现用户可能没启用任何英文布局（实测该机只有 SCIM 拼音），第三级兜底必不可少。恢复按 bundle id 全量列表（`include_all_installed=true`，覆盖第三方输入法这类「输入模式」）。非 macOS 平台为空操作。
+  - **真机端到端验证**（ctypes 复刻同款 FFI）：当前输入源读出 `com.tencent.inputmethod.wetype`；`TISSelectInputSource(SCIM)==0` 且 current 变为 SCIM；还原 wetype==0 且 current 复原。切换/恢复无需任何 TCC 权限。
+  - **lib.rs 编排**：`HOST_INPUT_SOURCE_BACKUP`（OnceLock 全局，输入源是宿主全局资源，多设备共享一次切换）；`maybe_switch_host_input_source`（幂等：已托管/系统输入源/读取失败/切换失败均静默跳过，绝不阻断镜像）挂 `start_mirroring`、托盘启动、`update_session_options`（重启会话补检）三处；`maybe_restore_host_input_source`（仅在 `count_running_processes()==0` 时还原，否则把备份放回）挂 `stop_mirroring`、会话监视器退出、托盘「断开连接」三处；托盘「退出 MirrorDock」退出前强制还原。崩溃账本 `input-source-backup.json` 落 app_data_dir，启动时 `restore_persisted_input_source` 读取→恢复→删除。
+  - **前端提示**：监听 `host-input-source-switched` 事件，状态栈显示可关闭通知「已临时切换到系统输入法，镜像结束后自动恢复」。
+  - **文档**：README 功能列表补「macOS 输入法自动托管」；帮助中心 FAQ X10-38 条目改写为自动处理说明（0.2.9 起生效）。
+  - 验证：`cargo test --lib` **172 项全过**（新增 `input_source` 模块 4 项纯逻辑测试：第三方判定/切换触发条件/恢复触发条件）；tsc 待跑见下；版本 0.2.9，tag `v0.2.9-beta` 走 CI 发布。
 
 ## 最终成品退出条件
 

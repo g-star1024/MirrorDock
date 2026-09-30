@@ -4,9 +4,9 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 会话状态机轮询运行中进程的间隔。
 const MONITOR_INTERVAL: Duration = Duration::from_millis(200);
@@ -1367,6 +1367,14 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                 disable_wireless_keep_awake(adb.as_ref(), &store, &serial);
             }
             prune_idle_entry(&store, &serial);
+            // 输入源恢复（X10-39）：这是最后一台运行中的会话时，把输入法还给用户。
+            if let Some(app) = TRAY_APP.get() {
+                let running = store
+                    .lock()
+                    .map(|map| count_running_processes(&map))
+                    .unwrap_or(usize::MAX);
+                maybe_restore_host_input_source(app, running);
+            }
             return;
         }
     });
@@ -2020,6 +2028,108 @@ fn write_keep_awake_ledger(path: &Path, ledger: &[KeepAwakeBackup]) -> Result<()
 }
 
 // ---------------------------------------------------------------------------
+// 宿主输入源自动切换（X10-39）
+//
+// UHID 物理键盘语义下，macOS 第三方输入法（微信输入法、搜狗等）激活时会把
+// 按键事件消费进组字缓冲，scrcpy 收不到原始键，感知为「打字不生效」（X10-38
+// 真机定案）。会话期间临时切到系统英文布局，结束（或退出/崩溃残留）后恢复。
+// 输入源是宿主全局资源：多台并发设备共享同一次切换与同一次恢复。
+// ---------------------------------------------------------------------------
+
+/// 本次运行期间已托管的输入源 bundle id（用户原来的输入法）。
+static HOST_INPUT_SOURCE_BACKUP: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn host_input_source_backup_cell() -> &'static Mutex<Option<String>> {
+    HOST_INPUT_SOURCE_BACKUP.get_or_init(|| Mutex::new(None))
+}
+
+/// 崩溃恢复账本：切换发生时落盘，应用下次启动时照此恢复并删除。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InputSourceBackupEntry {
+    bundle_id: String,
+}
+
+fn input_source_backup_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("input-source-backup.json"))
+        .map_err(|_| {
+            AppError::new(
+                "settings_unavailable",
+                "无法访问本机设置。",
+                "请检查本机文件权限，或重新安装 MirrorDock。",
+            )
+        })
+}
+
+/// 镜像会话开始时调用：当前输入源是第三方输入法时，临时切到系统英文布局。
+///
+/// 幂等：已托管（多台并发/会话重启）时是空操作。切换只在「确实切走了」时落盘
+/// 与通知，任何失败都静默跳过——输入法问题绝不能阻断镜像本身。
+fn maybe_switch_host_input_source(app: &AppHandle) {
+    let Ok(mut backup) = host_input_source_backup_cell().lock() else {
+        return;
+    };
+    let current = input_source::current_bundle_id();
+    if !input_source::should_attempt_switch(current.as_deref(), backup.is_some()) {
+        return;
+    }
+    if !input_source::switch_to_system_ascii() {
+        return;
+    }
+    let current = current.expect("should_attempt_switch guarantees Some");
+    // 账本先落盘再改内存：进程在两者之间被杀，下次启动仍能恢复。
+    if let Ok(path) = input_source_backup_path(app) {
+        if let Ok(payload) = serde_json::to_vec(&InputSourceBackupEntry { bundle_id: current.clone() }) {
+            let _ = fs::write(path, payload);
+        }
+    }
+    *backup = Some(current);
+    // 通知前端展示一次性提示（会话结束后自动恢复，用户不该被静默换输入法）。
+    let _ = app.emit("host-input-source-switched", ());
+}
+
+/// 镜像会话结束时调用：没有还在运行的会话时，把输入源还给用户。
+fn maybe_restore_host_input_source(app: &AppHandle, running_processes: usize) {
+    let taken = host_input_source_backup_cell()
+        .lock()
+        .ok()
+        .and_then(|mut backup| backup.take());
+    let Some(bundle_id) = taken else {
+        return;
+    };
+    if !input_source::should_attempt_restore(running_processes, true) {
+        // 还有会话在跑：把备份放回去，等最后一台结束再恢复。
+        if let Ok(mut backup) = host_input_source_backup_cell().lock() {
+            *backup = Some(bundle_id);
+        }
+        return;
+    }
+    // 选不回（比如输入法被卸载）也照样清理：留在英文布局无害，用户手动可切。
+    let _ = input_source::switch_to_bundle(&bundle_id);
+    if let Ok(path) = input_source_backup_path(app) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// 当前仍在运行的镜像会话数量（持有进程的设备）。
+fn count_running_processes(map: &BTreeMap<String, SessionState>) -> usize {
+    map.values().filter(|state| state.process.is_some()).count()
+}
+
+/// 应用启动时调用：恢复上次崩溃残留的输入源账本（读取 → 恢复 → 删除）。
+fn restore_persisted_input_source(path: &Path) {
+    let Ok(bytes) = fs::read(path) else {
+        return;
+    };
+    let _ = fs::remove_file(path);
+    let Ok(entry) = serde_json::from_slice::<InputSourceBackupEntry>(&bytes) else {
+        return;
+    };
+    let _ = input_source::switch_to_bundle(&entry.bundle_id);
+}
+
+// ---------------------------------------------------------------------------
 // 变暗（DIM）守护
 //
 // 第二段根因链（2026-09-29 真机实测，Redmi M2104K10AC / Android 13 / MIUI）：
@@ -2242,7 +2352,11 @@ fn refresh_tray_menu(app: &AppHandle) {
 fn handle_tray_event(app: &AppHandle, id: &str) {
     match id {
         "tray-open" => show_main_window(app),
-        "tray-quit" => app.exit(0),
+        "tray-quit" => {
+            // 退出前把临时切换的宿主输入源还给用户（X10-39）。
+            maybe_restore_host_input_source(app, 0);
+            app.exit(0)
+        }
         "tray-wake" => tray_wake(app),
         "tray-screenshot" => tray_screenshot(app),
         "tray-connect" => tray_connect_toggle(app),
@@ -2286,6 +2400,12 @@ fn tray_connect_toggle(app: &AppHandle) {
                     }
                     prune_idle_entry(&sessions, &serial);
                 }
+                // 托盘断开是全部会话一起结束：这是恢复宿主输入法的时机（X10-39）。
+                let running = sessions
+                    .lock()
+                    .map(|map| count_running_processes(&map))
+                    .unwrap_or(usize::MAX);
+                maybe_restore_host_input_source(app, running);
             }
             Err(error) => tray_notify_error(app, &error.message),
         }
@@ -2306,6 +2426,9 @@ fn tray_connect_toggle(app: &AppHandle) {
     let result =
         start_mirroring_with(&runtimes, &sessions, serial.clone(), SessionOptions::default(), None);
     log.record_outcome("mirror_start", result.as_ref().err(), &[&serial, &label]);
+    if result.is_ok() {
+        maybe_switch_host_input_source(app);
+    }
     if let Err(error) = result {
         tray_notify_error(app, &error.message);
     }
@@ -4443,6 +4566,10 @@ fn start_mirroring(
     log.record_outcome("mirror_start", result.as_ref().err(), &[&serial]);
     result?;
 
+    // 会话已启动：若宿主输入源是第三方输入法，临时切到系统英文布局，保证
+    // 镜像窗口能收到键盘原始键码（X10-38）。幂等；失败静默，不阻断镜像。
+    maybe_switch_host_input_source(&app);
+
     // 只有成功启动才记入最近设备；读取人类可读的名称失败时退回序列号。
     let serial = serial.trim().to_owned();
     let label = runtimes
@@ -4758,6 +4885,12 @@ fn stop_mirroring(
             }
             None => disable_all_wireless_keep_awake(runtimes.adb.as_ref(), &sessions),
         }
+        // 输入源恢复（X10-39）：全部会话都结束后，把宿主输入法还给用户。
+        let running = sessions
+            .lock()
+            .map(|map| count_running_processes(&map))
+            .unwrap_or(usize::MAX); // 锁不可用时保守处理：视为仍在运行，不恢复。
+        maybe_restore_host_input_source(&app, running);
     }
     refresh_tray_menu(&app);
     result
@@ -4833,6 +4966,10 @@ fn update_session_options(
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = apply_session_options_with(&runtimes, &sessions, options, record_path, serial);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
+    if result.is_ok() {
+        // 重启会话期间用户可能刚换了第三方输入法；幂等补一次托管（X10-39）。
+        maybe_switch_host_input_source(&app);
+    }
     refresh_tray_menu(&app);
     result
 }
@@ -5837,6 +5974,7 @@ pub mod licensing {
 
 use licensing::Edition;
 mod companion_pairing;
+mod input_source;
 
 fn entitlement_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
     app.path().app_data_dir().map_err(|_| {
@@ -6115,6 +6253,10 @@ pub fn run() {
             // 设备未连接时还原失败，备份文件保留，下次启动再试。
             if let Ok(backup_path) = keep_awake_backup_path(app.handle()) {
                 restore_persisted_keep_awake(&SystemAdbRuntime, &backup_path);
+            }
+            // 上次运行若因崩溃残留了「临时切换的输入源」账本，这里恢复原输入法。
+            if let Ok(path) = input_source_backup_path(app.handle()) {
+                restore_persisted_input_source(&path);
             }
             Ok(())
         })
