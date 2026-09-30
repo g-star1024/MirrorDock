@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
 import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plugin-dialog";
 // 会话中的系统级快捷键：镜像窗口（scrcpy 窗口）持有焦点时主窗口收不到键盘事件，
@@ -484,6 +485,8 @@ function App() {
   const [revokeArmedSerial, setRevokeArmedSerial] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeNotice, setRevokeNotice] = useState<{ text: string; error: boolean } | null>(null);
+  // 「关于」板块的应用版本（tauri.conf.json 的 version，随包分发）。
+  const [appVersion, setAppVersion] = useState<string>("");
   // macOS 宿主输入源被自动托管时的提示（X10-39）：第三方输入法会吞掉镜像输入
   // 的原始键码，后端已临时切到系统输入源，会话结束后自动恢复。
   const [hostImNotice, setHostImNotice] = useState<string | null>(null);
@@ -590,6 +593,10 @@ function App() {
         const enabled = await invoke<unknown>("plugin:autostart|is_enabled");
         if (!disposed) setAutostartEnabled(enabled === true);
       } catch { /* 非 Tauri 环境（浏览器/测试）没有该命令，保持关闭 */ }
+      try {
+        const version = await getVersion();
+        if (!disposed) setAppVersion(version);
+      } catch { /* 非 Tauri 环境读不到版本，留空即可 */ }
     })();
     return () => { disposed = true; };
   }, []);
@@ -1406,7 +1413,7 @@ function App() {
     let unlisten: (() => void) | null = null;
     void listen("host-input-source-switched", () => {
       setHostImNotice(
-        "你正在使用第三方输入法，它会导致镜像窗口收不到键盘输入。已临时切换到系统输入法，镜像结束后会自动恢复你的输入法。",
+        "当前输入法会导致镜像窗口打字无效。已临时切换到 ABC 布局，镜像结束后会自动恢复你原来的输入法。",
       );
     })
       .then((dispose) => {
@@ -2247,6 +2254,27 @@ function App() {
                 )}
                 {licenseMessage && <p className="setting-note" role="status">{licenseMessage}</p>}
                 {licenseError && <p className="diagnostic" role="alert">{licenseError}</p>}
+              </div>
+            </section>
+
+            {/* 关于：版本、开发者、许可与项目链接（X10-41）。 */}
+            <section className="settings-card">
+              <header className="settings-card-head">
+                <div><h2>关于 MirrorDock</h2><p>版本、开源许可与项目链接。</p></div>
+              </header>
+              <div className="settings-rows">
+                <p className="setting-note">当前版本：{appVersion || "—"}（测试版）</p>
+                <p className="setting-note">开发者：MirrorDock 项目（g-star1024），个人开源项目，欢迎在仓库提 Issue 反馈问题。</p>
+                <p className="setting-note">开源许可：Apache-2.0。镜像引擎基于 scrcpy（Apache-2.0）；全部第三方组件的版权声明见安装目录内的 THIRD_PARTY_NOTICES 文件。</p>
+                <p className="setting-note">隐私承诺：本地优先，画面与文件只经过你的数据线或局域网，不经过任何服务器。</p>
+                <div className="settings-actions">
+                  <button type="button" className="secondary-button" onClick={() => void openUrl("https://g-star1024.github.io/MirrorDock/")}>
+                    打开官网
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => void openUrl("https://github.com/g-star1024/MirrorDock")}>
+                    GitHub 仓库
+                  </button>
+                </div>
               </div>
             </section>
           </section>

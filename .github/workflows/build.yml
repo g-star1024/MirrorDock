@@ -287,12 +287,22 @@ jobs:
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${id}"
             done
           fi
-      # 正文单一来源：docs/release-notes-beta.md（版本无关写法，避免过期）；
-      # 末尾追加一条随 tag 变化的「完整变更记录」链接，补回原先自动生成的 Changelog 入口。
+      # 正文 = 「本版更新内容」（docs/releases/<tag>.md，每版手写，存在才展示）
+      #       + docs/release-notes-beta.md（固定模板，版本无关写法，避免过期）；
+      # 末尾追加一条随 tag 变化的「完整变更记录」链接。
+      # X10-41 用户反馈：固定文案不友好，每次发布要写清楚更新了哪些内容。
       - name: 创建 Release
         run: |
           set -euo pipefail
           {
+            if [ -f "docs/releases/${TAG}.md" ]; then
+              echo "## 本版更新内容"
+              echo
+              cat "docs/releases/${TAG}.md"
+              echo
+              echo "---"
+              echo
+            fi
             cat docs/release-notes-beta.md
             echo
             echo "**完整变更记录**：https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"

@@ -494,6 +494,14 @@
   - **修复**：属性 key 统一改为按值读取（`tis_property_bundle_id_key()`：`unsafe { kTISPropertyBundleID }` 加载槽位里的 CFStringRef），三处调用点同改。
   - **防回归**：新增走**真实 Rust FFI** 的只读冒烟测试 `current_bundle_id_smoke_test_via_real_ffi`（断言读到非空 bundle id）——上一轮只用 Python ctypes 验证了语义、未覆盖 Rust 侧传参，这是教训；cargo test 在测试进程内直接调用 TIS，传参再错会当场崩。
   - 版本 0.2.10，tag `v0.2.10-beta` 重发 CI；`cargo test --lib` **173 项全过**。
+- [x] X10-41 修复：镜像打字自动切换目标改为**强制 ABC**（用户真机反馈：拼音模式下同样无法输入）+ 设置页新增「关于」板块 + Release 正文加「本版更新内容」（2026-09-30）。
+  - **ABC 强制策略**：X10-39 的三级兜底在该机上落到系统拼音（SCIM）——用户实测「只有 ABC 能正常输入，拼音模式也不行」。新策略：当前输入源不是 `com.apple.keylayout.ABC` 就切（含第三方输入法、系统拼音、其它布局）；ABC 未启用时先 `TISEnableInputSource` 再选中（禁用态无法直接选中），恢复时还原这一临时启用（`ABC_ENABLED_BY_US` AtomicBool + `TISDisableInputSource`，失败静默）。
+  - **关键取证**：新版 macOS 把键盘布局的 BundleID 统一收敛为 `com.apple.keyboardlayout.all`（全量 309 条里无任何 `com.apple.keylayout.*` 的 BundleID）——按 BundleID 匹配 ABC 永远找不到。改用 **InputSourceID**（`kTISPropertyInputSourceID`）作身份串：`source_identity()` 优先 InputSourceID、回退 BundleID；`current_bundle_id`/`switch_to_system_ascii`/`switch_to_bundle` 全部改按身份串匹配。备份/恢复往返一致（备份存的就是身份串）。
+  - **真机端到端验证**（ctypes 复刻）：`wetype → ABC(status 0) → wetype(status 0)` 往返成功；`AppleCurrentKeyboardLayoutInputSourceID` 印证 ABC 的 InputSourceID。
+  - **设置页「关于 MirrorDock」卡片**：版本号（`getVersion`）、开发者（g-star1024）、开源许可（Apache-2.0 + scrcpy 声明 + THIRD_PARTY_NOTICES 指引）、隐私承诺、官网 / GitHub 仓库按钮（`plugin-opener` 的 `openUrl`，capability 已有 `opener:default`）。测试补 `@tauri-apps/api/app` mock；`explains_when_the_mirror_runtime_itself_is_missing` 因新卡片出现 scrcpy 字样改用精确文本查询。
+  - **Release 正文改进（用户反馈：固定文案不友好）**：build.yml 创建 Release 时若存在 `docs/releases/<tag>.md` 则在固定模板前输出「## 本版更新内容」栏目；本期新建 `docs/releases/v0.2.11-beta.md`。
+  - 文档：帮助中心 FAQ 输入法条目改写（0.2.11 自动切 ABC）；README/官网版本行同步 0.2.11。
+  - 验证：`cargo test --lib` **171 项全过**（is_third_party 移除：新策略不再需要该判定，-2 测试）；tsc / vitest **41** / pnpm build 全过；版本 0.2.11，tag `v0.2.11-beta` 走 CI 发布。
 
 ## 最终成品退出条件
 

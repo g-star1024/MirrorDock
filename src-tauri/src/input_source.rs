@@ -5,31 +5,30 @@
 //! scrcpy 窗口收不到任何原始键，用户感知为「打字不生效」（X10-38 真机定案）。
 //!
 //! 方案：镜像会话开始时，若当前输入源是第三方输入法，临时切换到系统自带的
-//! 输入源（ABC 布局 → 其它 Apple 布局 → Apple 自家输入法，逐级兜底）；最后一个
-//! 会话结束（或应用退出）时恢复用户原来的输入源。切换动作
-//! 通过 Carbon 的 TIS（Text Input Source Services）API 完成，无弹窗、无辅助
-//! 功能权限要求。
+//! ABC 布局（未启用则先启用；X10-41 定案只有 ABC 能让镜像输入可用，拼音等
+//! 输入法模式一律不行）；最后一个会话结束（或应用退出）时恢复用户原来的输入
+//! 源。切换动作通过 Carbon 的 TIS（Text Input Source Services）API 完成，
+//! 无弹窗、无辅助功能权限要求。
 //!
 //! 平台边界：只在 macOS 实现；Windows/Linux 编译为空操作（调用方会得到
 //! `None`/`false`，自然跳过一切逻辑）。
 
-/// 判断 bundle id 是否属于第三方输入源（非 Apple 出品）。
-///
-/// 第三方输入法的 bundle id 一定不以 `com.apple.` 开头；系统自带布局是
-/// `com.apple.keylayout.*`，系统自带输入法是 `com.apple.inputmethod.*`。
-pub fn is_third_party(bundle_id: &str) -> bool {
-    !bundle_id.starts_with("com.apple.")
-}
+/// ABC 布局的 InputSourceID（新版 macOS 上布局的 bundle id 统一收敛成
+/// `com.apple.keyboardlayout.all`，只能靠 InputSourceID 区分，真机实测）。
+pub(crate) const ABC_SOURCE_ID: &str = "com.apple.keylayout.ABC";
 
 /// 会话开始时的纯决策：是否需要尝试切换输入源。
 ///
 /// `already_managed` 表示本次应用运行期间已经切过一次（有备份）——输入源是
 /// 宿主全局的，多台并发设备共享同一次切换，不必重复。
+/// X10-41 真机定案：**只有 ABC 布局能让镜像输入可用**（第三方输入法与拼音
+/// 等输入法模式都会吞键/组字），因此「当前不是 ABC」就值得切。
 /// 返回 `true` 只代表「值得尝试」；实际切换可能失败（系统拒绝），由调用方兜底。
-pub(crate) fn should_attempt_switch(current: Option<&str>, already_managed: bool) -> bool {    if already_managed {
+pub(crate) fn should_attempt_switch(current: Option<&str>, already_managed: bool) -> bool {
+    if already_managed {
         return false;
     }
-    current.is_some_and(is_third_party)
+    current.is_some_and(|id| id != ABC_SOURCE_ID)
 }
 
 /// 会话结束时的纯决策：是否需要恢复用户原来的输入源。
@@ -46,7 +45,13 @@ pub(crate) fn should_attempt_restore(running_processes: usize, has_backup: bool)
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use super::ABC_SOURCE_ID;
     use std::ffi::{c_char, c_int, c_long, c_void, CStr};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// ABC 是否是本次运行中由我们临时启用的（X10-41）：恢复时据此关回去，
+    /// 不动用户原本的启用状态。进程崩溃残留的代价是输入法菜单多一个 ABC——无害。
+    static ABC_ENABLED_BY_US: AtomicBool = AtomicBool::new(false);
 
     // Carbon/HIToolbox 的 TIS API。TISInputSourceRef 本质是 CFTypeRef（*mut c_void）。
     #[link(name = "Carbon", kind = "framework")]
@@ -54,11 +59,14 @@ mod imp {
         fn TISCopyCurrentKeyboardInputSource() -> *mut c_void;
         fn TISGetInputSourceProperty(source: *mut c_void, key: *const c_void) -> *mut c_void;
         fn TISSelectInputSource(source: *mut c_void) -> c_int; // OSStatus，0 = 成功
+        fn TISEnableInputSource(source: *mut c_void) -> c_int;
+        fn TISDisableInputSource(source: *mut c_void) -> c_int;
         fn TISCreateInputSourceList(
             properties: *const c_void,
             include_all_installed: bool,
         ) -> *mut c_void; // CFArrayRef（调用方持有，需释放）
         static kTISPropertyBundleID: *const c_void; // CFStringRef 属性键，取地址使用
+        static kTISPropertyInputSourceID: *const c_void;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -76,9 +84,6 @@ mod imp {
 
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
-    /// 系统自带的美式英文布局：恢复镜像输入能力的首选目标。
-    const PREFERRED_ASCII_LAYOUT: &str = "com.apple.keylayout.ABC";
-
     /// `kTISPropertyBundleID` 的正确取值。它是一个**导出的数据符号**，槽位里
     /// 存的是 CFStringRef——属性 key 必须传「槽位里的值」。X10-40 教训：曾用
     /// `addr_of!` 把槽位地址当 key 传给 TIS，Carbon 拿垃圾指针当 CFString 解引用，
@@ -86,6 +91,11 @@ mod imp {
     fn tis_property_bundle_id_key() -> *const c_void {
         // extern static 的按值读取必须落在 unsafe 里；load 一次缓存于调用栈。
         unsafe { kTISPropertyBundleID }
+    }
+
+    /// `kTISPropertyInputSourceID` 的取值，语义同上（X10-41）。
+    fn tis_property_input_source_id_key() -> *const c_void {
+        unsafe { kTISPropertyInputSourceID }
     }
 
     fn cfstring_to_string(value: *const c_void) -> Option<String> {
@@ -102,37 +112,99 @@ mod imp {
         Some(unsafe { CStr::from_ptr(buffer.as_ptr()) }.to_string_lossy().into_owned())
     }
 
-    /// 当前键盘输入源的 bundle id。第三方输入法（输入模式）激活时，这里返回
-    /// 该输入法自己的 bundle id——正是我们要识别并临时切换掉的对象。
+    /// 输入源的「身份串」：优先 InputSourceID，读不到再退 BundleID。
+    ///
+    /// 为什么要两者：新版 macOS 把键盘布局的 BundleID 统一收敛成
+    /// `com.apple.keyboardlayout.all`（真机实测，布局条目全部同名），只有
+    /// InputSourceID（`com.apple.keylayout.ABC` 等）能区分具体布局；而第三方
+    /// 输入法只有 BundleID 可用。备份/恢复/切换目标统一用这个身份串。
+    fn source_identity(source: *mut c_void) -> Option<String> {
+        unsafe {
+            let by_id = cfstring_to_string(TISGetInputSourceProperty(
+                source,
+                tis_property_input_source_id_key(),
+            ));
+            by_id.or_else(|| {
+                cfstring_to_string(TISGetInputSourceProperty(
+                    source,
+                    tis_property_bundle_id_key(),
+                ))
+            })
+        }
+    }
+
+    /// 当前键盘输入源的身份串。第三方输入法（输入模式）激活时返回它的
+    /// BundleID（如微信输入法）——正是我们要识别并临时切换掉的对象。
     pub fn current_bundle_id() -> Option<String> {
         unsafe {
             let source = TISCopyCurrentKeyboardInputSource();
             if source.is_null() {
                 return None;
             }
-            let value = TISGetInputSourceProperty(
-                source,
-                tis_property_bundle_id_key(),
-            );
-            let result = cfstring_to_string(value);
+            let result = source_identity(source);
             CFRelease(source as *const c_void);
             result
         }
     }
 
-    /// 切换到系统自带的输入源（真机实测有效，X10-39）。按三级偏好挑选：
-    /// ① ABC 布局；② 任意 Apple 英文布局（`com.apple.keylayout.*`）；
-    /// ③ Apple 自家输入法（`com.apple.inputmethod.*`，如简体拼音）——部分
-    /// 用户没有启用任何英文布局，只有系统输入法，实测系统输入法不会像第三方
-    /// 输入法那样吞掉原始键码。三个层级都找不到时不动用户的选择。
+    /// 切换到 ABC 布局（X10-41 真机定案：**只有 ABC 能让镜像输入可用**）。
+    ///
+    /// X10-39 的三级兜底在只启用了系统拼音的 Mac 上会落到拼音——实测拼音模式
+    /// 下镜像打字同样不可用（用户真机反馈），因此本版强制选 ABC：
+    /// ① ABC 已启用 → 直接选中；
+    /// ② ABC 未启用 → 从全部已安装列表找到它，先 `TISEnableInputSource` 再
+    ///    选中（禁用状态的输入源无法直接选中），并记下「是我们启用的」，恢复
+    ///    时还原这一改动；
+    /// ③ 实在找不到 ABC（极罕见）→ 退回兜底：其它 Apple 布局 → Apple 输入法。
     pub fn switch_to_system_ascii() -> bool {
         unsafe {
+            // ① 已启用的输入源里找 ABC。
+            let enabled = TISCreateInputSourceList(std::ptr::null(), false);
+            if !enabled.is_null() {
+                let count = CFArrayGetCount(enabled);
+                for index in 0..count {
+                    let item = CFArrayGetValueAtIndex(enabled, index);
+                    if item.is_null() {
+                        continue;
+                    }
+                    if source_identity(item as *mut c_void).as_deref() == Some(ABC_SOURCE_ID) {
+                        let ok = TISSelectInputSource(item as *mut c_void) == 0;
+                        CFRelease(enabled);
+                        return ok;
+                    }
+                }
+                CFRelease(enabled);
+            }
+
+            // ② ABC 未启用：启用它再选中（先记「是我们启用的」，恢复时关回去）。
+            let all = TISCreateInputSourceList(std::ptr::null(), true);
+            if !all.is_null() {
+                let count = CFArrayGetCount(all);
+                for index in 0..count {
+                    let item = CFArrayGetValueAtIndex(all, index);
+                    if item.is_null() {
+                        continue;
+                    }
+                    if source_identity(item as *mut c_void).as_deref() == Some(ABC_SOURCE_ID) {
+                        let switched = TISEnableInputSource(item as *mut c_void) == 0
+                            && TISSelectInputSource(item as *mut c_void) == 0;
+                        if switched {
+                            ABC_ENABLED_BY_US.store(true, Ordering::Relaxed);
+                        }
+                        CFRelease(all);
+                        return switched;
+                    }
+                }
+                CFRelease(all);
+            }
+
+            // ③ 兜底：其它 Apple 布局 → Apple 自家输入法（覆盖「系统里没有
+            // ABC 布局」的极端情况）。布局与输入法都按身份串前缀识别。
             let list = TISCreateInputSourceList(std::ptr::null(), false);
             if list.is_null() {
                 return false;
             }
             let count = CFArrayGetCount(list);
-            let mut abc: *const c_void = std::ptr::null();
             let mut apple_layout: *const c_void = std::ptr::null();
             let mut apple_input_method: *const c_void = std::ptr::null();
             for index in 0..count {
@@ -140,17 +212,9 @@ mod imp {
                 if item.is_null() {
                     continue;
                 }
-                let value = TISGetInputSourceProperty(
-                    item as *mut c_void,
-                    tis_property_bundle_id_key(),
-                );
-                let Some(id) = cfstring_to_string(value) else {
+                let Some(id) = source_identity(item as *mut c_void) else {
                     continue;
                 };
-                if abc.is_null() && id == PREFERRED_ASCII_LAYOUT {
-                    abc = item;
-                    break;
-                }
                 if apple_layout.is_null() && id.starts_with("com.apple.keylayout.") {
                     apple_layout = item;
                 }
@@ -158,9 +222,7 @@ mod imp {
                     apple_input_method = item;
                 }
             }
-            let target = if !abc.is_null() {
-                abc
-            } else if !apple_layout.is_null() {
+            let target = if !apple_layout.is_null() {
                 apple_layout
             } else {
                 apple_input_method
@@ -171,9 +233,13 @@ mod imp {
         }
     }
 
-    /// 按 bundle id 恢复输入源（包括第三方输入法这类「输入模式」，因此要用
-    /// `include_all_installed = true` 拿到完整列表）。找不到或系统拒绝时不
-    /// 强行干预——输入法留在英文布局无害，用户手动可切。
+    /// 恢复输入源到备份时的身份串（可能是输入法的 BundleID，也可能是布局的
+    /// InputSourceID，与备份时 `current_bundle_id` 的取法一致，因此用
+    /// `include_all_installed = true` 拿到完整列表再按身份串匹配）。找不到或
+    /// 系统拒绝时不强行干预——输入法留在 ABC 无害，用户手动可切。
+    ///
+    /// 恢复成功后，若当初的 ABC 是我们临时启用的，顺手把它关回去（用户输入法
+    /// 菜单不留我们添加的条目）；ABC 本来就启用的情况不动。
     pub fn switch_to_bundle(bundle_id: &str) -> bool {
         unsafe {
             let list = TISCreateInputSourceList(std::ptr::null(), true);
@@ -187,20 +253,41 @@ mod imp {
                 if item.is_null() {
                     continue;
                 }
-                let value = TISGetInputSourceProperty(
-                    item as *mut c_void,
-                    tis_property_bundle_id_key(),
-                );
-                let Some(id) = cfstring_to_string(value) else {
-                    continue;
-                };
-                if id == bundle_id {
+                if source_identity(item as *mut c_void).as_deref() == Some(bundle_id) {
                     selected = TISSelectInputSource(item as *mut c_void) == 0;
                     break;
                 }
             }
             CFRelease(list);
+            if selected && ABC_ENABLED_BY_US.swap(false, Ordering::Relaxed) {
+                disable_abc_layout();
+            }
             selected
+        }
+    }
+
+    /// 把 ABC 布局关回去（仅当它是我们临时启用的情况）。失败静默——多一个
+    /// 可用的 ABC 布局对用户无害，不值得为它报错。
+    fn disable_abc_layout() {
+        unsafe {
+            let all = TISCreateInputSourceList(std::ptr::null(), true);
+            if all.is_null() {
+                return;
+            }
+            let count = CFArrayGetCount(all);
+            for index in 0..count {
+                let item = CFArrayGetValueAtIndex(all, index);
+                if item.is_null() {
+                    continue;
+                }
+                if source_identity(item as *mut c_void).as_deref() == Some(ABC_SOURCE_ID) {
+                    // 当前选中的就是 ABC 时系统会拒绝禁用——那说明恢复没切走，
+                    // 保留启用状态反而正确，静默失败即可。
+                    let _ = TISDisableInputSource(item as *mut c_void);
+                    break;
+                }
+            }
+            CFRelease(all);
         }
     }
 }
@@ -227,21 +314,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apple_sources_are_not_third_party() {
-        assert!(!is_third_party("com.apple.keylayout.ABC"));
-        assert!(!is_third_party("com.apple.inputmethod.SCIM.ITABC"));
-        assert!(!is_third_party("com.apple.keylayout.US"));
-    }
-
-    #[test]
-    fn third_party_implementations_are_detected() {
-        assert!(is_third_party("com.tencent.inputmethod.wetype"));
-        assert!(is_third_party("com.sogou.inputmethod.sogou"));
-        assert!(is_third_party("org.unknown.ime"));
-    }
-
-    #[test]
-    fn switch_is_only_attempted_for_unmanaged_third_party_sources() {
+    fn switch_is_attempted_unless_already_on_abc() {
         // 第三方输入法且尚未托管 → 切换。
         assert!(should_attempt_switch(
             Some("com.tencent.inputmethod.wetype"),
@@ -252,12 +325,15 @@ mod tests {
             Some("com.tencent.inputmethod.wetype"),
             true
         ));
-        // 系统自带输入法/布局 → 不动用户的选择。
+        // 已经是 ABC → 不动用户的选择。
         assert!(!should_attempt_switch(Some("com.apple.keylayout.ABC"), false));
-        assert!(!should_attempt_switch(
+        // X10-41 真机定案：系统拼音等输入法模式同样组字吞键 → 也要切到 ABC。
+        assert!(should_attempt_switch(
             Some("com.apple.inputmethod.SCIM.ITABC"),
             false
         ));
+        // 其它布局（如 Dvorak）也统一切到 ABC，保证镜像输入可用。
+        assert!(should_attempt_switch(Some("com.apple.keylayout.Dvorak"), false));
         // 读不到当前输入源 → 宁可不动。
         assert!(!should_attempt_switch(None, false));
     }

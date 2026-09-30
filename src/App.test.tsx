@@ -10,6 +10,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(),
+  openUrl: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: vi.fn().mockResolvedValue("0.0.0-test"),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
@@ -411,7 +415,8 @@ describe("App rendering", () => {
       return baseInvoke(cmd);
     });
     render(<App />);
-    expect(await screen.findByText(/scrcpy/)).toBeInTheDocument();
+    // 用诊断条专用 class 定位：设置页「关于」卡片与帮助 FAQ 里也会出现 scrcpy 字样。
+    expect(await screen.findByText("未找到 scrcpy")).toBeInTheDocument();
   });
 });
 
