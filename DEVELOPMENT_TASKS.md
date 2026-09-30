@@ -526,6 +526,22 @@
   - **验证**：build.yml YAML 解析通过、步骤顺序正确（latest.json 资产上传 → updater 分支发布 → Release 校验）；tauri.conf.json JSON 有效。端到端生效需下一次 tag 构建（首个验证轮 = 下个 release 的 release job 全绿 + `updater` 分支 raw URL 可取）。
   - **遗留（外部/待用户拍板）**：v0.4.0-beta tag 构建（run 36778123621，2026-10-01 05:14 发起）使用修复前的 tag 提交 dddf131——若该构建先于本修复完成，其产物客户端仍带 404 端点，需重打 tag 或接受手动下载升级一次；是否重打由用户/发版会话决定（涉及已发布制品，守卫轮不代行）。
 
+- [x] X10-53 桌面模式白屏/黑屏（真机定案，2026-10-01 晨）。`--new-display` 在 MIUI（Redmi M2104K10AC, Android 13）上成功创建虚拟显示器，但 **MIUI 桌面不在虚拟屏上渲染**——无头录制实测首帧平均亮度 0/255（黑屏），用户感知为白屏且「手机没反应」（虚拟屏本就不显示在手机主屏，属预期）。scrcpy 引擎本身正常：`--new-display --start-app=com.android.browser` 无头实测虚拟屏完整渲染浏览器界面（抽帧确认为 Explore 页）。
+  - 修复：`SessionOptions.desktop_app: Option<String>`（serde 默认 None，旧配置安全回填）——桌面模式开启且填写包名时追加 `--start-app=<pkg>`；包名白名单校验（字母/数字/点/下划线、≤120 字符，非法 → `desktop_app_invalid`）；未填行为不变（只创建虚拟屏）。
+  - 新命令 `list_device_apps`（37→38）：`pm list packages -3` 解析 + 排序去重，同一套设备就绪门槛；前端桌面模式行下新增「虚拟屏启动的应用（可选）」输入框（datalist 联想，首次勾选拉取一次，失败不阻塞手填）。
+  - 「手机没反应」已写进设置说明：虚拟屏独立于主屏，主屏不打断才是设计意图。
+  - 证据：cargo 177（+2：start-app 组合与校验、pm list 解析与就绪门槛）/ vitest 41 / tsc / pnpm build 全绿；真机无头复现与修复验证记录见当日日志。
+- [x] X10-54 关于卡按钮移位 + 托盘 GUI 验证脚本（2026-10-01 晨，用户反馈）。
+  - 关于卡：「检查更新」从独立行移入按钮行，顺序 = 打开官网 / GitHub 仓库 / 检查更新（原独立说明行改为普通 note）。
+  - 托盘 GUI 自动化：沙箱 System Events 被 TCC 拦（-10004，与键击结论一致），无法端到端；交付宿主机脚本 `MirrorDock-内部文档/托盘GUI验证.applescript`（自动验证菜单结构 + 动态文案 + 打开主窗口行为；连接/录制/唤醒/截图/退出仅列出不自动点击，避免真实改会话）。Rust 侧已有 pick_tray_target 3 项测试。
+- [ ] M4 伴侣 App 产品化（用户授权排期，2026-10-01；范围拆解如下，逐项实现前先给方案再动手）。
+  - **M4-1 配对产品化**：扫码配对协议定稿（桌面生成 QR + ed25519 签发设备身份凭证；伴侣 App 扫码入信，凭证落 Android Keystore）。
+  - **M4-2 常驻通道**：伴侣 App 前台服务 + 与桌面端心跳（mDNS 广播已有 companion_bridge_events 自动连接，补断连退避重试与 Android 13 通知权限引导）。
+  - **M4-3 状态通知**：连接建立/断开/录制开始结束的系统通知（可关），App 内显示当前信任的桌面端列表。
+  - **M4-4 互信撤销**：伴侣 App 侧「解除这台电脑」按钮（删除本机凭证），与桌面端 revoke_device_access 双向对齐。
+  - **M4-5 发版对齐**：companion.yml 产出 APK 命名带版本号、与桌面 Release 同 tag 上传（现仅 artifact）；版本号与桌面端分离维护（当前 0.1.9）。
+  - 硬性依赖：真机联调（配对/心跳/通知行为）；Keystore 签名发布配置已就位（mirrordock-companion.keystore）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

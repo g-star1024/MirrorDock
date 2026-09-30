@@ -392,6 +392,11 @@ trait AdbRuntime: Send + Sync {
     /// 广播 `_adb-tls-pairing._tcp.` 服务；主页面广播 `_adb-tls-connect._tcp.`。
     /// 解析只挑这两类，其余服务一律忽略。
     fn mdns_services(&self) -> Result<String, std::io::Error>;
+    /// 列出设备上已安装的第三方应用包名（`pm list packages -3`，X10-53）。
+    ///
+    /// 返回原始输出（每行 `package:<包名>`），由调用方解析；用于桌面模式
+    /// 「虚拟屏启动的应用」候选列表。读操作，不改变设备状态。
+    fn list_device_apps(&self, serial: &str) -> Result<String, std::io::Error>;
 }
 
 /// 一个已启动的镜像进程。抽象出 `try_wait` 与 `kill`，使会话生命周期可在测试中验证。
@@ -544,6 +549,14 @@ struct SessionOptions {
     /// 如实提示。与摄像头源互斥（同一时刻只能有一个视频源）。
     #[serde(default)]
     desktop_mode: bool,
+    /// 桌面模式下虚拟屏启动的应用（scrcpy `--start-app`，X10-53）。
+    ///
+    /// 仅在 `desktop_mode` 为 true 时生效。留空 = 启动系统桌面（launcher）；
+    /// 但部分机型（实测 MIUI）的桌面**不在虚拟显示器上渲染**（黑屏/白屏），
+    /// 因此提供「直接在虚拟屏打开指定应用」：如 `com.android.browser`。
+    /// 包名只允许字母、数字、点、下划线（白名单校验，不透传任意字符串）。
+    #[serde(default)]
+    desktop_app: Option<String>,
     /// 摄像头源（scrcpy `--video-source=camera`，X10-50，v0.4）。
     ///
     /// 把手机后置摄像头当作电脑上的网络摄像头画面。**默认关闭**且显式选择：
@@ -571,6 +584,7 @@ impl Default for SessionOptions {
             read_only: false,
             max_fps: None,
             desktop_mode: false,
+            desktop_app: None,
             camera_source: false,
         }
     }
@@ -655,6 +669,25 @@ impl SessionOptions {
         // 摄像头源会把音频源切到麦克风，我们绝不采集麦克风（A1-05 承诺）。
         if self.desktop_mode {
             args.push("--new-display".into());
+            // X10-53：虚拟屏启动指定应用。实测 MIUI 桌面不在虚拟显示器上渲染
+            // （黑屏/白屏），启动普通应用则正常——这是该机型上桌面模式可用的前提。
+            if let Some(app) = &self.desktop_app {
+                let pkg = app.trim();
+                // 白名单校验：Android 包名字符集固定，绝不把任意字符串透传进参数。
+                let valid = !pkg.is_empty()
+                    && pkg.len() <= 120
+                    && pkg
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
+                if !valid {
+                    return Err(AppError::new(
+                        "desktop_app_invalid",
+                        "虚拟屏启动的应用包名无效。",
+                        "包名只允许字母、数字、点（.）和下划线，例如 com.android.browser；也可以留空。",
+                    ));
+                }
+                args.push(format!("--start-app={pkg}"));
+            }
         } else if self.camera_source {
             args.push("--video-source=camera".into());
             if !args.iter().any(|argument| argument == "--no-audio") {
@@ -935,6 +968,10 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn mdns_services(&self) -> Result<String, std::io::Error> {
         Self::capture(&["mdns", "services"])
+    }
+
+    fn list_device_apps(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "pm", "list", "packages", "-3"])
     }
 
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error> {
@@ -5887,6 +5924,41 @@ fn send_file_to_device(
     result
 }
 
+/// 列出手机上已安装的第三方应用包名（X10-53）。
+///
+/// 桌面模式的「虚拟屏启动的应用」候选列表；只读操作，结果按包名排序去重。
+#[tauri::command]
+fn list_device_apps(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+) -> Result<Vec<String>, AppError> {
+    list_device_apps_with(&runtimes, serial)
+}
+
+fn list_device_apps_with(runtimes: &AppRuntimes, serial: String) -> Result<Vec<String>, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes.adb.list_device_apps(&serial).map_err(|_| {
+        AppError::new(
+            "app_list_failed",
+            "无法读取手机上的应用列表。",
+            "请确认连接仍然有效，然后重试。",
+        )
+    })?;
+    let mut apps: Vec<String> = raw
+        .lines()
+        .filter_map(|line| line.strip_prefix("package:"))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect();
+    apps.sort();
+    apps.dedup();
+    Ok(apps)
+}
+
 /// 列出手机传输目录里的文件名，供用户挑选要取回的文件。
 #[tauri::command]
 fn list_device_files(
@@ -6568,6 +6640,7 @@ pub fn run() {
             delete_screenshot,
             send_file_to_device,
             list_device_files,
+            list_device_apps,
             fetch_file_from_device,
             install_apk_to_device,
             current_recording,
@@ -6664,6 +6737,8 @@ mod tests {
         device_writes_fail: Arc<Mutex<bool>>,
         /// `adb mdns services` 的原始输出；`None` 表示空列表（无服务广播）。
         mdns_output: Option<String>,
+        /// `list_device_apps` 的 canned 输出（X10-53 解析测试用）。
+        apps_output: Option<String>,
         /// 为真时 `connect` 一律失败（模拟无线调试已关/未配对）。
         connect_fails: bool,
         /// `pull_file` 成功时写进本机文件的内容，用于验证回执字节数。
@@ -7079,6 +7154,14 @@ mod tests {
 
         fn mdns_services(&self) -> Result<String, std::io::Error> {
             Ok(self.mdns_output.clone().unwrap_or_default())
+        }
+
+        fn list_device_apps(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("list_device_apps {serial}"));
+            Ok(self.apps_output.clone().unwrap_or_default())
         }
     }
 
@@ -7500,6 +7583,7 @@ mod tests {
                 }
             }
             fn mdns_services(&self) -> Result<String, std::io::Error> { Ok(String::new()) }
+            fn list_device_apps(&self, _serial: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
         }
         let runtimes = AppRuntimes {
             adb: Arc::new(WirelessOnlyFails),
@@ -7945,6 +8029,7 @@ mod tests {
                 read_only: false,
                 max_fps: None,
                 desktop_mode: false,
+                desktop_app: None,
                 camera_source: false,
             };
             let args = options.arguments().unwrap();
@@ -9993,6 +10078,88 @@ mod tests {
         let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
         assert!(!parsed.desktop_mode);
         assert!(!parsed.camera_source);
+    }
+
+    /// 桌面模式虚拟屏启动应用（X10-53）：包名经白名单校验后透传 `--start-app`，
+    /// 非法包名拒绝（不把任意字符串拼进参数）；未填则只创建虚拟屏。
+    #[test]
+    fn desktop_app_composes_start_app_and_rejects_invalid_packages() {
+        // 合法包名：与 --new-display 同时出现。
+        let with_app = SessionOptions {
+            desktop_mode: true,
+            desktop_app: Some(" com.android.browser ".into()),
+            ..Default::default()
+        };
+        let args = with_app.arguments().unwrap();
+        assert!(args.contains(&"--new-display".into()));
+        assert!(args.contains(&"--start-app=com.android.browser".into()));
+
+        // 留空（None）只创建虚拟屏，不传 --start-app。
+        let no_app = SessionOptions {
+            desktop_mode: true,
+            ..Default::default()
+        };
+        assert!(!no_app.arguments().unwrap().iter().any(|a| a.contains("start-app")));
+
+        // 非法字符（空格/斜杠/冒号/中文）一律拒绝。
+        for hostile in ["com evil app", "com/evil", "com:8080", "应用"] {
+            let bad = SessionOptions {
+                desktop_mode: true,
+                desktop_app: Some(hostile.into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                bad.arguments().unwrap_err().code,
+                "desktop_app_invalid",
+                "包名 {hostile} 应被拒绝"
+            );
+        }
+
+        // 过长的包名同样拒绝（防参数爆炸）。
+        let too_long = SessionOptions {
+            desktop_mode: true,
+            desktop_app: Some("a.".repeat(80)),
+            ..Default::default()
+        };
+        assert_eq!(too_long.arguments().unwrap_err().code, "desktop_app_invalid");
+
+        // 摄像头源模式下忽略 desktop_app（不传 --start-app）。
+        let camera = SessionOptions {
+            camera_source: true,
+            desktop_app: Some("com.android.browser".into()),
+            ..Default::default()
+        };
+        assert!(!camera.arguments().unwrap().iter().any(|a| a.contains("start-app")));
+
+        // 旧配置（缺字段）视为未填。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"desktop_mode":true}"#).unwrap();
+        assert!(parsed.desktop_app.is_none());
+    }
+
+    #[test]
+    fn device_apps_are_parsed_from_pm_list_output_and_sorted() {
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            apps_output: Some(
+                "package:com.miui.home\npackage:com.android.browser\n\npackage:org.mozilla.firefox\npackage:com.android.browser\n"
+                    .to_owned(),
+            ),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let apps = list_device_apps_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(apps, vec!["com.android.browser", "com.miui.home", "org.mozilla.firefox"]);
+        assert!(calls.lock().unwrap().iter().any(|c| c.contains("list_device_apps")));
+
+        // 未就绪设备拒绝（与文件传输同一套就绪门槛）。
+        let offline = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let runtimes = screenshot_runtimes(offline);
+        assert_eq!(
+            list_device_apps_with(&runtimes, "phone".into()).unwrap_err().code,
+            "device_unauthorized"
+        );
     }
 
     #[test]

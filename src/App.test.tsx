@@ -291,6 +291,7 @@ describe("readOptions", () => {
       read_only: false,
       max_fps: null,
       desktop_mode: false,
+      desktop_app: null,
       camera_source: false,
     });
   });

@@ -136,7 +136,7 @@ export type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean; max_fps: number | null; desktop_mode: boolean; camera_source: boolean };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean; max_fps: number | null; desktop_mode: boolean; desktop_app: string | null; camera_source: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
@@ -203,7 +203,7 @@ type Screenshot = { file_name: string; path: string; bytes: number };
 type TransferReceipt = { file_name: string; path: string; bytes: number };
 // 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
 type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, camera_source: false };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, desktop_app: null, camera_source: false };
 export function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
@@ -225,6 +225,7 @@ export function readOptions(): SessionOptions {
         read_only: typeof value.read_only === "boolean" ? value.read_only : false,
         max_fps: [24, 30, 60].includes(value.max_fps) ? value.max_fps : null,
         desktop_mode: typeof value.desktop_mode === "boolean" ? value.desktop_mode : false,
+        desktop_app: typeof value.desktop_app === "string" && value.desktop_app.trim() ? value.desktop_app.trim() : null,
         camera_source: typeof value.camera_source === "boolean" ? value.camera_source : false,
       };
     }
@@ -677,6 +678,18 @@ function App() {
       setSettingsNotice("已在手机上打开「实体键盘」设置：请确认 scrcpy 键盘已启用「英语（美国）」布局，镜像窗口里按 MOD+k 也能打开这个页面。");
     } catch (error) {
       setSettingsNotice(errorMessage(error, "无法打开手机的键盘设置（设备可能未连接）。"));
+    }
+  }
+
+  // 桌面模式「虚拟屏启动的应用」候选（X10-53）：首次勾选时拉取一次第三方应用
+  // 包名，供输入框联想。拉取失败不阻塞——用户仍可手动填写包名。
+  const [deviceApps, setDeviceApps] = useState<string[] | null>(null);
+  async function loadDeviceApps(serial: string) {
+    try {
+      const apps = await invoke<string[]>("list_device_apps", { serial });
+      setDeviceApps(apps);
+    } catch {
+      setDeviceApps([]);
     }
   }
 
@@ -2223,8 +2236,29 @@ function App() {
                     <span className="setting-name">桌面模式（独立虚拟屏幕）</span>
                     <span className="setting-desc">不再镜像手机现有屏幕，而是在手机上创建一块独立虚拟屏幕：电脑上全屏看视频、写笔记，手机上回微信也不打断画面。需要 Android 10+，手机端会弹出「显示在其他应用上层」的确认。与摄像头画面互斥，更改后重启会话生效。</span>
                   </div>
-                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={options.desktop_mode} onChange={e => updateOptions({ ...options, desktop_mode: e.target.checked, camera_source: e.target.checked ? false : options.camera_source })} /></label>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={options.desktop_mode} onChange={e => { updateOptions({ ...options, desktop_mode: e.target.checked, camera_source: e.target.checked ? false : options.camera_source }); if (e.target.checked && readySerial && deviceApps === null) void loadDeviceApps(readySerial); }} /></label>
                 </div>
+                {options.desktop_mode && (
+                  <div className="setting-row">
+                    <div className="setting-info">
+                      <span className="setting-name">虚拟屏启动的应用（可选）</span>
+                      <span className="setting-desc">实测部分机型（如小米/MIUI）的桌面不在虚拟屏上显示（会得到白屏/黑屏）；填入应用包名后，虚拟屏会直接打开该应用，例如系统浏览器 com.android.browser。留空则显示系统桌面。</span>
+                    </div>
+                    <input
+                      className="setting-control"
+                      aria-label="虚拟屏启动的应用包名"
+                      list="device-app-packages"
+                      placeholder="com.android.browser"
+                      value={options.desktop_app ?? ""}
+                      onChange={e => { const pkg = e.target.value.trim(); updateOptions({ ...options, desktop_app: pkg ? pkg : null }); }}
+                    />
+                  </div>
+                )}
+                {options.desktop_mode && deviceApps !== null && (
+                  <datalist id="device-app-packages">
+                    {deviceApps.slice(0, 500).map(pkg => <option key={pkg} value={pkg} />)}
+                  </datalist>
+                )}
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">使用手机后置摄像头画面</span>
@@ -2390,15 +2424,7 @@ function App() {
                 <p className="setting-note">开发者：MirrorDock 项目（g-star1024），个人开源项目，欢迎在仓库提 Issue 反馈问题。</p>
                 <p className="setting-note">开源许可：Apache-2.0。镜像引擎基于 scrcpy（Apache-2.0）；全部第三方组件的版权声明见安装目录内的 THIRD_PARTY_NOTICES 文件。</p>
                 <p className="setting-note">隐私承诺：本地优先，画面与文件只经过你的数据线或局域网，不经过任何服务器。</p>
-                <div className="setting-row">
-                  <div className="setting-info">
-                    <span className="setting-name">检查更新</span>
-                    <span className="setting-desc">发现新版本后自动下载安装（更新包经数字签名校验），安装完成后重启应用即完成升级。</span>
-                  </div>
-                  <button type="button" className="secondary-button" disabled={updateState !== "idle"} onClick={() => void checkForUpdates()}>
-                    {updateState === "idle" ? "检查更新" : updateState === "checking" ? "正在检查…" : "正在更新…"}
-                  </button>
-                </div>
+                <p className="setting-note">检查更新：发现新版本后自动下载安装（更新包经数字签名校验），安装完成后重启应用即完成升级。</p>
                 {updateMessage && <p className="setting-note apply-notice" role="status">{updateMessage}</p>}
                 <div className="settings-actions">
                   <button type="button" className="secondary-button" onClick={() => void openUrl("https://g-star1024.github.io/MirrorDock/")}>
@@ -2406,6 +2432,9 @@ function App() {
                   </button>
                   <button type="button" className="secondary-button" onClick={() => void openUrl("https://github.com/g-star1024/MirrorDock")}>
                     GitHub 仓库
+                  </button>
+                  <button type="button" className="secondary-button" disabled={updateState !== "idle"} onClick={() => void checkForUpdates()}>
+                    {updateState === "idle" ? "检查更新" : updateState === "checking" ? "正在检查…" : "正在更新…"}
                   </button>
                 </div>
               </div>
