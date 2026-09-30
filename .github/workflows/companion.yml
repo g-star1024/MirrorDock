@@ -30,8 +30,22 @@ jobs:
           ls "$ANDROID_HOME/platforms" || true
       - name: Accept licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+      - name: Restore signing keystore (fixed key for cover-install)
+        # X10-21：固定签名密钥存 GitHub Secrets（COMPANION_KEYSTORE_BASE64 /
+        # COMPANION_STORE_PASSWORD），保证跨版本 APK 签名一致、可直接覆盖安装。
+        env:
+          COMPANION_KEYSTORE_BASE64: ${{ secrets.COMPANION_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$COMPANION_KEYSTORE_BASE64" ]; then
+            echo "::warning::COMPANION_KEYSTORE_BASE64 未配置，回退默认 debug 签名"
+          else
+            echo "$COMPANION_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/companion.keystore"
+          fi
       - name: Build debug APK
         working-directory: companion
+        env:
+          COMPANION_KEYSTORE: ${{ runner.temp }}/companion.keystore
+          COMPANION_STORE_PASSWORD: ${{ secrets.COMPANION_STORE_PASSWORD }}
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           gradle :app:assembleDebug --no-daemon

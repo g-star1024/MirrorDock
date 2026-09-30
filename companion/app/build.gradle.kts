@@ -15,9 +15,29 @@ android {
         versionName = "0.1.7-poc"
     }
 
+    // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本
+    // 覆盖安装（INSTALL_FAILED_UPDATE_INCOMPATIBLE 的根治）。本地无环境变量时
+    // 回退默认 debug 密钥（仅本地调试用，与 CI 产物签名不同）。
+    signingConfigs {
+        val storePath = System.getenv("COMPANION_KEYSTORE")
+        val storePass = System.getenv("COMPANION_STORE_PASSWORD")
+        if (!storePath.isNullOrBlank() && !storePass.isNullOrBlank()) {
+            create("ci") {
+                storeFile = file(storePath)
+                storePassword = storePass
+                keyAlias = "mirrordock-companion"
+                keyPassword = storePass
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfigs.findByName("ci")?.let { signingConfig = it }
+        }
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("ci")?.let { signingConfig = it }
         }
     }
     compileOptions {
