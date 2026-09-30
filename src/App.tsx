@@ -431,7 +431,6 @@ function App() {
   const [recentMessage, setRecentMessage] = useState<string | null>(null);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
-  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
   // 锁屏状态按设备记录：多台并发时每张设备卡都要显示各自的锁屏便签（X10-33）。
   const [lockReports, setLockReports] = useState<Record<string, DeviceLockReport>>({});
   const [lockError, setLockError] = useState<string | null>(null);
@@ -1396,20 +1395,17 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // 选中设备变化时重新探测能力信息。只读取设备信息，不启动镜像。
+  // 探测结果用于设置页「转发手机声音」开关的一致性；能力说明文案在帮助中心。
   useEffect(() => {
     if (!readySerial) {
       setCapabilities(null);
-      setCapabilitiesError(null);
       return;
     }
     let disposed = false;
     setCapabilities(null);
-    setCapabilitiesError(null);
     invoke<DeviceCapabilities>("probe_device_capabilities", { serial: readySerial })
       .then((value) => { if (!disposed) setCapabilities(value); })
-      .catch((error) => {
-        if (!disposed) setCapabilitiesError(errorMessage(error, "无法读取这台手机的能力信息。"));
-      });
+      .catch(() => { /* 读不到就按未知处理，不阻塞连接 */ });
     return () => { disposed = true; };
   }, [readySerial]);
   // 每张就绪设备卡的锁屏便签（X10-33）：按就绪设备集合轮询，5 秒一刷；
@@ -1784,46 +1780,6 @@ function App() {
               )}
             </section>
 
-            <aside className="privacy-note">
-              <strong>为什么需要授权？</strong>
-              <p>画面与控制经由 Android 官方调试机制，只授予你确认过的电脑，可随时在手机开发者选项中撤销。</p>
-            </aside>
-
-            {/* 能力说明属于「了解性内容」：沉到底部授权说明之下，占满整幅，不抢占操作动线。 */}
-            {readyDevice && (
-              <div className="capability-panel capability-foot" aria-live="polite">
-                <strong>这台手机能做什么</strong>
-                {capabilities ? (
-                  <>
-                    <p className="capability-summary">{capabilitySummary(capabilities)}</p>
-                    <ul className="capability-notices">
-                      {capabilities.notices.map((notice) => (
-                        <li key={notice.code} className={`notice-${notice.level}`}>
-                          <strong>{notice.title}</strong>
-                          <p>{notice.detail}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : capabilitiesError ? (
-                  <p className="capability-pending" role="alert">{capabilitiesError}</p>
-                ) : (
-                  <p className="capability-pending">正在读取这台手机的信息…</p>
-                )}
-              </div>
-            )}
-
-            {/* 锁屏长说明沉底：卡片上只留便签，想细看再到下面看。 */}
-            {readySerial && lockReports[readySerial] && (
-              <div className="capability-panel" aria-live="polite">
-                <strong>关于锁屏与解锁</strong>
-                <p className="capability-pending">{lockReports[readySerial].explanation}</p>
-                <p className="capability-pending">{lockReports[readySerial].recovery}</p>
-                <p className="capability-pending">MirrorDock 只点亮屏幕，不解锁；设备处于安全锁屏时，需要你本人在手机或镜像窗口中输入解锁凭据。</p>
-                <p className="capability-pending">开了「会话期间保持手机唤醒」后，镜像进行中屏幕不会自动熄灭，锁屏页可以慢慢输入密码。无线连接时这一项会临时把手机置为「充电时保持唤醒」，因此手机状态栏可能显示充电中——这只是为了让系统不熄屏，会话结束后会自动恢复原设置。</p>
-                <p className="capability-pending">反过来，如果没开这一项：无线连接下手机熄屏十几秒后屏幕就会熄灭，镜像窗口随之变黑无法点击；熄屏时间过长，无线连接还可能整条掉线，需要重新配对。</p>
-              </div>
-            )}
           </section>
 
           {/* -- 工具 -------------------------------------------------------- */}

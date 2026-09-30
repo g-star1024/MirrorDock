@@ -229,12 +229,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .capability-panel > button { justify-self: start; }
 .capability-summary { margin: 0; color: #3c4654; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
 .capability-pending { margin: 0; color: #6b7686; font-size: 13px; line-height: 1.5; }
-.capability-notices { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.capability-notices li { padding: 9px 12px; border-left: 3px solid #d4dae4; border-radius: 8px; background: #fff; }
-.capability-notices li.notice-limitation { border-left-color: #e0940f; background: #fffaf0; }
-.capability-notices li.notice-info { border-left-color: #22a35c; background: #f2faf5; }
-.capability-notices strong { display: block; font-size: 13px; }
-.capability-notices p { margin: 3px 0 0; color: #6b7686; font-size: 12.5px; line-height: 1.5; }
 /* 截图结果：文件名与大小一行给结论，完整路径单独一行便于核对与复制。 */
 .screenshot-result { display: grid; gap: 6px; padding: 12px 13px; border-left: 3px solid #22a35c; border-radius: 8px; background: #f2faf5; }
 .screenshot-path { margin: 0; color: #5d6878; font-size: 12px; overflow-wrap: anywhere; }
