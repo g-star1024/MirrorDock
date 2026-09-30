@@ -245,7 +245,12 @@ jobs:
           set -euo pipefail
           BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
           if [ "$RUNNER_ARCH" = "ARM64" ]; then ARCH=aarch64; else ARCH=x64; fi
+          # 资产名一律用基础版本号（tag 的预发布后缀 -beta 不进文件名）：
+          # tauri 打包产物（exe/AppImage/deb/rpm/dmg）取的是 tauri.conf.json 的
+          # version，如 tag v0.3.0-beta → 产物名是 MirrorDock_0.3.0_*。
+          # 改名步骤必须与之一致，否则 latest.json 按名匹配会落空（X10-52 教训）。
           VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%%-*}"
           shopt -s nullglob
           cd "$BUNDLE/macos"
           for sig in *.app.tar.gz.sig; do
@@ -415,7 +420,10 @@ jobs:
       - name: 生成并上传 latest.json（自动更新清单）
         run: |
           set -euo pipefail
+          # 资产名一律用基础版本号（与 tauri 打包产物一致，见 X10-52 教训）：
+          # tag v0.3.0-beta → 产物名 MirrorDock_0.3.0_*、latest.json version=0.3.0。
           VERSION="${TAG#v}"
+          VERSION="${VERSION%%-*}"
           python3 - "$VERSION" "$GITHUB_REPOSITORY" "$TAG" <<'PY'
           import json, sys, pathlib, datetime
 

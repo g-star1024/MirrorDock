@@ -515,6 +515,11 @@
   - **本轮独立基线复核（2026-10-01 04:17，HEAD=f380be4，工作区干净）**：`cargo test --manifest-path src-tauri/Cargo.toml` **175 passed / 0 failed**；`pnpm build` 通过；vitest **41 passed / 0 failed**。与提交声称的 cargo 175 / vitest 41 一致。
   - **未验证面（外部依赖）**：v0.3.0-beta tag CI 重发 build（run 36770770206）进行中，产物可运行性、updater 端到端（minisign 验签 + latest.json 拉取 + 三平台升级）、桌面模式/摄像头源/自动重连/帧率上限的真机行为均待真机与产物验收。
 
+- [x] X10-51/52 v0.3.0-beta CI 连败两轮修复（2026-10-01 凌晨，通宵发版会话）。
+  - **X10-51 scrcpy 产物路径**（run 36772187374，tag cf4a984）：scrcpy 77 个编译目标链接全成功，仅 `cp` 落空——meson 产物在 `build/app/scrcpy`（app/ 子目录），工作流写 `build/scrcpy`。修复 9cd6bc1。
+  - **X10-52 资产命名不一致**（run 36774581840，tag 9cd6bc1）：4 平台打包全绿、Release 已发布（29 资产），仅 latest.json 生成失败——脚本按 tag 版本 `0.3.0-beta` 拼名，而 tauri 打包产物（exe/AppImage/deb/rpm/dmg）用 conf 版本 `0.3.0`，macOS `.app.tar.gz` 因 X10-47 改名步骤用 tag 版本反而带 `-beta`，四平台两种命名混用致 fail-closed 落空。
+  - **修复口径（定案）**：资产名一律用基础版本号（tag 预发布后缀 `-beta` 不进文件名）；macOS 改名步骤与 latest.json 脚本统一 `VERSION="${VERSION%%-*}"`；latest.json `version` 字段=conf 版本。tag 重打触发第 6 次 run。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
