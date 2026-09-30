@@ -478,6 +478,13 @@ jobs:
           BRANCH: updater
         run: |
           set -euo pipefail
+          # 分支不存在则自建（Contents API 无法在不存在的分支上建文件——
+          # v0.4.1-beta 教训：首次发布必 404）。以当前提交为源点建孤儿语义的常驻分支。
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" > /dev/null 2>&1; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/heads/${BRANCH}" -f sha="${GITHUB_SHA}" > /dev/null
+            echo "updater 分支不存在，已从 ${GITHUB_SHA} 创建"
+          fi
           content_b64=$(base64 -w0 latest.json)
           sha=$(gh api "repos/${GITHUB_REPOSITORY}/contents/latest.json?ref=${BRANCH}" \
                   --jq '.sha' 2>/dev/null || true)
