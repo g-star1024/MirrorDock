@@ -47,6 +47,11 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring", "pem"] }
 sha2 = "0.10"
 getrandom = "0.2"
+# M4-1 配对互信：验证伴侣 App 的 ECDSA P-256 挑战签名（Keystore 端 SHA256withECDSA 输出 DER）。
+# 默认特性含 std/arithmetic/ecdsa/pkcs8——关默认会砍掉签名运算能力。
+p256 = "0.13"
+# trait 来源（p256 内部用同版本；EncodePublicKey/DecodePublicKey 从这里拿）。
+pkcs8 = { version = "0.10", default-features = false, features = ["std", "alloc"] }
 
 # 仅 Unix：向镜像子进程发送 SIGTERM 做优雅结束（强杀会让录制中的 MP4 缺 moov
 # 索引而无法播放，已在真机实验证实）。Windows 的 TerminateProcess 无对应机制，

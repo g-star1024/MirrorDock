@@ -1,15 +1,20 @@
-//! C4-01 伴侣 App 同网加密会话 POC（桌面侧）。
+//! C4-01 伴侣 App 同网加密会话（桌面侧）；M4-1 起升级为持久互信。
 //!
 //! 设计要点（与威胁模型 TM-005 对齐）：
-//! - 出带校验：一次性配对二维码携带 `token` 与服务器证书 SPKI 的 SHA-256 指纹，
-//!   伴侣 App 用指纹锁定服务器身份，同网中间人无法伪造。
-//! - 一次性证书：每次配对现场生成自签证书（不落盘、不复用），私钥只在内存。
-//! - 一次性 token：10 字节随机 → base32 16 字符；配对结束即失效。
+//! - 出带校验：配对二维码携带**桌面长期身份**公钥的 SHA-256 指纹，伴侣 App 用
+//!   指纹锁定服务器身份，同网中间人无法伪造。
+//! - 桌面长期身份：EC P-256 自签证书，密钥落 `app_data_dir/companion-identity/`
+//!   （仅本机；丢失=互信作废，两端重新扫码配对）。
+//! - 一次性 token：10 字节随机 → base32 16 字符；首配握手用，配对结束即失效。
+//! - 挑战-响应互信（MDP2）：伴侣 App 在 Android Keystore 生成不可导出的
+//!   EC P-256 身份，配对时桌面发 nonce 挑战、伴侣签名、桌面验证后把设备公钥
+//!   存入 `paired-companions.json`。此后重连（RECONNECT）无需再扫码。
 //! - 会话内容只有握手与统计 JSON 行，不传屏幕帧（屏幕帧不入日志/不落盘铁律）。
 //! - 状态机 idle → listening → connected → idle，事件环形缓冲供前端展示。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
@@ -17,8 +22,11 @@ use tokio::sync::oneshot;
 /// 事件环形缓冲上限，与诊断日志口径一致。
 const EVENT_LIMIT: usize = 200;
 
-/// 握手协议版本前缀。
-pub const PROTOCOL_TAG: &str = "MDP1";
+/// 握手协议版本前缀。MDP2 = 挑战-响应互信（M4-1）。
+pub const PROTOCOL_TAG: &str = "MDP2";
+
+/// 挑战 nonce 字节数（32 字节熵）。
+const CHALLENGE_BYTES: usize = 32;
 
 /// 单次配对暴露给前端的全部信息（就是二维码载荷的字段）。
 #[derive(Debug, Clone, Serialize)]
@@ -30,7 +38,7 @@ pub struct PairingOffer {
     pub port: u16,
     /// 一次性配对码（base32，16 字符）。
     pub token: String,
-    /// 服务器证书 SPKI 的 SHA-256（hex 小写）。
+    /// 桌面长期身份公钥（SPKI）的 SHA-256（hex 小写）。
     pub fingerprint: String,
 }
 
@@ -101,31 +109,203 @@ impl PairingState {
     }
 }
 
+/// 桌面长期身份（M4-1）：EC P-256 密钥 + 自签证书，落 `companion-identity/`。
+///
+/// 指纹 = SHA-256(SPKI DER)，是二维码出带校验的对象；密钥不变则指纹不变，
+/// 伴侣 App 首配后记住指纹，重连无需重新扫码。
+pub struct PairingIdentity {
+    pub cert_der: Vec<u8>,
+    pub key_der: Vec<u8>,
+    pub fingerprint: String,
+}
+
+impl PairingIdentity {
+    /// 读取或生成桌面身份。文件损坏/缺失时重新生成（互信作废需重新扫码）。
+    ///
+    /// 指纹独立落 `identity.fp`：读取路径无需解析 PKCS8（证书/指纹都以生成时
+    /// 计算好的为准）；指纹文件被篡改只会导致出带校验不匹配（fail-closed）。
+    pub fn load_or_create(dir: &Path) -> Result<(Self, bool), String> {
+        let key_path = dir.join("identity.key");
+        let cert_path = dir.join("identity.der");
+        let fp_path = dir.join("identity.fp");
+        if let (Ok(key_der), Ok(cert_der), Ok(fp)) =
+            (std::fs::read(&key_path), std::fs::read(&cert_path), std::fs::read(&fp_path))
+        {
+            let fingerprint = String::from_utf8_lossy(&fp).trim().to_string();
+            let valid = fingerprint.len() == 64
+                && fingerprint.chars().all(|c| c.is_ascii_hexdigit());
+            if valid {
+                return Ok((
+                    Self {
+                        cert_der,
+                        key_der,
+                        fingerprint: fingerprint.to_lowercase(),
+                    },
+                    false,
+                ));
+            }
+        }
+        let identity = Self::generate()?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建身份目录失败：{e}"))?;
+        std::fs::write(&key_path, &identity.key_der).map_err(|e| format!("写身份密钥失败：{e}"))?;
+        std::fs::write(&cert_path, &identity.cert_der).map_err(|e| format!("写身份证书失败：{e}"))?;
+        std::fs::write(&fp_path, &identity.fingerprint).map_err(|e| format!("写身份指纹失败：{e}"))?;
+        restrict_owner_only(&key_path);
+        Ok((identity, true))
+    }
+
+    /// 现场生成新身份（rcgen 默认即 ECDSA P-256，与伴侣 App Keystore 算法一致）。
+    fn generate() -> Result<Self, String> {
+        let key_pair = rcgen::KeyPair::generate().map_err(|e| format!("生成密钥失败：{e}"))?;
+        let mut params = rcgen::CertificateParams::new(vec!["mirrordock-companion.local".into()])
+            .map_err(|e| e.to_string())?;
+        params.not_before = rcgen::date_time_ymd(2026, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2077, 1, 1);
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "MirrorDock Desktop Identity");
+        let cert = params.self_signed(&key_pair).map_err(|e| e.to_string())?;
+        let cert_der = cert.der().as_ref().to_vec();
+        let key_der = key_pair.serialize_der();
+        let spki_der = key_pair.public_key_der();
+        let mut hasher = Sha256::new();
+        hasher.update(&spki_der);
+        Ok(Self {
+            cert_der,
+            key_der,
+            fingerprint: hex_lower(&hasher.finalize()),
+        })
+    }
+}
+
+/// Unix 下把身份密钥限制为仅属主可读写（0600）；Windows 无对应位，跳过。
+fn restrict_owner_only(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// 已配对伴侣设备的持久化台账（M4-1）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PairedCompanion {
+    /// 设备身份指纹（SHA-256(SPKI) 前 16 hex），重连凭据。
+    pub pairing_id: String,
+    pub model: String,
+    /// 设备公钥 SPKI DER 的 hex，验证重连签名用。
+    pub pubkey_hex: String,
+    pub added_at: u64,
+    pub last_seen: u64,
+}
+
+/// `paired-companions.json` 的读写。损坏按空表处理（用户重新扫码即可恢复）。
+pub struct PairedStore {
+    path: PathBuf,
+}
+
+impl PairedStore {
+    pub fn new(dir: &Path) -> Self {
+        Self {
+            path: dir.join("paired-companions.json"),
+        }
+    }
+
+    pub fn load(&self) -> Vec<PairedCompanion> {
+        std::fs::read(&self.path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, devices: &[PairedCompanion]) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+        }
+        let body = serde_json::to_vec_pretty(devices).map_err(|e| format!("序列化失败：{e}"))?;
+        std::fs::write(&self.path, body).map_err(|e| format!("写配对台账失败：{e}"))
+    }
+
+    /// 按 pairing_id 插入或更新（last_seen 刷新），返回更新后的全表。
+    pub fn upsert(&self, device: PairedCompanion) -> Result<Vec<PairedCompanion>, String> {
+        let mut devices = self.load();
+        match devices.iter_mut().find(|d| d.pairing_id == device.pairing_id) {
+            Some(existing) => {
+                existing.model = device.model;
+                existing.pubkey_hex = device.pubkey_hex;
+                existing.last_seen = device.last_seen;
+            }
+            None => devices.push(device),
+        }
+        self.save(&devices)?;
+        Ok(devices)
+    }
+
+    pub fn remove(&self, pairing_id: &str) -> Result<Vec<PairedCompanion>, String> {
+        let devices: Vec<PairedCompanion> = self
+            .load()
+            .into_iter()
+            .filter(|d| d.pairing_id != pairing_id)
+            .collect();
+        self.save(&devices)?;
+        Ok(devices)
+    }
+}
+
+/// 由设备公钥 SPKI DER 计算 pairing_id（指纹前 16 hex）。
+pub fn pairing_id_from_spki(spki_der: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(spki_der);
+    hex_lower(&hasher.finalize())[..16].to_string()
+}
+
+/// 解码 hex 编码的公钥（SPKI DER）并构造验证密钥（校验失败=对端身份不可信）。
+fn verifying_key_from_hex(pubkey_hex: &str) -> Option<p256::ecdsa::VerifyingKey> {
+    use pkcs8::DecodePublicKey as _;
+    let spki = hex_decode(pubkey_hex)?;
+    let public_key = p256::PublicKey::from_public_key_der(&spki).ok()?;
+    Some(p256::ecdsa::VerifyingKey::from(&public_key))
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// 验证伴侣对 nonce 的 ECDSA P-256 签名。
+///
+/// Java `SHA256withECDSA` 输出 DER 编码签名；定宽 64 字节 r||s 编码同样接受
+/// （同一签名的两种序列化，验证强度不变——都通过 ECDSA 验算）。
+fn verify_challenge(pubkey_hex: &str, nonce: &[u8], sig_hex: &str) -> bool {
+    use p256::ecdsa::signature::Verifier;
+    let Some(verifying_key) = verifying_key_from_hex(pubkey_hex) else {
+        return false;
+    };
+    let Some(sig_bytes) = hex_decode(sig_hex) else {
+        return false;
+    };
+    let signature = match p256::ecdsa::Signature::from_der(&sig_bytes) {
+        Ok(s) => s,
+        Err(_) => match p256::ecdsa::Signature::from_slice(&sig_bytes) {
+            Ok(s) => s,
+            Err(_) => return false,
+        },
+    };
+    verifying_key.verify(nonce, &signature).is_ok()
+}
+
 /// 生成一次性 token（10 字节熵 → base32 16 字符）。
 pub fn generate_pairing_token() -> String {
     let mut bytes = [0u8; 10];
     getrandom::getrandom(&mut bytes).expect("系统熵源不可用");
     crate::licensing::base32_encode(&bytes)
-}
-
-/// 生成现场自签证书，返回 (cert_der, key_der, spki_sha256_hex)。
-pub fn generate_ephemeral_cert() -> Result<(Vec<u8>, Vec<u8>, String), String> {
-    let mut params = rcgen::CertificateParams::new(vec!["mirrordock-companion.local".into()])
-        .map_err(|e| e.to_string())?;
-    params.not_before = rcgen::date_time_ymd(2026, 1, 1);
-    params.not_after = rcgen::date_time_ymd(2027, 1, 1);
-    params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "MirrorDock Companion Pairing");
-    let key_pair = rcgen::KeyPair::generate().map_err(|e| e.to_string())?;
-    let cert = params.self_signed(&key_pair).map_err(|e| e.to_string())?;
-    let cert_der = cert.der().as_ref().to_vec();
-    let key_der = key_pair.serialize_der();
-    // SPKI（SubjectPublicKeyInfo）DER——指纹锁定对象，与证书内公钥一致。
-    let spki_der = key_pair.public_key_der();
-    let mut hasher = Sha256::new();
-    hasher.update(&spki_der);
-    Ok((cert_der, key_der, hex_lower(&hasher.finalize())))
 }
 
 /// 枚举本机局域网 IPv4 候选（UDP connect 技巧 + 回环回退）。
@@ -146,15 +326,25 @@ pub fn local_ipv4_candidates() -> Vec<String> {
 }
 
 /// 启动一次配对监听（自动结束/替换旧会话）。
-pub fn begin_pairing(state: &Arc<PairingState>) -> Result<PairingOffer, crate::AppError> {
+///
+/// `identity_dir`：桌面长期身份目录；`store`：已配对设备台账。
+pub fn begin_pairing(
+    state: &Arc<PairingState>,
+    identity_dir: &Path,
+    store: PairedStore,
+) -> Result<PairingOffer, crate::AppError> {
     end_pairing(state);
 
-    let (cert_der, key_der, fingerprint) =
-        generate_ephemeral_cert().map_err(|e| crate::AppError {
+    let (identity, created) =
+        PairingIdentity::load_or_create(identity_dir).map_err(|e| crate::AppError {
             code: "pairing_cert_failed",
-            message: format!("配对证书生成失败：{e}"),
+            message: format!("配对身份不可用：{e}"),
             recovery: "重试一次；持续失败请通过帮助与诊断反馈。".into(),
         })?;
+    if created {
+        state.push_event("已生成新的桌面配对身份（首次使用或原身份损坏）");
+    }
+    let fingerprint = identity.fingerprint.clone();
     let token = generate_pairing_token();
     let hosts = local_ipv4_candidates();
 
@@ -200,7 +390,7 @@ pub fn begin_pairing(state: &Arc<PairingState>) -> Result<PairingOffer, crate::A
                 return;
             }
         };
-        run_accept_loop(listener, cert_der, key_der, token, shared, shutdown_rx).await;
+        run_accept_loop(listener, identity, token, store, shared, shutdown_rx).await;
     });
     drop(handle);
 
@@ -236,16 +426,16 @@ fn hhmmss_now() -> String {
 /// 接受循环：串行处理会话（POC 足够），shutdown 通道随时可打断。
 async fn run_accept_loop(
     listener: tokio::net::TcpListener,
-    cert_der: Vec<u8>,
-    key_der: Vec<u8>,
+    identity: PairingIdentity,
     token_expected: String,
+    store: PairedStore,
     state: Arc<PairingState>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
-    let certs = vec![CertificateDer::from(cert_der)];
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der));
+    let certs = vec![CertificateDer::from(identity.cert_der.clone())];
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
     let config = match rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
@@ -284,7 +474,7 @@ async fn run_accept_loop(
                     }
                     result = acceptor.accept(stream) => {
                         match result {
-                            Ok(tls) => serve_session(tls, &token_expected, &state, peer.ip().to_string()).await,
+                            Ok(tls) => serve_session(tls, &token_expected, &identity, &store, &state, peer.ip().to_string()).await,
                             Err(e) => state.push_event(format!("TLS 握手失败：{e}")),
                         }
                     }
@@ -303,35 +493,72 @@ async fn run_accept_loop(
 async fn serve_session(
     tls: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     token_expected: &str,
+    identity: &PairingIdentity,
+    store: &PairedStore,
     state: &PairingState,
     peer_ip: String,
 ) {
     let (reader, mut writer) = tokio::io::split(tls);
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
 
-    // 第一行必须是 "MDP1 <token>"。
-    let hello = match tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line()).await {
-        Ok(Ok(Some(line))) => line,
-        _ => {
+    // 第一行："MDP2 <token>"（首配，扫码）或 "MDP2 RECONNECT <pairing_id>"（互信重连）。
+    let hello = match read_line(&mut reader, std::time::Duration::from_secs(10)).await {
+        Some(line) => line,
+        None => {
             state.push_event("握手超时或对端提前断开");
             return;
         }
     };
     let mut parts = hello.split_whitespace();
-    let (proto, token) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    if proto != PROTOCOL_TAG || token != token_expected {
+    let proto = parts.next().unwrap_or("");
+    if proto != PROTOCOL_TAG {
         let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
-        state.push_event("配对码校验失败，连接已拒绝");
+        state.push_event("协议版本不支持，连接已拒绝");
         return;
     }
+
+    // MDP2 互信握手：验证对端持有其申报公钥对应的私钥，才允许进入会话。
+    let handshake = match parts.next().unwrap_or("") {
+        word if word == token_expected => {
+            establish_trust(EstablishMode::FreshPairing, store, &mut reader, &mut writer, state).await
+        }
+        "RECONNECT" => {
+            let pairing_id = parts.next().unwrap_or("").to_string();
+            establish_trust(EstablishMode::Reconnect { pairing_id }, store, &mut reader, &mut writer, state).await
+        }
+        _ => {
+            let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
+            state.push_event("配对码校验失败，连接已拒绝");
+            return;
+        }
+    };
+    let Some(device) = handshake else { return }; // 失败原因已写入事件流。
+
     let _ = writer
-        .write_all(b"{\"type\":\"welcome\",\"protocol\":\"MDP1\"}\n")
+        .write_all(format!("{{\"type\":\"paired_ok\",\"pairing_id\":\"{}\"}}\n", device.pairing_id).as_bytes())
         .await;
-    state.push_event("配对成功，加密会话已建立");
+    state.push_event(format!(
+        "设备报到：{}（互信会话已建立，来源 {}）",
+        device.model, peer_ip
+    ));
+    // 桥接可能阻塞（mDNS 扫描 + adb connect），丢进阻塞线程池，
+    // 结果以事件形式回到事件流——前端面板直接可见。
+    if let Some(bridge) = state.take_device_bridge() {
+        let peer = peer_ip.clone();
+        let join = tauri::async_runtime::spawn_blocking(move || bridge(&peer));
+        match join.await {
+            Ok(lines) => {
+                for line in lines {
+                    state.push_event(line);
+                }
+            }
+            Err(e) => state.push_event(format!("桥接任务失败：{e}")),
+        }
+    }
 
     loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(300), lines.next_line()).await {
-            Ok(Ok(Some(line))) => {
+        match read_line(&mut reader, std::time::Duration::from_secs(300)).await {
+            Some(line) => {
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                     state.push_event("收到无法解析的行（已忽略）");
                     continue;
@@ -342,26 +569,9 @@ async fn serve_session(
                         return;
                     }
                     Some("device_hello") => {
-                        let model = value.get("model").and_then(|m| m.as_str()).unwrap_or("unknown");
-                        state.push_event(format!("设备报到：{model}"));
-                        // 桥接可能阻塞（mDNS 扫描 + adb connect），丢进阻塞线程池，
-                        // 结果以事件形式回到事件流——前端面板直接可见。
-                        if let Some(bridge) = state.take_device_bridge() {
-                            // state 的生命周期：会话循环持有 &PairingState，
-                            // 阻塞任务需要自有引用，这里借 Arc 化的事件缓冲兜底。
-                            // PairingState 由调用方以 Arc 持有，直接升级引用不安全；
-                            // 因此桥接文案由回调返回、由本循环追加，任务只返回 Vec<String>。
-                            let peer = peer_ip.clone();
-                            let join = tauri::async_runtime::spawn_blocking(move || bridge(&peer));
-                            match join.await {
-                                Ok(lines) => {
-                                    for line in lines {
-                                        state.push_event(line);
-                                    }
-                                }
-                                Err(e) => state.push_event(format!("桥接任务失败：{e}")),
-                            }
-                        }
+                        // 互信握手已把设备报到并入 establish_trust；这里再收到
+                        // 说明对端走了旧协议流程，如实记录，不中断会话。
+                        state.push_event("收到旧协议报到消息（已忽略）");
                     }
                     Some("capture_stats") => {
                         let frames = value.get("frames").and_then(|f| f.as_u64()).unwrap_or(0);
@@ -383,11 +593,164 @@ async fn serve_session(
                     None => {}
                 }
             }
-            _ => {
+            None => {
                 state.push_event("会话结束（超时或断开）");
                 return;
             }
         }
+    }
+}
+
+/// 互信建立模式：首配（凭一次性 token）或重连（凭 pairing_id）。
+enum EstablishMode {
+    FreshPairing,
+    Reconnect { pairing_id: String },
+}
+
+/// MDP2 互信握手：
+/// 1. 对端申报身份（首配：`device_hello{model,pubkey}`；重连：查台账取公钥）；
+/// 2. 桌面发 `challenge{nonce}`，对端回 `challenge_response{sig}`（ECDSA P-256，DER）；
+/// 3. 验签通过 → 台账登记（首配插入 / 重连刷新 last_seen）→ 返回设备信息。
+///
+/// 任何一步失败都写入事件流并返回 None（调用方直接断开，不发 paired_ok）。
+async fn establish_trust<L, W>(
+    mode: EstablishMode,
+    store: &PairedStore,
+    lines: &mut L,
+    writer: &mut W,
+    state: &PairingState,
+) -> Option<PairedCompanion>
+where
+    L: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let is_fresh = matches!(mode, EstablishMode::FreshPairing);
+    let _ = writer
+        .write_all(b"{\"type\":\"welcome\",\"protocol\":\"MDP2\"}\n")
+        .await;
+
+    // 已配对台账里的记录（重连路径用）；申报的公钥 hex 与机型。
+    let (pubkey_hex, model, stored) = match mode {
+        EstablishMode::FreshPairing => {
+            let hello = match read_json_line(lines, state, "未收到设备报到").await {
+                Some(v) => v,
+                None => return None,
+            };
+            if hello.get("type").and_then(|t| t.as_str()) != Some("device_hello") {
+                state.push_event("设备报到消息格式不正确");
+                return None;
+            }
+            // 机型只保留安全字符并限长（进事件流与台账，不透传控制字符）。
+            let model = hello
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-' || *c == '_')
+                .take(64)
+                .collect::<String>();
+            let pubkey = hello.get("pubkey").and_then(|p| p.as_str()).unwrap_or("");
+            (pubkey.to_string(), model, None)
+        }
+        EstablishMode::Reconnect { pairing_id } => {
+            let found = store.load().into_iter().find(|d| d.pairing_id == pairing_id);
+            match found {
+                Some(device) => {
+                    let pubkey = device.pubkey_hex.clone();
+                    let model = device.model.clone();
+                    (pubkey, model, Some(device))
+                }
+                None => {
+                    state.push_event("重连被拒：这台设备未与本机配对（可能已被移除）");
+                    let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
+                    return None;
+                }
+            }
+        }
+    };
+
+    // 公钥有效性：能解析成 P-256 公钥才继续（防止把垃圾字节写进台账）。
+    if verifying_key_from_hex(&pubkey_hex).is_none() {
+        state.push_event("设备公钥格式不正确，互信未建立");
+        return None;
+    }
+
+    // 挑战：32 字节随机 nonce（hex 编码下发），要求对端用其私钥签名。
+    let mut nonce = vec![0u8; CHALLENGE_BYTES];
+    getrandom::getrandom(&mut nonce).expect("系统熵源不可用");
+    let nonce_hex = hex_lower(&nonce);
+    let _ = writer
+        .write_all(format!("{{\"type\":\"challenge\",\"nonce\":\"{nonce_hex}\"}}\n").as_bytes())
+        .await;
+
+    let response = match read_json_line(lines, state, "未收到挑战签名").await {
+        Some(v) => v,
+        None => return None,
+    };
+    if response.get("type").and_then(|t| t.as_str()) != Some("challenge_response") {
+        state.push_event("挑战响应消息格式不正确，互信未建立");
+        return None;
+    }
+    let sig = response.get("sig").and_then(|s| s.as_str()).unwrap_or("");
+    if !verify_challenge(&pubkey_hex, &nonce, sig) {
+        state.push_event("挑战签名验证失败，连接已拒绝（对端不持有申报的身份）");
+        return None;
+    }
+
+    // 验签通过：登记台账（首配插入，重连刷新 last_seen）。
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let device = match stored {
+        Some(mut device) => {
+            device.last_seen = now;
+            if let Err(e) = store.upsert(device.clone()) {
+                state.push_event(format!("台账更新失败：{e}"));
+            }
+            device
+        }
+        None => {
+            let device = PairedCompanion {
+                pairing_id: pairing_id_from_spki(&hex_decode(&pubkey_hex).unwrap_or_default()),
+                model,
+                pubkey_hex,
+                added_at: now,
+                last_seen: now,
+            };
+            if let Err(e) = store.upsert(device.clone()) {
+                state.push_event(format!("台账写入失败：{e}"));
+            }
+            device
+        }
+    };
+    state.push_event(format!(
+        "互信已建立：{}（{}）",
+        device.model,
+        if is_fresh { "首次配对" } else { "重连" }
+    ));
+    Some(device)
+}
+
+/// 读一行 JSON（10 秒超时）；超时/断开写事件流并返回 None。
+async fn read_json_line<L>(reader: &mut L, state: &PairingState, timeout_message: &str) -> Option<serde_json::Value>
+where
+    L: tokio::io::AsyncBufRead + Unpin,
+{
+    let line = read_line(reader, std::time::Duration::from_secs(10)).await?;
+    serde_json::from_str::<serde_json::Value>(&line).ok()
+}
+
+/// 带超时读一行（UTF-8）；连接断开/超时返回 None。泛型同时服务生产与服务端/测试客户端。
+async fn read_line<L>(reader: &mut L, timeout: std::time::Duration) -> Option<String>
+where
+    L: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt as _;
+    let mut buf = String::new();
+    match tokio::time::timeout(timeout, reader.read_line(&mut buf)).await {
+        Ok(Ok(n)) if n > 0 => Some(buf),
+        _ => None,
     }
 }
 
@@ -420,13 +783,49 @@ mod tests {
     }
 
     #[test]
-    fn ephemeral_cert_has_spki_fingerprint() {
-        let (cert_der, key_der, fp) = generate_ephemeral_cert().unwrap();
-        assert!(!cert_der.is_empty() && !key_der.is_empty());
-        assert_eq!(fp.len(), 64);
-        // 每次现场生成新密钥 → 指纹必然不同。
-        let (_, _, fp2) = generate_ephemeral_cert().unwrap();
-        assert_ne!(fp, fp2);
+    fn identity_persists_and_fingerprint_is_stable() {
+        let dir = std::env::temp_dir().join(format!("md-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (identity, created) = PairingIdentity::load_or_create(&dir).unwrap();
+        assert!(created);
+        assert_eq!(identity.fingerprint.len(), 64);
+        assert!(identity.key_der.starts_with(&[0x30])); // PKCS8 DER：SEQUENCE 开头。
+
+        // 二次读取：不再生成（created=false），指纹一致（重连免扫码的前提）。
+        let (again, created_again) = PairingIdentity::load_or_create(&dir).unwrap();
+        assert!(!created_again);
+        assert_eq!(again.fingerprint, identity.fingerprint);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn paired_store_upsert_and_remove() {
+        let dir = std::env::temp_dir().join(format!("md-paired-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = PairedStore::new(&dir);
+        assert!(store.load().is_empty());
+
+        let device = PairedCompanion {
+            pairing_id: "AB12CD34EF56AB12".into(),
+            model: "POCO F5".into(),
+            pubkey_hex: "30".repeat(91),
+            added_at: 1000,
+            last_seen: 1000,
+        };
+        let devices = store.upsert(device.clone()).unwrap();
+        assert_eq!(devices.len(), 1);
+
+        // 同 id 二次报到只刷新字段，不产生重复行。
+        let mut again = device.clone();
+        again.last_seen = 2000;
+        again.model = "POCO F5 renamed".into();
+        let devices = store.upsert(again).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].last_seen, 2000);
+        assert_eq!(devices[0].model, "POCO F5 renamed");
+
+        assert_eq!(store.remove(&device.pairing_id).unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -434,12 +833,91 @@ mod tests {
         assert!(!local_ipv4_candidates().is_empty());
     }
 
-    /// 端到端：真实 TLS 监听 + 客户端 SPKI 指纹锁定 + token 握手 + 统计流。
-    /// 直接驱动 run_accept_loop（不经 tauri runtime，tokio 测试线程内完成）。
+    /// 测试用客户端身份：确定性 P-256 密钥（与伴侣 App Keystore 同算法）。
+    fn test_device_key() -> p256::ecdsa::SigningKey {
+        use p256::ecdsa::SigningKey;
+        SigningKey::from_bytes(&[42u8; 32].into()).unwrap()
+    }
+
+    /// 客户端侧 TLS 连接（SPKI 指纹锁定，与伴侣 App 出带校验同构）。
+    async fn tls_connect(
+        port: u16,
+        fingerprint: &str,
+    ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+        let verifier = Arc::new(FpVerifier {
+            expected_fp: fingerprint.to_string(),
+        });
+        let config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let tcp = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        connector.connect(server_name(), tcp).await.unwrap()
+    }
+
+    /// 首配客户端：发 MDP2 <token>，走完 device_hello → challenge → 签名，
+    /// 返回服务端最后一条回复（paired_ok 或无）。
+    async fn fresh_pair_client(
+        port: u16,
+        fingerprint: &str,
+        token: &str,
+        model: &str,
+        signing: &p256::ecdsa::SigningKey,
+        sign_wrong_data: bool,
+    ) -> Option<String> {
+        use pkcs8::EncodePublicKey as _;
+        use p256::ecdsa::signature::{SignatureEncoding, Signer};
+        use tokio::io::AsyncWriteExt;
+
+        let tls = tls_connect(port, fingerprint).await;
+        let (read_half, mut write_half) = tokio::io::split(tls);
+        let mut lines = BufReader::new(read_half).lines();
+
+        write_half
+            .write_all(format!("{PROTOCOL_TAG} {token}\n").as_bytes())
+            .await
+            .unwrap();
+        let welcome = lines.next_line().await.unwrap().unwrap();
+        assert!(welcome.contains("\"welcome\""), "got {welcome}");
+
+        let spki = signing.verifying_key().to_public_key_der().unwrap();
+        let pubkey_hex = hex_lower(spki.as_bytes());
+        write_half
+            .write_all(
+                format!("{{\"type\":\"device_hello\",\"model\":\"{model}\",\"pubkey\":\"{pubkey_hex}\"}}\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+
+        let challenge: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(challenge["type"], "challenge");
+        let nonce = hex_decode(challenge["nonce"].as_str().unwrap()).unwrap();
+
+        let signature: p256::ecdsa::Signature = if sign_wrong_data {
+            signing.sign(b"not the nonce".as_slice())
+        } else {
+            signing.sign(nonce.as_slice())
+        };
+        let sig_hex = hex_lower(signature.to_vec().as_slice());
+        write_half
+            .write_all(format!("{{\"type\":\"challenge_response\",\"sig\":\"{sig_hex}\"}}\n").as_bytes())
+            .await
+            .unwrap();
+        lines.next_line().await.ok().flatten()
+    }
+
     #[tokio::test]
     async fn pairing_session_end_to_end() {
+        let workdir = std::env::temp_dir().join(format!("md-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
         let state = Arc::new(PairingState::default());
-        let (cert_der, key_der, fingerprint) = generate_ephemeral_cert().unwrap();
+        let (identity, _) = PairingIdentity::load_or_create(&workdir).unwrap();
+        let store = PairedStore::new(&workdir);
         let token = generate_pairing_token();
         let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = std_listener.local_addr().unwrap().port();
@@ -449,59 +927,51 @@ mod tests {
         let loop_token = token.clone();
         let (_tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            run_accept_loop(listener, cert_der, key_der, loop_token, loop_state, rx).await;
+            run_accept_loop(listener, identity, loop_token, store, loop_state, rx).await;
         });
 
-        // 客户端：SPKI 指纹锁定（与伴侣 App 相同的出带校验逻辑）。
-        let verifier = Arc::new(FpVerifier {
-            expected_fp: fingerprint.clone(),
-        });
-        let config = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        // 错误签名必须被拒（对端不持有申报身份）。
+        let signing = test_device_key();
+        let rejected = fresh_pair_client(port, &fingerprint_of(&workdir), &token, "Bad-Device", &signing, true)
+            .await;
+        assert!(rejected.is_none());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(state.status().events.iter().any(|e| e.contains("挑战签名验证失败")));
 
-        let tcp = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
-            .await
-            .unwrap();
-        let tls = connector
-            .connect(server_name(), tcp)
-            .await
-            .expect("TLS 握手（指纹校验通过）");
+        // 正确签名：完整握手 + 统计流 + bye。
+        let paired = match fresh_pair_client(port, &fingerprint_of(&workdir), &token, "POC-Test", &signing, false).await {
+            Some(v) => v,
+            None => {
+                eprintln!("服务端事件流：{:#?}", state.status().events);
+                panic!("paired_ok");
+            }
+        };
+        let pairing_id: serde_json::Value = serde_json::from_str(&paired).unwrap();
+        assert_eq!(pairing_id["type"], "paired_ok");
 
-        let (read_half, mut write_half) = tokio::io::split(tls);
-        write_half
-            .write_all(format!("{PROTOCOL_TAG} {token}\n").as_bytes())
-            .await
-            .unwrap();
-        let mut lines = BufReader::new(read_half).lines();
-        let welcome = lines.next_line().await.unwrap().unwrap();
-        assert!(welcome.contains("\"welcome\""), "got {welcome}");
-
-        write_half
-            .write_all(b"{\"type\":\"device_hello\",\"model\":\"POC-Test\"}\n")
-            .await
-            .unwrap();
-        let mut stats_line = br#"{"type":"capture_stats","frames":42,"audio_supported":true,"sample_jpeg_bytes":18000}"#.to_vec();
-        stats_line.push(b'\n');
-        write_half.write_all(&stats_line).await.unwrap();
-        write_half.write_all(b"{\"type\":\"bye\"}\n").await.unwrap();
-        // 留出服务端处理时间。
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-        let status = state.status();
-        let joined = status.events.join("\n");
-        assert!(joined.contains("设备报到：POC-Test"), "{joined}");
-        assert!(joined.contains("捕获统计：42 帧"), "{joined}");
-        assert!(joined.contains("伴侣端正常结束会话"), "{joined}");
+        // 台账已登记该设备。
+        let devices = PairedStore::new(&workdir).load();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].model, "POC-Test");
+        assert_eq!(devices[0].pairing_id, pairing_id["pairing_id"].as_str().unwrap());
+        let _ = std::fs::remove_dir_all(&workdir);
     }
 
-    /// 错误 token 必须被拒绝。
+    /// 读取身份指纹（测试辅助：指纹文件由 load_or_create 落盘）。
+    fn fingerprint_of(dir: &std::path::Path) -> String {
+        std::fs::read_to_string(dir.join("identity.fp")).unwrap().trim().to_string()
+    }
+
+    /// 错误 token 必须被拒绝；未知 pairing_id 的重连同样被拒。
     #[tokio::test]
     async fn pairing_rejects_wrong_token() {
+        use tokio::io::AsyncWriteExt;
+
+        let workdir = std::env::temp_dir().join(format!("md-reject-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
         let state = Arc::new(PairingState::default());
-        let (cert_der, key_der, fingerprint) = generate_ephemeral_cert().unwrap();
+        let (identity, _) = PairingIdentity::load_or_create(&workdir).unwrap();
+        let store = PairedStore::new(&workdir);
         let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = std_listener.local_addr().unwrap().port();
         let listener = set_nonblocking_and_convert(std_listener).unwrap();
@@ -509,20 +979,23 @@ mod tests {
         let loop_state = state.clone();
         let (_tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            run_accept_loop(listener, cert_der, key_der, "CORRECTTOKEN1234".into(), loop_state, rx).await;
+            run_accept_loop(listener, identity, "CORRECTTOKEN1234".into(), store, loop_state, rx).await;
         });
 
-        let verifier = Arc::new(FpVerifier { expected_fp: fingerprint });
+        let verifier = Arc::new(FpVerifier { expected_fp: fingerprint_of(&workdir) });
         let config = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
 
-        let tcp = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap();
-        let tls = connector.connect(server_name(), tcp).await.unwrap();
+        // 错误 token。
+        let tls = connector
+            .connect(server_name(), tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap())
+            .await
+            .unwrap();
         let (mut read_half, mut write_half) = tokio::io::split(tls);
-        write_half.write_all(b"MDP1 WRONGTOKEN00000\n").await.unwrap();
+        write_half.write_all(b"MDP2 WRONGTOKEN00000\n").await.unwrap();
         let mut buf = vec![0u8; 128];
         let n = tokio::time::timeout(std::time::Duration::from_secs(5), read_half.read(&mut buf))
             .await
@@ -530,6 +1003,21 @@ mod tests {
             .unwrap();
         assert!(String::from_utf8_lossy(&buf[..n]).contains("rejected"));
         assert!(state.status().events.iter().any(|e| e.contains("配对码校验失败")));
+
+        // 未知 pairing_id 的重连。
+        let tls = connector
+            .connect(server_name(), tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap())
+            .await
+            .unwrap();
+        let (mut read_half, mut write_half) = tokio::io::split(tls);
+        write_half.write_all(b"MDP2 RECONNECT UNKNOWN00000000\n").await.unwrap();
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), read_half.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).contains("rejected"));
+        assert!(state.status().events.iter().any(|e| e.contains("未与本机配对")));
+        let _ = std::fs::remove_dir_all(&workdir);
     }
 
     #[derive(Debug)]

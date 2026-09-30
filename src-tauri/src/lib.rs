@@ -6528,11 +6528,27 @@ fn companion_bridge_events(adb: &dyn AdbRuntime, peer_ip: &str) -> Vec<String> {
         .collect()
 }
 
+/// 伴侣配对数据根目录（桌面身份 + 已配对设备台账同目录）。
+fn companion_data_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("companion-identity"))
+        .map_err(|_| {
+            AppError::new(
+                "settings_unavailable",
+                "无法访问本机数据目录。",
+                "请检查本机文件权限，或重新安装 MirrorDock。",
+            )
+        })
+}
+
 #[tauri::command]
 fn companion_begin_pairing(
     state: State<'_, Arc<companion_pairing::PairingState>>,
+    app: AppHandle,
 ) -> Result<companion_pairing::PairingOffer, AppError> {
-    companion_pairing::begin_pairing(&state)
+    let dir = companion_data_dir(&app)?;
+    companion_pairing::begin_pairing(&state, &dir, companion_pairing::PairedStore::new(&dir))
 }
 
 #[tauri::command]
@@ -6545,6 +6561,29 @@ fn companion_pairing_status(
 #[tauri::command]
 fn companion_end_pairing(state: State<'_, Arc<companion_pairing::PairingState>>) {
     companion_pairing::end_pairing(&state);
+}
+
+/// 已配对的伴侣设备列表（M4-1 互信台账）。
+#[tauri::command]
+fn companion_paired_devices(app: AppHandle) -> Result<Vec<companion_pairing::PairedCompanion>, AppError> {
+    let dir = companion_data_dir(&app)?;
+    Ok(companion_pairing::PairedStore::new(&dir).load())
+}
+
+/// 移除一台已配对伴侣设备的互信（对端下次连接需重新扫码配对）。
+#[tauri::command]
+fn companion_unpair_device(
+    app: AppHandle,
+    pairing_id: String,
+) -> Result<Vec<companion_pairing::PairedCompanion>, AppError> {
+    let dir = companion_data_dir(&app)?;
+    companion_pairing::PairedStore::new(&dir)
+        .remove(&pairing_id)
+        .map_err(|e| AppError {
+            code: "companion_unpair_failed",
+            message: format!("移除配对设备失败：{e}"),
+            recovery: "检查本机文件权限后重试。".into(),
+        })
 }
 
 /// 应用退出时回收子进程，避免残留 scrcpy 进程。优雅结束让录制文件有机会收尾。
@@ -6661,6 +6700,8 @@ pub fn run() {
             companion_begin_pairing,
             companion_pairing_status,
             companion_end_pairing,
+            companion_paired_devices,
+            companion_unpair_device,
             get_app_settings,
             set_app_settings
         ])
