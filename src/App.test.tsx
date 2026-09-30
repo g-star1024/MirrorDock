@@ -290,6 +290,8 @@ describe("readOptions", () => {
       keyboard_uhid: true,
       read_only: false,
       max_fps: null,
+      desktop_mode: false,
+      camera_source: false,
     });
   });
 

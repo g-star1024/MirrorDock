@@ -536,6 +536,22 @@ struct SessionOptions {
     /// 一个明确上限：白名单 24/30/60，白名单外的值一律拒绝，不透传任意数字。
     #[serde(default)]
     max_fps: Option<u32>,
+    /// 桌面模式（scrcpy `--new-display`，X10-49，v0.4）。
+    ///
+    /// 开启后不再镜像手机现有屏幕，而是在手机上创建一块**独立虚拟显示器**：
+    /// 手机上可以从容操作（比如回微信），电脑上的窗口不被打断——类似三星 DeX
+    /// 的体验。需要 Android 10+；低版本系统上 scrcpy 会失败，前端能力说明会
+    /// 如实提示。与摄像头源互斥（同一时刻只能有一个视频源）。
+    #[serde(default)]
+    desktop_mode: bool,
+    /// 摄像头源（scrcpy `--video-source=camera`，X10-50，v0.4）。
+    ///
+    /// 把手机后置摄像头当作电脑上的网络摄像头画面。**默认关闭**且显式选择：
+    /// 摄像头是敏感隐私面，绝不默认开启。摄像头源模式下**强制关闭音频**
+    /// （scrcpy 默认会转摄像头麦克风；我们不采集任何麦克风，见 A1-05 的承诺）。
+    /// 与桌面模式互斥。
+    #[serde(default)]
+    camera_source: bool,
 }
 
 impl Default for SessionOptions {
@@ -554,6 +570,8 @@ impl Default for SessionOptions {
             keyboard_uhid: true,
             read_only: false,
             max_fps: None,
+            desktop_mode: false,
+            camera_source: false,
         }
     }
 }
@@ -565,6 +583,14 @@ impl SessionOptions {
                 "invalid_rotation",
                 "旋转角度无效。",
                 "请选择 0、90、180 或 270 度。",
+            ));
+        }
+        // 视频源互斥（X10-49/X10-50）：一个会话只能有一个画面来源。
+        if self.desktop_mode && self.camera_source {
+            return Err(AppError::new(
+                "video_source_conflict",
+                "桌面模式与摄像头画面不能同时开启。",
+                "请只选择其中一个视频来源。",
             ));
         }
         let (size, bitrate) = match self.quality {
@@ -622,6 +648,18 @@ impl SessionOptions {
                 ));
             }
             args.push(format!("--max-fps={fps}"));
+        }
+        // 视频源（X10-49/X10-50）：默认「手机屏幕」不传参数。
+        // 桌面模式 = --new-display（独立虚拟显示器，主屏尺寸）。
+        // 摄像头源 = --video-source=camera，同时强制 --no-audio：scrcpy 的
+        // 摄像头源会把音频源切到麦克风，我们绝不采集麦克风（A1-05 承诺）。
+        if self.desktop_mode {
+            args.push("--new-display".into());
+        } else if self.camera_source {
+            args.push("--video-source=camera".into());
+            if !args.iter().any(|argument| argument == "--no-audio") {
+                args.push("--no-audio".into());
+            }
         }
         if self.read_only {
             args.push("--no-control".into());
@@ -7906,6 +7944,8 @@ mod tests {
                 keyboard_uhid: true,
                 read_only: false,
                 max_fps: None,
+                desktop_mode: false,
+                camera_source: false,
             };
             let args = options.arguments().unwrap();
             assert!(args.contains(&format!("--max-size={size}")));
@@ -9913,6 +9953,46 @@ mod tests {
         // 旧配置（缺字段）经 serde 默认视为不限帧率。
         let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
         assert!(parsed.max_fps.is_none());
+    }
+
+    #[test]
+    fn video_sources_are_mutually_exclusive_and_camera_forces_no_audio() {
+        // 默认（屏幕源）不传任何视频源参数。
+        let args = SessionOptions::default().arguments().unwrap();
+        assert!(!args.iter().any(|a| a.contains("new-display")));
+        assert!(!args.iter().any(|a| a.contains("video-source")));
+
+        // 桌面模式：--new-display。
+        let desktop = SessionOptions {
+            desktop_mode: true,
+            ..Default::default()
+        };
+        assert!(desktop.arguments().unwrap().contains(&"--new-display".into()));
+
+        // 摄像头源：--video-source=camera，且强制 --no-audio（不采集麦克风）。
+        let camera = SessionOptions {
+            camera_source: true,
+            ..Default::default()
+        };
+        let args = camera.arguments().unwrap();
+        assert!(args.contains(&"--video-source=camera".into()));
+        assert!(args.contains(&"--no-audio".into()));
+
+        // 互斥：同时开启直接拒绝。
+        let conflict = SessionOptions {
+            desktop_mode: true,
+            camera_source: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            conflict.arguments().unwrap_err().code,
+            "video_source_conflict"
+        );
+
+        // 旧配置（缺字段）视为都关闭。
+        let parsed: SessionOptions = serde_json::from_str(r#"{"rotation":0}"#).unwrap();
+        assert!(!parsed.desktop_mode);
+        assert!(!parsed.camera_source);
     }
 
     #[test]

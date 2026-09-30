@@ -136,7 +136,7 @@ export type DeviceLockReport = {
   explanation: string;
   recovery: string;
 };
-type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean; max_fps: number | null };
+type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: boolean; always_on_top: boolean; rotation: number; keep_awake: boolean; record: boolean; clipboard_autosync: boolean; audio: boolean; shortcut_mod: string | null; show_touches: boolean; keyboard_uhid: boolean; read_only: boolean; max_fps: number | null; desktop_mode: boolean; camera_source: boolean };
 // 镜像窗口形态由启动参数决定，运行中无法改写：后端「应用新设置」= 结束旧窗口 + 按新设置重开。
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
@@ -203,7 +203,7 @@ type Screenshot = { file_name: string; path: string; bytes: number };
 type TransferReceipt = { file_name: string; path: string; bytes: number };
 // 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
 type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
-const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null };
+const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, camera_source: false };
 export function readOptions(): SessionOptions {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.sessionOptions") ?? "null");
@@ -224,6 +224,8 @@ export function readOptions(): SessionOptions {
         keyboard_uhid: typeof value.keyboard_uhid === "boolean" ? value.keyboard_uhid : true,
         read_only: typeof value.read_only === "boolean" ? value.read_only : false,
         max_fps: [24, 30, 60].includes(value.max_fps) ? value.max_fps : null,
+        desktop_mode: typeof value.desktop_mode === "boolean" ? value.desktop_mode : false,
+        camera_source: typeof value.camera_source === "boolean" ? value.camera_source : false,
       };
     }
   } catch { /* Invalid or unavailable local settings use defaults. */ }
@@ -2215,6 +2217,20 @@ function App() {
                     <option value={30}>最高 30 帧</option>
                     <option value={24}>最高 24 帧（最省电）</option>
                   </select>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">桌面模式（独立虚拟屏幕）</span>
+                    <span className="setting-desc">不再镜像手机现有屏幕，而是在手机上创建一块独立虚拟屏幕：电脑上全屏看视频、写笔记，手机上回微信也不打断画面。需要 Android 10+，手机端会弹出「显示在其他应用上层」的确认。与摄像头画面互斥，更改后重启会话生效。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={options.desktop_mode} onChange={e => updateOptions({ ...options, desktop_mode: e.target.checked, camera_source: e.target.checked ? false : options.camera_source })} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">使用手机后置摄像头画面</span>
+                    <span className="setting-desc">把手机摄像头当作电脑上的摄像头画面（网课、会议场景）。仅在你显式开启时使用摄像头，且不采集任何麦克风声音；与桌面模式互斥，更改后重启会话生效。</span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="使用手机后置摄像头画面" checked={options.camera_source} onChange={e => updateOptions({ ...options, camera_source: e.target.checked, desktop_mode: e.target.checked ? false : options.desktop_mode })} /></label>
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
