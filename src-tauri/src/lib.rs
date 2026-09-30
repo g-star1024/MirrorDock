@@ -5257,28 +5257,30 @@ fn revoke_device_access_with(
     endpoints: &[String],
 ) -> RevokeReceipt {
     let mut steps = Vec::new();
+    // 回执面向非技术用户：失败只说「设备当前无响应或未授权」，
+    // 不透出 adb 原始英文报错（X10-35）；细节仍留在诊断日志。
     // ① 先打开手机的开发者选项（趁通道还活着）。
     match first_endpoint_ok(endpoints, |serial| {
         runtimes.adb.open_developer_settings(serial)
     }) {
         Ok(()) => steps.push("已在手机上打开「开发者选项」页面。".into()),
-        Err(error) => steps.push(format!(
-            "未能自动打开开发者选项（{error}）；请手动进入手机的 设置 → 开发者选项。"
-        )),
+        Err(_) => steps.push(
+            "这台手机当前无响应（离线或未授权），未能自动打开开发者选项；请在手机上手动进入 设置 → 开发者选项。".into(),
+        ),
     }
     // ② 关闭「无线调试」：所有电脑的无线访问立即失效。
     match first_endpoint_ok(endpoints, |serial| {
         runtimes.adb.disable_wireless_debugging(serial)
     }) {
         Ok(()) => steps.push("已关闭手机上的「无线调试」开关。".into()),
-        Err(error) => steps.push(format!("关闭「无线调试」未成功（{error}）。")),
+        Err(_) => steps.push("关闭「无线调试」未成功：设备当前无响应，可在手机上手动关闭。".into()),
     }
     // ③ 关闭「USB 调试」：所有电脑的调试访问（含 USB）立即失效，连接随之断开。
     match first_endpoint_ok(endpoints, |serial| {
         runtimes.adb.disable_usb_debugging(serial)
     }) {
         Ok(()) => steps.push("已关闭手机上的「USB 调试」开关，连接即将断开。".into()),
-        Err(error) => steps.push(format!("关闭「USB 调试」未成功（{error}）。")),
+        Err(_) => steps.push("关闭「USB 调试」未成功：设备当前无响应，可在手机上手动关闭。".into()),
     }
     // ④ 本机侧断开全部无线端点（尽力而为）。
     for endpoint in endpoints {
@@ -5286,9 +5288,9 @@ fn revoke_device_access_with(
             let _ = runtimes.adb.disconnect(endpoint);
         }
     }
-    steps.push("已断开本机与这台手机的全部无线连接。".into());
+    steps.push("已断开本机与这台手机的全部无线连接，并已把它从设备列表移除。".into());
     steps.push(
-        "最后一步要在手机上完成：在已打开的「开发者选项」里点「撤销 USB 调试授权」，清除手机保存的授权记录。".into(),
+        "最后一步要在手机上完成：在手机的「开发者选项」里点「撤销 USB 调试授权」，清除手机保存的授权记录。".into(),
     );
     RevokeReceipt { steps }
 }
@@ -6311,6 +6313,14 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        /// 设备侧写入一律失败的设备（模拟离线：取消授权各步都会失败）。
+        fn with_device_write_failure() -> Self {
+            Self {
+                device_writes_fail: Arc::new(Mutex::new(true)),
+                ..Self::default()
+            }
+        }
     }
 
     impl AdbRuntime for FakeAdb {
@@ -6597,6 +6607,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("open_developer_settings {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
             Ok(())
         }
 
@@ -6605,6 +6618,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("disable_wireless_debugging {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
             Ok(())
         }
 
@@ -6613,6 +6629,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("disable_usb_debugging {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
             Ok(())
         }
 
@@ -7052,6 +7071,23 @@ mod tests {
         let joined = receipt.steps.join("\n");
         assert!(joined.contains("已关闭手机上的「无线调试」"), "USB 兜底应成功：{joined}");
         assert!(joined.contains("已关闭手机上的「USB 调试」"), "{joined}");
+    }
+
+    #[test]
+    fn revoke_receipt_for_unreachable_device_stays_user_friendly() {
+        // 离线设备取消授权：各步都会失败，回执必须说人话，
+        // 不得透出 adb 原始英文报错（X10-35 用户截图场景）。
+        let adb = FakeAdb::with_device_write_failure();
+        let endpoints = vec!["79j7kn9tkjt8rwss".to_string()];
+        let receipt = revoke_device_access_with(&AppRuntimes {
+            adb: Arc::new(adb),
+            mirror: Box::new(FakeMirror::running()),
+            serial_cache: Mutex::new(HashMap::new()),
+        }, &endpoints);
+        let joined = receipt.steps.join("\n");
+        assert!(joined.contains("设备当前无响应"), "{joined}");
+        assert!(!joined.contains("device offline"), "不得透出原始报错：{joined}");
+        assert!(!joined.contains("adb"), "不得透出 adb 字样：{joined}");
     }
 
     #[test]

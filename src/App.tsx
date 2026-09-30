@@ -486,7 +486,24 @@ function App() {
   const [revokeNotice, setRevokeNotice] = useState<{ text: string; error: boolean } | null>(null);
   // 取消授权成功后立即把这台设备从列表隐藏（X10-33）：调试开关已关，adb 列表
   // 通常几秒内自己消失，隐藏让它不闪一下「离线」。设备重新就绪（重新授权）即自动恢复显示。
-  const [hiddenRevokedSerials, setHiddenRevokedSerials] = useState<string[]>([]);
+  // 隐藏清单持久化到本机存储（X10-35）：离线设备的取消授权指令往往送不到手机，
+  // adb 列表里的残影不会自己消失，重启客户端也不能再冒出来。
+  const [hiddenRevokedSerials, setHiddenRevokedSerials] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem("mirrordock.revokedSerials") ?? "[]");
+      return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const hideRevokedSerial = (serial: string) => {
+    setHiddenRevokedSerials((prev) => {
+      if (prev.includes(serial)) return prev;
+      const next = [...prev, serial];
+      try { localStorage.setItem("mirrordock.revokedSerials", JSON.stringify(next)); } catch { /* 存储不可用时仅本次会话生效 */ }
+      return next;
+    });
+  };
   // 启动中的会话归属：多张设备卡同时可见时，「正在启动…」只出现在点下的那张卡上。
   const [launchingSerial, setLaunchingSerial] = useState<string | null>(null);
   // 拖拽安装 APK：拖入时显示全屏提示；安装结果以右下角浮层反馈（任何页签可见）。
@@ -818,7 +835,7 @@ function App() {
     try {
       const receipt = await invoke<{ steps: string[] }>("revoke_device_access", { serial });
       setRevokeNotice({ text: receipt.steps.join(" "), error: false });
-      setHiddenRevokedSerials((prev) => (prev.includes(serial) ? prev : [...prev, serial]));
+      hideRevokedSerial(serial);
       await refreshDevices();
       await refreshRecentDevices();
     } catch (error) {
