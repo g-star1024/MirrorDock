@@ -234,6 +234,25 @@ jobs:
           pnpm list --prod --json > "sbom-npm-${{ matrix.label }}.json"
           cat "SHA256SUMS-${{ matrix.label }}.txt"
 
+      # X10-47：macOS 的 updater 产物（.app.tar.gz + .sig）默认名不带架构，
+      # 两个 macOS 平台合并产物时会互相覆盖——统一改名带上架构与版本。
+      - name: 规范化 macOS updater 产物名
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then ARCH=aarch64; else ARCH=x64; fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          shopt -s nullglob
+          cd "$BUNDLE/macos"
+          for sig in *.app.tar.gz.sig; do
+            base="${sig%.sig}"
+            mv "$base" "MirrorDock_${VERSION}_${ARCH}.app.tar.gz"
+            mv "$sig" "MirrorDock_${VERSION}_${ARCH}.app.tar.gz.sig"
+          done
+          ls -la
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
