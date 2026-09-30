@@ -1554,7 +1554,20 @@ function App() {
                 {launchError && <p className="diagnostic">{launchError}</p>}
                 {sessionError && <p className="diagnostic" role="alert">{sessionError}</p>}
                 {statusMessage && <p className="diagnostic" role={statusRole}>{statusMessage}</p>}
-                {revokeNotice && <p className="diagnostic" role={revokeNotice.error ? "alert" : "status"}>{revokeNotice.text}</p>}
+                {revokeNotice && (
+                  <div className={`notice-dismissable ${revokeNotice.error ? "notice-error" : ""}`} role={revokeNotice.error ? "alert" : "status"}>
+                    <p className="diagnostic">{revokeNotice.text}</p>
+                    <button
+                      className="notice-close"
+                      type="button"
+                      aria-label="关闭这条通知"
+                      title="关闭"
+                      onClick={() => setRevokeNotice(null)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
                 {lockError && <p className="diagnostic" role="alert">{lockError}</p>}
                 {sessionActive && pinPadActive && (
                   <p className="diagnostic" role="status">🔒 此画面受系统安全保护，无法镜像。请在手机上直接输入密码解锁，解锁后画面自动恢复。</p>

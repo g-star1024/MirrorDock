@@ -313,3 +313,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 /* -- X10-33：锁屏状态便签 + 取消授权按钮统一样式 --------------------------- */
 .lock-badge { background: #eef3fb; color: #5a6b85; border-color: #dde6f3; }
 .revoke-button { color: #5a6b85; }
+
+/* -- X10-34：状态区通知支持手动关闭 ----------------------------------------- */
+.notice-dismissable { position: relative; }
+.notice-dismissable .diagnostic { margin: 0; padding-right: 40px; }
+.notice-dismissable.notice-error .diagnostic { color: #9c3f39; background: #fdf1f0; }
+.notice-close { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border: none; border-radius: 8px; background: transparent; color: #8a5410; font-size: 17px; line-height: 1; cursor: pointer; }
+.notice-close:hover { background: rgba(0, 0, 0, 0.06); color: #333; }
+.notice-dismissable.notice-error .notice-close { color: #9c3f39; }
