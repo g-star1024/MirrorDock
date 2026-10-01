@@ -74,7 +74,9 @@
   - **60 分钟 soak 证据（Xiaomi M2104K10AC / Android 13，USB，test-runs/perf-soak-20260929-000604.txt）**：scrcpy 无窗无控无音频 `--record --time-limit=3600`，每分钟采样一次，**60/60 分钟进程存活**，录制稳定增长约 1.05 MB/分钟，第 60 分钟 64,223,908 字节；到达 time-limit 后自然收尾，scrcpy 日志 `Time limit reached` + `Recording complete to mp4 file`。
   - **soak 判定缺陷已修复（外部证据）**：首次运行脚本判 FAIL，根因是本机 macOS BSD grep 2.6.0-FreeBSD 的 `grep -a` 在二进制文件上**反而不匹配**（`grep -aq moov` 恒假）；已验证 `grep -q` 可正确命中 mp4 内的 moov 原子（GNU/BSD 兼容），修复 `scripts/perf-gate.sh` 后 1 分钟 soak PASS（test-runs/perf-soak-20260929-010917.txt，moov 完整）。**如实记录**：60 分钟录制文件按脚本设计随临时目录清理，未直接复查其 moov；其完整性依据为「time-limit 自然收尾 + Recording complete 日志 + 同配置干净收尾录制均含 moov」的证据链，而非对该文件本身的直接检验。
   - **待完成**：回归基线固化（多设备/多桌面矩阵为外部阻塞）。
-- [ ] B2-05 非技术用户可用性测试、帮助中心、客服分流与兼容性页面。
+- [ ] B2-05 非技术用户可用性测试、帮助中心、客服分流与兼容性页面。**帮助中心与客服分流的代码面已落地：内置帮助 9 篇（2026-10-02 守卫轮新增「寻求帮助」：先自助 → 导出诊断包 → GitHub 仓库 Issue 反馈格式 → 防钓鱼提醒（不提供画面截图/许可证密钥/配对码）→ 安全问题走 GitHub 私密报告）；与 channels.md 支持分流底稿、B2-01 诊断包（已脱敏）一致。兼容性页面数据源 docs/compatibility-matrix.md 在档（本轮同步修正「无自动更新」过时条目）。待完成：真实用户的可用性测试（外部阻塞）；公开兼容性页随发布上线（依赖 R3-04 打标演练）。**
+  - **证据（2026-10-02 守卫轮，改动 = `src/helpContent.ts` + 新增 `src/helpContent.test.ts` + 本文件）**：vitest **43 passed / 0 failed**（41 → 43，新增 2 项：帮助文章结构不变量（id 唯一/标题/段落非空）、「寻求帮助」条目覆盖诊断包导出 + Issue 渠道 + 防钓鱼提醒 + 脱敏承诺一致性）；`pnpm build`（tsc + vite）通过。纯前端内容层改动，无 Rust 改动。
+  - **待完成（外部阻塞/待发布）**：非技术用户可用性测试需要真实用户轮次；公开兼容性页依赖下一次发布流程（数据源已就绪）。
 - [ ] B2-06 Windows、macOS、Ubuntu 安装包；更新、回滚、签名和渠道差异验证。
 
 ## 阶段 3：公开 v1
