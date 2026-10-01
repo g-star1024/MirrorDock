@@ -548,10 +548,12 @@
     - ④顺手清理本模块 clippy：`serve_session` 的 `identity` 死参数、3 处 `type_complexity`（抽 `pub type DeviceBridge` 别名）、`hex_decode` 的 `is_multiple_of`。现 `companion_pairing.rs` **clippy 零告警**。
     - **复核证据（2026-10-01 23:00–23:20，HEAD=97a8fb3，工作区开场干净）**：`cargo test --manifest-path src-tauri/Cargo.toml` **181 passed / 0 failed**（178 → 181）；`pnpm build` 通过、vitest **41 passed / 0 failed**；伴侣端 `:app:assembleDebug` **BUILD SUCCESSFUL**（经 gradle-run 包装器，`app-debug.apk` 4,459,024 B @ 07:57:32，晚于全部 Kotlin 源文件 mtime 07:56:48 ⇒ 确实包含 M4-1 改动）。真机面（互信往返、超长行中断的真实观感）仍为外部阻塞，未伪造。
 
-  - **M4-2 常驻通道**：伴侣 App 前台服务 + 与桌面端心跳（mDNS 广播已有 companion_bridge_events 自动连接，补断连退避重试与 Android 13 通知权限引导）；RECONNECT 免扫码直连的用户入口（桌面端常驻监听端口）。
-  - **M4-3 状态通知**：连接建立/断开/录制开始结束的系统通知（可关），App 内显示当前信任的桌面端列表（读取 SharedPreferences paired_computers）。
-  - **M4-4 互信撤销**：伴侣 App 侧「解除这台电脑」按钮（删除本机 Keystore 身份 + paired_computers 记录），与桌面端 companion_unpair_device 双向对齐。
-  - **M4-5 发版对齐**：companion.yml 产出 APK 命名带版本号、与桌面 Release 同 tag 上传（现仅 artifact）；版本号与桌面端分离维护（当前 0.1.9）。
+  - [x] **M4-2 常驻通道（2026-10-01 完成，提交 e19df23 + b54a222）**：桌面侧新增 `companion_begin_resident`/`companion_end_resident`（42 命令）：常驻监听**优先固定端口 47017**（被占回退随机并在事件流如实说明），只接受 `MDP2 RECONNECT <pairing_id>`（首配必须走扫码——常驻通道没有二维码出带校验环节，不降低信任锚），并发处理多会话（每连接独立任务），`ping→pong` 心跳（伴侣端 15s，桌面 300s 静默判死）；`paired_ok` 附带 `resident_port`（未开启为 null，伴侣端据此清除过期端口），开启/端口变化时经活跃会话推送 `resident_port` 消息。伴侣侧 `PersistentConnectionService`（前台服务 dataSync）：15s 心跳、断连 5s→10s→…→300s 指数退避重试（成功归零、被拒不重试）、LinkState 共享状态、重连目标 = last_host 主机 + 本地 resident_port；主界面「上次配对的电脑」卡一键直连（Android 13+ 先请求通知权限，POST_NOTIFICATIONS 后续动作按请求意图路由）。桌面 UI：伴侣卡新增「常驻通道（免扫码重连）」开关 + 事件流，挂载时同步真实状态。
+  - [x] **M4-3 状态通知（2026-10-01 完成，同上提交）**：伴侣端前台常驻通知随「连接中/已连接/重试中」实时更新（LinkState 监听）；连接建立/断开/被拒/无凭据另发可划走的事件通知（IMPORTANCE_DEFAULT 通道）；桌面录制开始/结束经常驻通道下发 `{"type":"recording"}` → 伴侣端通知。**通知可关**：`paired_computers` 的 `notify_events`（默认开）。桌面端挂点：`start_mirroring`（带录制启动）/`update_session_options`（录制状态跃迁）/`tray_record_toggle`/`stop_mirroring` 四处（`notify_companion_recording`）；**已知边界**：会话异常中断导致的录制终止不推送（无跃迁点），下版本随会话生命周期钩子补齐。
+  - [x] **M4-4 互信撤销（2026-10-01 完成，同上提交）**：伴侣 App「解除这台电脑」按钮（确认对话框明示后果）：停常驻服务 → 清 `paired_computers` → 销毁 Keystore 身份（`PairingIdentity.destroy()`，私钥不可导出、删除即作废）——与桌面端 `companion_unpair_device` 双向对齐，两端作废后必须重新扫码。
+  - [x] **M4-5 发版对齐（2026-10-01 完成）**：伴侣端版本独立维护，升 **0.2.0**（versionCode 11）；`build.yml` companion-apk job 在 tag 触发时把 APK 改名为 `MirrorDock-companion-<基础版本号>.apk`（与桌面资产口径一致，Release 资产可区分版本）；`companion.yml` artifact 按versionName 命名。
+  - **踩坑实录（M4-2）**：①`tokio::io::split` 的 BiLock 在读半边挂起等待数据期间挡住写半边，桌面事件推送永远送不出去——改为单任务 `select!` 独占整条流；②下行消息**必须带换行**（行协议分帧），缺 `\n` 的广播「已到达但黏在下一条消息上」，客户端 readLine 永久等待——`broadcast_line` 统一补齐；③PrintWriter 吞 IOException，`sendLine` 必须用 `checkError()` 探测，否则断链后永远「发送成功」。
+  - cargo **183** / vitest 41 / 伴侣 APK 构建全绿。真机待验：桌面开常驻 → 伴侣「连接上次配对的电脑」直连 → 断网重连退避 → 录制通知 → 双向解除互信。
   - 硬性依赖：真机联调（配对/心跳/通知行为）；Keystore 签名发布配置已就位（mirrordock-companion.keystore）。
 
 ## 最终成品退出条件
