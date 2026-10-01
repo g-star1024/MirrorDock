@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 /// 事件环形缓冲上限，与诊断日志口径一致。
 const EVENT_LIMIT: usize = 200;
@@ -62,6 +62,8 @@ pub enum PairingPhase {
 #[derive(Debug, Clone, Serialize)]
 pub struct PairingStatus {
     pub phase: PairingPhase,
+    /// 常驻通道（M4-2）是否处于监听中：开启后已配对设备可免扫码直连。
+    pub resident: bool,
     /// 最近事件（时间戳 + 文案；不含 token、不含屏幕数据）。
     pub events: Vec<String>,
     pub offer: Option<PairingOffer>,
@@ -75,10 +77,17 @@ pub struct PairingState {
 #[derive(Default)]
 struct PairingInner {
     phase: PairingPhase,
+    /// 常驻通道监听中（与一次性扫码配对互斥，开启会先结束旧监听）。
+    resident: bool,
     events: Vec<String>,
     offer: Option<PairingOffer>,
     shutdown: Option<oneshot::Sender<()>>,
     device_bridge: Option<DeviceBridge>,
+    /// 当前活跃伴侣会话的下行通道（会话 id → 发送端）。
+    /// 录制状态等桌面事件经此推给伴侣端；无活跃会话时为 None。
+    session_out: Option<(u64, mpsc::UnboundedSender<String>)>,
+    /// 会话计数器（配合 session_out 做只清自己的清除）。
+    session_seq: u64,
 }
 
 /// 设备报到时触发的桥接回调（桌面侧注入）：入参为伴侣端来源 IP，返回要追加进
@@ -109,8 +118,47 @@ impl PairingState {
         let inner = self.inner.lock().unwrap();
         PairingStatus {
             phase: inner.phase.clone(),
+            resident: inner.resident,
             events: inner.events.clone(),
             offer: inner.offer.clone(),
+        }
+    }
+
+    /// 向当前活跃的伴侣会话下发一行 JSON（无活跃会话或通道关闭返回 false，
+    /// 调用方静默忽略即可——伴侣通道是附加信息，不构成错误）。
+    ///
+    /// 行协议以换行分帧：这里统一补齐尾部 `\n`（调用方只给 JSON 本体）。
+    /// 缺换行的下行会让伴侣端 readLine 永远等不到行尾（2026-10-01 测试实锤：
+    /// 广播「到了但黏在下一条消息上」，表现为客户端收不到推送）。
+    pub fn broadcast_line(&self, line: impl Into<String>) -> bool {
+        let mut line = line.into();
+        if !line.ends_with('\n') {
+            line.push('\n');
+        }
+        let sender = {
+            let inner = self.inner.lock().unwrap();
+            inner.session_out.as_ref().map(|(_, tx)| tx.clone())
+        };
+        match sender {
+            Some(tx) => tx.send(line).is_ok(),
+            None => false,
+        }
+    }
+
+    /// 登记会话下行通道（握手成功后调用）；返回本次会话的 id，结束时凭 id 清除。
+    fn register_session_out(&self, tx: mpsc::UnboundedSender<String>) -> u64 {
+        let mut inner = self.inner.lock().unwrap();
+        inner.session_seq = inner.session_seq.wrapping_add(1);
+        let id = inner.session_seq;
+        inner.session_out = Some((id, tx));
+        id
+    }
+
+    /// 会话结束时清除下行通道：只清自己的（并发会话下避免误清新会话的通道）。
+    fn unregister_session_out(&self, id: u64) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.session_out.as_ref().map(|(sid, _)| *sid) == Some(id) {
+            inner.session_out = None;
         }
     }
 
@@ -212,6 +260,7 @@ pub struct PairedCompanion {
 }
 
 /// `paired-companions.json` 的读写。损坏按空表处理（用户重新扫码即可恢复）。
+#[derive(Clone)]
 pub struct PairedStore {
     path: PathBuf,
 }
@@ -401,11 +450,79 @@ pub fn begin_pairing(
                 return;
             }
         };
-        run_accept_loop(listener, identity, token, store, shared, shutdown_rx).await;
+        run_accept_loop(listener, identity, token, store, shared, shutdown_rx, false).await;
     });
     drop(handle);
 
     Ok(offer)
+}
+
+/// 启动常驻通道（M4-2）：与一次性扫码配对同构的监听器，但：
+/// - 不出二维码、不发一次性 token（offer 保持 None）；
+/// - 只接受 `MDP2 RECONNECT <pairing_id>` 的免扫码重连（首配必须走扫码，
+///   信任锚是二维码出带校验，常驻通道没有这个环节，不能降低门槛）；
+/// - 并发处理多个会话（每连接独立任务），支持心跳长连（见 serve_session）。
+///
+/// 返回监听端口（伴侣端手动输入重连时可见；正常路径凭扫码时记住的
+/// last_host 直连，无需用户知道端口）。
+pub fn begin_resident(
+    state: &Arc<PairingState>,
+    identity_dir: &Path,
+    store: PairedStore,
+) -> Result<u16, crate::AppError> {
+    end_pairing(state);
+
+    let (identity, created) =
+        PairingIdentity::load_or_create(identity_dir).map_err(|e| crate::AppError {
+            code: "pairing_cert_failed",
+            message: format!("配对身份不可用：{e}"),
+            recovery: "重试一次；持续失败请通过帮助与诊断反馈。".into(),
+        })?;
+    if created {
+        state.push_event("已生成新的桌面配对身份（首次使用或原身份损坏）");
+    }
+
+    let std_listener =
+        std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| crate::AppError {
+            code: "pairing_bind_failed",
+            message: format!("常驻通道监听失败：{e}"),
+            recovery: "检查系统防火墙后重试。".into(),
+        })?;
+    let port = std_listener.local_addr().map_err(|e| crate::AppError {
+        code: "pairing_bind_failed",
+        message: format!("读取端口失败：{e}"),
+        recovery: "重试一次。".into(),
+    })?
+    .port();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    {
+        let mut inner = state.inner.lock().unwrap();
+        inner.resident = true;
+        inner.shutdown = Some(shutdown_tx);
+        inner.phase = PairingPhase::Listening;
+    }
+    state.push_event(format!(
+        "常驻通道已开启（端口 {port}）：已配对的伴侣设备可免扫码直连"
+    ));
+
+    let shared = state.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        let listener = match set_nonblocking_and_convert(std_listener) {
+            Ok(l) => l,
+            Err(e) => {
+                shared.push_event(format!("监听器转换失败：{e}"));
+                shared.set_phase(PairingPhase::Idle);
+                let mut inner = shared.inner.lock().unwrap();
+                inner.resident = false;
+                return;
+            }
+        };
+        run_accept_loop(listener, identity, String::new(), store, shared, shutdown_rx, true).await;
+    });
+    drop(handle);
+
+    Ok(port)
 }
 
 /// std 监听器转 tokio：先切非阻塞，否则运行时拒绝注册。
@@ -434,7 +551,9 @@ fn hhmmss_now() -> String {
     )
 }
 
-/// 接受循环：串行处理会话（POC 足够），shutdown 通道随时可打断。
+/// 接受循环：一次性配对模式串行处理会话（POC 足够）；常驻通道模式并发处理
+/// （每连接独立任务——心跳长连会一直占用会话，串行会挡住后续重连）。
+/// shutdown 通道随时可打断。
 async fn run_accept_loop(
     listener: tokio::net::TcpListener,
     identity: PairingIdentity,
@@ -442,6 +561,7 @@ async fn run_accept_loop(
     store: PairedStore,
     state: Arc<PairingState>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    resident: bool,
 ) {
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
@@ -463,7 +583,11 @@ async fn run_accept_loop(
     loop {
         tokio::select! {
             _ = &mut shutdown_rx => {
-                state.push_event("配对已手动结束");
+                if resident {
+                    state.push_event("常驻通道已关闭");
+                } else {
+                    state.push_event("配对已手动结束");
+                }
                 state.set_phase(PairingPhase::Idle);
                 return;
             }
@@ -475,6 +599,26 @@ async fn run_accept_loop(
                         return;
                     }
                 };
+                if resident {
+                    // 常驻模式：并发会话，监听器不被单个长连占用；phase 保持
+                    // Listening（会话进展看事件流，避免与扫码配对的状态语义混淆）。
+                    // 用 tokio::spawn 跟随 accept loop 所在运行时（生产 = tauri
+                    // async runtime，测试 = 测试 runtime），保证会话一定会被轮询。
+                    state.push_event(format!("常驻通道收到连接 {peer}"));
+                    let acceptor = acceptor.clone();
+                    let store = store.clone();
+                    let session_state = state.clone();
+                    let peer_ip = peer.ip().to_string();
+                    tokio::spawn(async move {
+                        match acceptor.accept(stream).await {
+                            Ok(tls) => {
+                                serve_session(tls, "", &store, &session_state, peer_ip, true).await
+                            }
+                            Err(e) => session_state.push_event(format!("TLS 握手失败：{e}")),
+                        }
+                    });
+                    continue;
+                }
                 state.push_event(format!("收到连接 {peer}"));
                 state.set_phase(PairingPhase::Connected);
                 tokio::select! {
@@ -485,7 +629,7 @@ async fn run_accept_loop(
                     }
                     result = acceptor.accept(stream) => {
                         match result {
-                            Ok(tls) => serve_session(tls, &token_expected, &store, &state, peer.ip().to_string()).await,
+                            Ok(tls) => serve_session(tls, &token_expected, &store, &state, peer.ip().to_string(), false).await,
                             Err(e) => state.push_event(format!("TLS 握手失败：{e}")),
                         }
                     }
@@ -501,18 +645,27 @@ async fn run_accept_loop(
 ///
 /// `peer_ip` 是伴侣端的局域网来源 IP，设备报到时交给桥接回调
 /// （桌面侧用它自动连接这台手机的镜像通道）。
+///
+/// `resident`（M4-2）：常驻通道会话——只接受 RECONNECT；握手成功后登记
+/// 下行通道（桌面事件可推给伴侣端），并响应 `{"type":"ping"}` 心跳
+/// （回 pong；300 秒没有任何入站数据则判死连接断开）。
+///
+/// 并发说明：整条 TLS 流由本任务独占（**不做** `tokio::io::split`——其 BiLock
+/// 会在「读挂起等待客户端数据」期间挡住写半边，桌面事件永远送不出去，
+/// 2026-10-01 测试实锤）。读与下行写用 select! 在单任务内轮转。
 async fn serve_session(
     tls: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     token_expected: &str,
     store: &PairedStore,
     state: &PairingState,
     peer_ip: String,
+    resident: bool,
 ) {
-    let (reader, mut writer) = tokio::io::split(tls);
-    let mut reader = BufReader::new(reader);
+    // BufReader 同时提供 AsyncBufRead（握手/消息读）与 AsyncWrite（透传写）。
+    let mut stream = BufReader::new(tls);
 
     // 第一行："MDP2 <token>"（首配，扫码）或 "MDP2 RECONNECT <pairing_id>"（互信重连）。
-    let hello = match read_line_bounded(&mut reader, std::time::Duration::from_secs(10), MAX_LINE_BYTES).await
+    let hello = match read_line_bounded(&mut stream, std::time::Duration::from_secs(10), MAX_LINE_BYTES).await
     {
         Ok(line) => line,
         Err(err) => {
@@ -523,35 +676,47 @@ async fn serve_session(
     let mut parts = hello.split_whitespace();
     let proto = parts.next().unwrap_or("");
     if proto != PROTOCOL_TAG {
-        let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
+        let _ = stream.write_all(b"{\"type\":\"rejected\"}\n").await;
         state.push_event("协议版本不支持，连接已拒绝");
         return;
     }
 
     // MDP2 互信握手：验证对端持有其申报公钥对应的私钥，才允许进入会话。
     let handshake = match parts.next().unwrap_or("") {
-        word if word == token_expected => {
-            establish_trust(EstablishMode::FreshPairing, store, &mut reader, &mut writer, state).await
+        word if !resident && word == token_expected => {
+            establish_trust(EstablishMode::FreshPairing, store, &mut stream, state).await
         }
         "RECONNECT" => {
             let pairing_id = parts.next().unwrap_or("").to_string();
-            establish_trust(EstablishMode::Reconnect { pairing_id }, store, &mut reader, &mut writer, state).await
+            establish_trust(EstablishMode::Reconnect { pairing_id }, store, &mut stream, state).await
         }
         _ => {
-            let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
-            state.push_event("配对码校验失败，连接已拒绝");
+            let _ = stream.write_all(b"{\"type\":\"rejected\"}\n").await;
+            if resident {
+                state.push_event("常驻通道只接受已配对设备的免扫码重连，连接已拒绝");
+            } else {
+                state.push_event("配对码校验失败，连接已拒绝");
+            }
             return;
         }
     };
     let Some(device) = handshake else { return }; // 失败原因已写入事件流。
 
-    let _ = writer
+    let _ = stream
         .write_all(format!("{{\"type\":\"paired_ok\",\"pairing_id\":\"{}\"}}\n", device.pairing_id).as_bytes())
         .await;
     state.push_event(format!(
-        "设备报到：{}（互信会话已建立，来源 {}）",
-        device.model, peer_ip
+        "设备报到：{}（互信会话已建立，来源 {}，{}）",
+        device.model,
+        peer_ip,
+        if resident { "免扫码重连" } else { "扫码配对" },
     ));
+
+    // 登记下行通道：此后桌面事件（录制状态等）经 broadcast_line 推给伴侣端，
+    // 由下面的 select! 循环就地写出。
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let session_id = state.register_session_out(out_tx.clone());
+
     // 桥接可能阻塞（mDNS 扫描 + adb connect），丢进阻塞线程池，
     // 结果以事件形式回到事件流——前端面板直接可见。
     if let Some(bridge) = state.take_device_bridge() {
@@ -567,49 +732,86 @@ async fn serve_session(
         }
     }
 
-    loop {
-        match read_line_bounded(&mut reader, std::time::Duration::from_secs(300), MAX_LINE_BYTES).await {
-            Ok(line) => {
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    state.push_event("收到无法解析的行（已忽略）");
-                    continue;
-                };
-                match value.get("type").and_then(|t| t.as_str()) {
-                    Some("bye") => {
-                        state.push_event("伴侣端正常结束会话");
-                        return;
+    let mut ended = false;
+    while !ended {
+        tokio::select! {
+            biased;
+            // 下行（桌面 → 伴侣）：优先送出，避免事件积压。
+            line = out_rx.recv() => {
+                match line {
+                    Some(line) => {
+                        // tokio-rustls 的 write 可能滞留在会话缓冲，必须显式
+                        // flush 才落 TCP（漏掉 flush = 客户端永远收不到）。
+                        if stream.write_all(line.as_bytes()).await.is_err()
+                            || stream.flush().await.is_err()
+                        {
+                            state.push_event("会话结束（下行写出失败）");
+                            ended = true;
+                        }
                     }
-                    Some("device_hello") => {
-                        // 互信握手已把设备报到并入 establish_trust；这里再收到
-                        // 说明对端走了旧协议流程，如实记录，不中断会话。
-                        state.push_event("收到旧协议报到消息（已忽略）");
-                    }
-                    Some("capture_stats") => {
-                        let frames = value.get("frames").and_then(|f| f.as_u64()).unwrap_or(0);
-                        let audio = value
-                            .get("audio_supported")
-                            .and_then(|a| a.as_bool())
-                            .unwrap_or(false);
-                        let sample = value
-                            .get("sample_jpeg_bytes")
-                            .and_then(|b| b.as_u64())
-                            .unwrap_or(0);
-                        state.push_event(format!(
-                            "捕获统计：{frames} 帧，音频捕获支持={audio}，JPEG 样本 {sample} 字节（不落盘）"
-                        ));
-                    }
-                    Some(other) => {
-                        state.push_event(format!("收到未知消息类型 {other}（已忽略）"));
-                    }
-                    None => {}
+                    // 发送端全部丢弃：本函数持有的 out_tx 尚在，理论不发生；
+                    // 真发生说明通道已废，结束会话。
+                    None => ended = true,
                 }
             }
-            Err(err) => {
-                state.push_event(format!("会话结束（{}）", err.describe()));
-                return;
+            // 入站（伴侣 → 桌面）：300 秒静默判死。
+            result = read_line_bounded(&mut stream, std::time::Duration::from_secs(300), MAX_LINE_BYTES) => {
+                match result {
+                    Ok(line) => {
+                        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                            state.push_event("收到无法解析的行（已忽略）");
+                            continue;
+                        };
+                        match value.get("type").and_then(|t| t.as_str()) {
+                            Some("bye") => {
+                                state.push_event("伴侣端正常结束会话");
+                                ended = true;
+                            }
+                            Some("ping") => {
+                                // 心跳（M4-2）：回 pong 即可，内容不进事件流（15s 一条会刷屏）。
+                                if stream.write_all(PONG_LINE.as_bytes()).await.is_err()
+                                    || stream.flush().await.is_err()
+                                {
+                                    state.push_event("会话结束（心跳写出失败）");
+                                    ended = true;
+                                }
+                            }
+                            Some("device_hello") => {
+                                // 互信握手已把设备报到并入 establish_trust；这里再收到
+                                // 说明对端走了旧协议流程，如实记录，不中断会话。
+                                state.push_event("收到旧协议报到消息（已忽略）");
+                            }
+                            Some("capture_stats") => {
+                                let frames = value.get("frames").and_then(|f| f.as_u64()).unwrap_or(0);
+                                let audio = value
+                                    .get("audio_supported")
+                                    .and_then(|a| a.as_bool())
+                                    .unwrap_or(false);
+                                let sample = value
+                                    .get("sample_jpeg_bytes")
+                                    .and_then(|b| b.as_u64())
+                                    .unwrap_or(0);
+                                state.push_event(format!(
+                                    "捕获统计：{frames} 帧，音频捕获支持={audio}，JPEG 样本 {sample} 字节（不落盘）"
+                                ));
+                            }
+                            Some(other) => {
+                                state.push_event(format!("收到未知消息类型 {other}（已忽略）"));
+                            }
+                            None => {}
+                        }
+                    }
+                    Err(err) => {
+                        state.push_event(format!("会话结束（{}）", err.describe()));
+                        ended = true;
+                    }
+                }
             }
         }
     }
+    // 会话收尾：只清自己的下行通道；丢弃本地发送端后，out_rx.recv() 归 None。
+    state.unregister_session_out(session_id);
+    drop(out_tx);
 }
 
 /// 互信建立模式：首配（凭一次性 token）或重连（凭 pairing_id）。
@@ -618,32 +820,34 @@ enum EstablishMode {
     Reconnect { pairing_id: String },
 }
 
+/// 心跳应答（M4-2）。
+const PONG_LINE: &str = "{\"type\":\"pong\"}\n";
+
 /// MDP2 互信握手：
 /// 1. 对端申报身份（首配：`device_hello{model,pubkey}`；重连：查台账取公钥）；
 /// 2. 桌面发 `challenge{nonce}`，对端回 `challenge_response{sig}`（ECDSA P-256，DER）；
 /// 3. 验签通过 → 台账登记（首配插入 / 重连刷新 last_seen）→ 返回设备信息。
 ///
 /// 任何一步失败都写入事件流并返回 None（调用方直接断开，不发 paired_ok）。
-async fn establish_trust<L, W>(
+/// 读写共用同一条流（读一行、写一行交替，无需 split）。
+async fn establish_trust<S>(
     mode: EstablishMode,
     store: &PairedStore,
-    lines: &mut L,
-    writer: &mut W,
+    stream: &mut S,
     state: &PairingState,
 ) -> Option<PairedCompanion>
 where
-    L: tokio::io::AsyncBufRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
+    S: tokio::io::AsyncBufRead + tokio::io::AsyncWrite + Unpin,
 {
     let is_fresh = matches!(mode, EstablishMode::FreshPairing);
-    let _ = writer
+    let _ = stream
         .write_all(b"{\"type\":\"welcome\",\"protocol\":\"MDP2\"}\n")
         .await;
 
     // 已配对台账里的记录（重连路径用）；申报的公钥 hex 与机型。
     let (pubkey_hex, model, stored) = match mode {
         EstablishMode::FreshPairing => {
-            let hello = match read_json_line(lines, state, "未收到设备报到").await {
+            let hello = match read_json_line(stream, state, "未收到设备报到").await {
                 Some(v) => v,
                 None => return None,
             };
@@ -673,7 +877,7 @@ where
                 }
                 None => {
                     state.push_event("重连被拒：这台设备未与本机配对（可能已被移除）");
-                    let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
+                    let _ = stream.write_all(b"{\"type\":\"rejected\"}\n").await;
                     return None;
                 }
             }
@@ -682,7 +886,7 @@ where
 
     // 公钥有效性：能解析成 P-256 公钥才继续（防止把垃圾字节写进台账）。
     if verifying_key_from_hex(&pubkey_hex).is_none() {
-        let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
+        let _ = stream.write_all(b"{\"type\":\"rejected\"}\n").await;
         state.push_event("设备公钥格式不正确，互信未建立");
         return None;
     }
@@ -691,11 +895,11 @@ where
     let mut nonce = vec![0u8; CHALLENGE_BYTES];
     getrandom::getrandom(&mut nonce).expect("系统熵源不可用");
     let nonce_hex = hex_lower(&nonce);
-    let _ = writer
+    let _ = stream
         .write_all(format!("{{\"type\":\"challenge\",\"nonce\":\"{nonce_hex}\"}}\n").as_bytes())
         .await;
 
-    let response = match read_json_line(lines, state, "未收到挑战签名").await {
+    let response = match read_json_line(stream, state, "未收到挑战签名").await {
         Some(v) => v,
         None => return None,
     };
@@ -707,7 +911,7 @@ where
     if !verify_challenge(&pubkey_hex, &nonce, sig) {
         // 显式拒绝：伴侣端据此显示「电脑没有接受本机的身份证明」，
         // 而不是等到连接被关掉后误报「电脑没有回复」。
-        let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
+        let _ = stream.write_all(b"{\"type\":\"rejected\"}\n").await;
         state.push_event("挑战签名验证失败，连接已拒绝（对端不持有申报的身份）");
         return None;
     }
@@ -842,7 +1046,7 @@ where
     }
 }
 
-/// 结束当前配对（幂等）。
+/// 结束当前配对（幂等）：扫码配对与常驻通道共用同一关停通道，谁在监听就关谁。
 pub fn end_pairing(state: &Arc<PairingState>) {
     let mut inner = state.inner.lock().unwrap();
     if let Some(tx) = inner.shutdown.take() {
@@ -850,6 +1054,7 @@ pub fn end_pairing(state: &Arc<PairingState>) {
     }
     inner.phase = PairingPhase::Idle;
     inner.offer = None;
+    inner.resident = false;
 }
 
 #[cfg(test)]
@@ -953,7 +1158,7 @@ mod tests {
         let loop_token = token.clone();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            run_accept_loop(listener, identity, loop_token, store, loop_state, rx).await;
+            run_accept_loop(listener, identity, loop_token, store, loop_state, rx, false).await;
         });
         (port, token, tx)
     }
@@ -1215,7 +1420,7 @@ mod tests {
         let loop_state = state.clone();
         let (_tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            run_accept_loop(listener, identity, "CORRECTTOKEN1234".into(), store, loop_state, rx).await;
+            run_accept_loop(listener, identity, "CORRECTTOKEN1234".into(), store, loop_state, rx, false).await;
         });
 
         let verifier = Arc::new(FpVerifier { expected_fp: fingerprint_of(&workdir) });
@@ -1253,6 +1458,202 @@ mod tests {
             .unwrap();
         assert!(String::from_utf8_lossy(&buf[..n]).contains("rejected"));
         assert!(state.status().events.iter().any(|e| e.contains("未与本机配对")));
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    /// 常驻通道客户端（M4-2）：发 `MDP2 RECONNECT <id>`，走挑战-响应，
+    /// 之后可选发一条 ping 并读回应（心跳）。返回服务端最后读到的行。
+    async fn reconnect_client(
+        port: u16,
+        fingerprint: &str,
+        pairing_id: &str,
+        signing: &p256::ecdsa::SigningKey,
+        ping_after_paired: bool,
+    ) -> Option<String> {
+        use p256::ecdsa::signature::{SignatureEncoding, Signer};
+        use tokio::io::AsyncWriteExt;
+
+        let tls = tls_connect(port, fingerprint).await;
+        let (read_half, mut write_half) = tokio::io::split(tls);
+        let mut lines = BufReader::new(read_half).lines();
+
+        write_half
+            .write_all(format!("{PROTOCOL_TAG} RECONNECT {pairing_id}\n").as_bytes())
+            .await
+            .unwrap();
+        let welcome = lines.next_line().await.unwrap().unwrap();
+        assert!(welcome.contains("\"welcome\""), "got {welcome}");
+
+        let challenge: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(challenge["type"], "challenge");
+        let nonce = hex_decode(challenge["nonce"].as_str().unwrap()).unwrap();
+        let signature: p256::ecdsa::Signature = signing.sign(nonce.as_slice());
+        let sig_hex = hex_lower(signature.to_der().to_vec().as_slice());
+        write_half
+            .write_all(format!("{{\"type\":\"challenge_response\",\"sig\":\"{sig_hex}\"}}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let verdict = lines.next_line().await.ok().flatten()?;
+        if !ping_after_paired {
+            return Some(verdict);
+        }
+        assert!(verdict.contains("paired_ok"), "got {verdict}");
+        write_half.write_all(b"{\"type\":\"ping\"}\n").await.unwrap();
+        lines.next_line().await.ok().flatten()
+    }
+
+    /// 常驻通道（M4-2）端到端：首配 token 在常驻通道被拒（降门槛即拒）；
+    /// 台账内设备的 RECONNECT 握手通过；paired 后的 ping 得到 pong。
+    #[tokio::test]
+    async fn resident_channel_reconnect_ping_pong_and_fresh_reject() {
+        use pkcs8::EncodePublicKey as _;
+        use tokio::io::AsyncWriteExt;
+
+        let workdir = std::env::temp_dir().join(format!("md-resident-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        let state = Arc::new(PairingState::default());
+
+        // 预置台账：测试身份的 pairing_id 与公钥。
+        let signing = test_device_key();
+        let spki = signing.verifying_key().to_public_key_der().unwrap();
+        let pubkey_hex = hex_lower(spki.as_bytes());
+        let store = PairedStore::new(&workdir);
+        store
+            .upsert(PairedCompanion {
+                pairing_id: "RESIDENTTEST0001".into(),
+                model: "Resident-Test".into(),
+                pubkey_hex,
+                added_at: 1,
+                last_seen: 1,
+            })
+            .unwrap();
+
+        let (identity, _) = PairingIdentity::load_or_create(&workdir).unwrap();
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = std_listener.local_addr().unwrap().port();
+        let listener = set_nonblocking_and_convert(std_listener).unwrap();
+        let loop_state = state.clone();
+        let (_tx, rx) = oneshot::channel::<()>();
+        // 与 begin_resident 一致：进入常驻监听时置 resident 标志（本测试绕过
+        // begin_resident 直接起 loop，标志要自己置）。
+        loop_state.inner.lock().unwrap().resident = true;
+        tokio::spawn(async move {
+            // 常驻模式：没有 token（空串），RECONNECT-only。
+            run_accept_loop(listener, identity, String::new(), store, loop_state, rx, true).await;
+        });
+
+        // ① 常驻通道拒绝一次性 token 首配（显式 rejected）。
+        let verifier = Arc::new(FpVerifier { expected_fp: fingerprint_of(&workdir) });
+        let config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let tls = connector
+            .connect(server_name(), tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap())
+            .await
+            .unwrap();
+        let (mut read_half, mut write_half) = tokio::io::split(tls);
+        write_half.write_all(b"MDP2 SOMETOKEN12345678\n").await.unwrap();
+        let mut buf = vec![0u8; 128];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), read_half.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&buf[..n]).contains("rejected"));
+        assert!(state.status().events.iter().any(|e| e.contains("常驻通道只接受已配对设备")));
+
+        // ② 台账内设备 RECONNECT 免扫码重连成功。
+        let paired = reconnect_client(port, &fingerprint_of(&workdir), "RESIDENTTEST0001", &signing, false)
+            .await
+            .expect("RECONNECT 必须成功");
+        let paired: serde_json::Value = serde_json::from_str(&paired).unwrap();
+        assert_eq!(paired["type"], "paired_ok");
+        assert_eq!(paired["pairing_id"], "RESIDENTTEST0001");
+
+        // ③ 心跳：paired 后发 ping，服务端回 pong。
+        let pong = reconnect_client(port, &fingerprint_of(&workdir), "RESIDENTTEST0001", &signing, true)
+            .await
+            .expect("心跳会话必须成功");
+        let pong: serde_json::Value = serde_json::from_str(&pong).unwrap();
+        assert_eq!(pong["type"], "pong");
+
+        // ④ 状态如实反映常驻监听。
+        assert!(state.status().resident);
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    /// 桌面事件下发（M4-3）：broadcast_line 把行送进活跃会话，
+    /// 伴侣端（测试客户端）能读到；无活跃会话时返回 false 不报错。
+    #[tokio::test]
+    async fn broadcast_reaches_the_active_session() {
+        use pkcs8::EncodePublicKey as _;
+
+        let workdir = std::env::temp_dir().join(format!("md-broadcast-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        let state = Arc::new(PairingState::default());
+
+        let signing = test_device_key();
+        let spki = signing.verifying_key().to_public_key_der().unwrap();
+        let store = PairedStore::new(&workdir);
+        store
+            .upsert(PairedCompanion {
+                pairing_id: "BROADCASTTEST01".into(),
+                model: "Broadcast-Test".into(),
+                pubkey_hex: hex_lower(spki.as_bytes()),
+                added_at: 1,
+                last_seen: 1,
+            })
+            .unwrap();
+
+        // 无活跃会话时广播是静默 no-op。
+        assert!(!state.broadcast_line("{\"type\":\"recording\",\"active\":true}"));
+
+        let (identity, _) = PairingIdentity::load_or_create(&workdir).unwrap();
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = std_listener.local_addr().unwrap().port();
+        let listener = set_nonblocking_and_convert(std_listener).unwrap();
+        let loop_state = state.clone();
+        let (_tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            run_accept_loop(listener, identity, String::new(), store, loop_state, rx, true).await;
+        });
+
+        // 客户端保持会话，同时读服务端推送。先完整走完 RECONNECT 握手
+        // （welcome → challenge → 签名 → paired_ok），下行通道在握手成功后才登记。
+        let tls = tls_connect(port, &fingerprint_of(&workdir)).await;
+        let (read_half, mut write_half) = tokio::io::split(tls);
+        let mut lines = BufReader::new(read_half).lines();
+        write_half
+            .write_all(b"MDP2 RECONNECT BROADCASTTEST01\n")
+            .await
+            .unwrap();
+        let welcome = lines.next_line().await.unwrap().unwrap();
+        assert!(welcome.contains("welcome"), "got {welcome}");
+        let challenge: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(challenge["type"], "challenge");
+        use p256::ecdsa::signature::{SignatureEncoding, Signer};
+        let sig: p256::ecdsa::Signature = signing.sign(hex_decode(challenge["nonce"].as_str().unwrap()).unwrap().as_slice());
+        write_half
+            .write_all(format!("{{\"type\":\"challenge_response\",\"sig\":\"{}\"}}\n", hex_lower(sig.to_der().to_vec().as_slice())).as_bytes())
+            .await
+            .unwrap();
+        let paired_line = lines.next_line().await.unwrap().unwrap();
+        assert!(paired_line.contains("paired_ok"), "got {paired_line}");
+
+        assert!(state.broadcast_line("{\"type\":\"recording\",\"active\":true}"));
+        let pushed = match tokio::time::timeout(std::time::Duration::from_secs(10), lines.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            other => {
+                eprintln!("推送读取结果：{other:?}");
+                eprintln!("服务端事件流：{:#?}", state.status().events);
+                panic!("必须收到服务端推送");
+            }
+        };
+        assert!(pushed.contains("\"recording\""), "got {pushed}");
         let _ = std::fs::remove_dir_all(&workdir);
     }
 

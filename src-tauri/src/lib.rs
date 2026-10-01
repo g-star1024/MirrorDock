@@ -2775,6 +2775,10 @@ fn tray_record_toggle(app: &AppHandle) {
     match result {
         Ok(update) => {
             refresh_tray_menu(app);
+            // 托盘开关是录制状态跃迁点之一：推给活跃伴侣会话（M4-3）。
+            if update.applied {
+                notify_companion_recording(app, starting_recording);
+            }
             let message = if update.applied {
                 if starting_recording {
                     format!("已开始屏幕录制：{file_name}（镜像窗口已按录制要求重启，画面短暂中断）。")
@@ -4841,11 +4845,17 @@ fn start_mirroring(
     let options = options.unwrap_or_default();
     // Pro 门控先于一切副作用：免费版请求录制时，在触碰设备之前就给出明确引导。
     ensure_edition_allows(&app, &options)?;
+    let starting_recording = options.record;
     // 先准备录制路径：目录不可写或文件名非法时，在占用会话槽位之前就失败。
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = start_mirroring_with(&runtimes, &sessions, serial.clone(), options, record_path);
     log.record_outcome("mirror_start", result.as_ref().err(), &[&serial]);
     result?;
+
+    // 带录制启动镜像 ⇒ 录制开始跃迁点，推给活跃伴侣会话（M4-3）。
+    if starting_recording {
+        notify_companion_recording(&app, true);
+    }
 
     // 会话已启动：若宿主输入源不是 ABC 布局，临时切到 ABC，保证镜像窗口
     // 能正常打字（X10-38/X10-41）。幂等；失败静默，不阻断镜像。
@@ -5147,10 +5157,18 @@ fn stop_mirroring(
     log: State<DiagnosticsLog>,
     serial: Option<String>,
 ) -> Result<(), AppError> {
+    // 停止前快照录制状态：录制中的会话被结束 ⇒ 伴侣端要收到「录制结束」（M4-3）。
+    let was_recording = current_recording_with(&sessions)
+        .ok()
+        .flatten()
+        .is_some();
     let result = stop_mirroring_with(&sessions, serial.clone());
     log.record_outcome("mirror_stop", result.as_ref().err(), &[]);
     // 会话已结束：还原该设备的无线亮屏补偿（若有）。失败时备份保留，等待重试。
     if result.is_ok() {
+        if was_recording {
+            notify_companion_recording(&app, false);
+        }
         let target = serial.or_else(|| {
             sessions
                 .lock()
@@ -5244,10 +5262,16 @@ fn update_session_options(
     // 同样是「先校验、再触碰运行中的会话」：路径不可用时不打断正在进行的镜像。
     // Pro 门控同样前置：免费版把录制重新打开时直接拒绝，不打断当前会话。
     ensure_edition_allows(&app, &options)?;
+    // 改动前后的录制状态对比（M4-3）：变化了就推给活跃伴侣会话。
+    let was_recording = current_recording_with(&sessions).ok().flatten().is_some();
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = apply_session_options_with(&runtimes, &sessions, options, record_path, serial);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
     if result.is_ok() {
+        let now_recording = current_recording_with(&sessions).ok().flatten().is_some();
+        if was_recording != now_recording {
+            notify_companion_recording(&app, now_recording);
+        }
         // 重启会话期间用户可能刚换了第三方输入法；幂等补一次托管（X10-39）。
         maybe_switch_host_input_source(&app);
     }
@@ -6563,6 +6587,40 @@ fn companion_end_pairing(state: State<'_, Arc<companion_pairing::PairingState>>)
     companion_pairing::end_pairing(&state);
 }
 
+/// 开启常驻通道（M4-2）：已配对伴侣设备可免扫码直连。返回监听端口。
+#[tauri::command]
+fn companion_begin_resident(
+    state: State<'_, Arc<companion_pairing::PairingState>>,
+    app: AppHandle,
+) -> Result<u16, AppError> {
+    let dir = companion_data_dir(&app)?;
+    companion_pairing::begin_resident(&state, &dir, companion_pairing::PairedStore::new(&dir))
+}
+
+/// 关闭常驻通道（幂等；也用于结束扫码配对监听）。
+#[tauri::command]
+fn companion_end_resident(state: State<'_, Arc<companion_pairing::PairingState>>) {
+    companion_pairing::end_pairing(&state);
+}
+
+/// 把录制状态变化推给当前活跃的伴侣会话（M4-3）。
+/// 无活跃会话时静默忽略——伴侣通道是附加信息通道，不构成错误。
+fn notify_companion_recording(app: &AppHandle, active: bool) {
+    if let Some(state) = app.try_state::<Arc<companion_pairing::PairingState>>() {
+        let line = format!("{{\"type\":\"recording\",\"active\":{active}}}");
+        if state.broadcast_line(line) {
+            if let Some(log) = app.try_state::<DiagnosticsLog>() {
+                log.record(
+                    "companion_notify_recording",
+                    "ok",
+                    if active { "已推送录制开始" } else { "已推送录制结束" },
+                    &[],
+                );
+            }
+        }
+    }
+}
+
 /// 已配对的伴侣设备列表（M4-1 互信台账）。
 #[tauri::command]
 fn companion_paired_devices(app: AppHandle) -> Result<Vec<companion_pairing::PairedCompanion>, AppError> {
@@ -6700,6 +6758,8 @@ pub fn run() {
             companion_begin_pairing,
             companion_pairing_status,
             companion_end_pairing,
+            companion_begin_resident,
+            companion_end_resident,
             companion_paired_devices,
             companion_unpair_device,
             get_app_settings,

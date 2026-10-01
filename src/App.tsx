@@ -153,6 +153,8 @@ type PairingOffer = {
 };
 type PairingStatus = {
   phase: "idle" | "listening" | "connected";
+  // M4-2 常驻通道：true = 常驻监听中，已配对设备可免扫码直连。
+  resident: boolean;
   events: string[];
   offer: PairingOffer | null;
 };
@@ -480,6 +482,11 @@ function App() {
   // 伴侣 App 配对（POC）：仅在前端展示，token 不写入任何持久化记录。
   const [pairingOffer, setPairingOffer] = useState<PairingOffer | null>(null);
   const [pairingStatus, setPairingStatus] = useState<PairingStatus | null>(null);
+  // M4-2 常驻通道：本地开关镜像（真实状态以后端 status().resident 为准）。
+  const [residentActive, setResidentActive] = useState(false);
+  const [residentPort, setResidentPort] = useState<number | null>(null);
+  const [residentBusy, setResidentBusy] = useState(false);
+  const [residentMessage, setResidentMessage] = useState<string | null>(null);
   const [pairingQr, setPairingQr] = useState<string | null>(null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingError, setPairingError] = useState<string | null>(null);
@@ -1149,7 +1156,7 @@ function App() {
       const offer = await invoke<PairingOffer>("companion_begin_pairing");
       setPairingOffer(offer);
       void loadPairedDevices();
-      setPairingStatus({ phase: "listening", events: [], offer });
+      setPairingStatus({ phase: "listening", resident: false, events: [], offer });
       try {
         setPairingQr(await QRCode.toDataURL(pairingPayload(offer), { width: 220, margin: 1 }));
       } catch {
@@ -1183,6 +1190,43 @@ function App() {
     } catch { /* 台账读不到就保持现有显示，不挡主流程。 */ }
   }
 
+  // M4-2 常驻通道开关。开启后伴侣 App 里「连接上次配对的电脑」可免扫码直连。
+  async function startResident() {
+    setResidentBusy(true);
+    setResidentMessage(null);
+    try {
+      const port = await invoke<number>("companion_begin_resident");
+      setResidentActive(true);
+      setResidentPort(port);
+    } catch (error) {
+      setResidentMessage(errorMessage(error, "常驻通道开启失败。"));
+    } finally {
+      setResidentBusy(false);
+    }
+  }
+
+  async function stopResident() {
+    setResidentBusy(true);
+    setResidentMessage(null);
+    try {
+      await invoke("companion_end_resident");
+      setResidentActive(false);
+      setResidentPort(null);
+    } catch (error) {
+      setResidentMessage(errorMessage(error, "常驻通道关闭失败。"));
+    } finally {
+      setResidentBusy(false);
+    }
+  }
+
+  // 挂载时同步一次常驻状态（应用重启后仍显示真实的监听状态）。
+  useEffect(() => {
+    invoke<PairingStatus>("companion_pairing_status")
+      .then((status) => setResidentActive(status.resident === true))
+      .catch(() => { /* 状态读不到保持默认，不打断页面。 */ });
+    return () => {};
+  }, []);
+
   async function unpairDevice(pairingId: string) {
     try {
       setPairedDevices(await invoke<PairedCompanion[]>("companion_unpair_device", { pairingId }));
@@ -1197,7 +1241,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!pairingOffer) return;
+    if (!pairingOffer && !residentActive) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
@@ -1209,7 +1253,7 @@ function App() {
     }
     void poll();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [pairingOffer]);
+  }, [pairingOffer, residentActive]);
 
   async function sendFileTo(serial: string) {
     setTransferMessage(null);
@@ -2189,6 +2233,29 @@ function App() {
                 </div>)}
                 <p className="capability-pending">移除后，该设备再次连接需要重新扫码配对。</p>
               </div>}
+
+              {/* M4-2 常驻通道：开启后已配对设备在伴侣 App 内一键免扫码直连。 */}
+              <div className="trusted-devices" aria-label="常驻通道">
+                <strong>常驻通道（免扫码重连）</strong>
+                <p className="capability-pending">开启后，已配对的伴侣设备打开 App 里的「连接上次配对的电脑」，即可直接建立互信会话并尝试自动回连镜像通道，无需重新扫码。扫码配对时无需开启。</p>
+                <span>
+                  <button className="secondary-button" type="button" disabled={residentBusy || residentActive} onClick={() => void startResident()}>
+                    开启常驻通道
+                  </button>
+                  <button className="secondary-button" type="button" disabled={residentBusy || !residentActive} onClick={() => void stopResident()}>
+                    关闭常驻通道
+                  </button>
+                </span>
+                {residentActive && <p className="capability-summary">常驻监听中{residentPort ? `（端口 ${residentPort}）` : ""} · 等待伴侣设备连接。</p>}
+                {residentMessage && <p className="capability-pending" role="alert">{residentMessage}</p>}
+                {residentActive && pairingStatus && pairingStatus.events.length > 0 && (
+                  <ul className="transfer-file-list">
+                    {pairingStatus.events.slice(-8).reverse().map((event) => (
+                      <li key={event}><span className="transfer-file-name">{event}</span></li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </section>
           </section>
 
