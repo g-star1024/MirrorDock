@@ -805,15 +805,17 @@ async fn serve_session(
                                 state.push_event("伴侣端正常结束会话");
                                 ended = true;
                             }
-                            Some("ping") => {
-                                // 心跳（M4-2）：回 pong 即可，内容不进事件流（15s 一条会刷屏）。
+                            // 心跳（M4-2）：回 pong 即可，内容不进事件流（15s 一条会刷屏）。
+                            // 写出失败（含 flush 滞留）⇒ 会话结束；成功则无事可做，
+                            // 由紧随的空臂承接（不得落入「未知消息类型」）。
+                            Some("ping")
                                 if stream.write_all(PONG_LINE.as_bytes()).await.is_err()
-                                    || stream.flush().await.is_err()
-                                {
-                                    state.push_event("会话结束（心跳写出失败）");
-                                    ended = true;
-                                }
+                                    || stream.flush().await.is_err() =>
+                            {
+                                state.push_event("会话结束（心跳写出失败）");
+                                ended = true;
                             }
+                            Some("ping") => {}
                             Some("device_hello") => {
                                 // 互信握手已把设备报到并入 establish_trust；这里再收到
                                 // 说明对端走了旧协议流程，如实记录，不中断会话。

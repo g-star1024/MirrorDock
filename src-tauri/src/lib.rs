@@ -1450,6 +1450,7 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
     std::thread::spawn(move || loop {
         std::thread::sleep(MONITOR_INTERVAL);
         let mut exit_success = false;
+        let mut was_recording = false;
         let finished = {
             let Ok(mut map) = store.0.lock() else {
                 return;
@@ -1466,6 +1467,10 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             match process.try_wait() {
                 Some(success) => {
                     exit_success = success;
+                    // 进程还挂在会话上（此处 process 一定是 Some）且持有录制路径
+                    // ⇒ 录制随进程一起终止。无论退出是用户关窗（正常）还是手机掉线
+                    // （异常），伴侣端都应收到「录制结束」——这是 M4-3 已知边界的补齐。
+                    was_recording = state.record_path.is_some();
                     state.process = None;
                     state.session = resolve_process_exit(&serial, success);
                     true
@@ -1474,6 +1479,12 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             }
         };
         if finished {
+            // 录制中的会话退出：给伴侣端补发「录制结束」（M4-3 会话生命周期钩子）。
+            if was_recording {
+                if let Some(app) = TRAY_APP.get() {
+                    notify_companion_recording(app, false);
+                }
+            }
             // 会话意外退出后同步菜单文案（连接/断开、录制开关、置灰项）。
             // 测试环境没有 TRAY_APP，自动跳过。
             if let Some(app) = TRAY_APP.get() {
@@ -2665,12 +2676,24 @@ fn tray_connect_toggle(app: &AppHandle) {
         .unwrap_or(true);
     if active {
         // 多会话语义（X10-27）：托盘「断开连接」结束**所有**设备的镜像会话。
+        // 停止前快照：哪些会话真正正在录制（M4-3）——托盘结束时同样要给伴侣端
+        // 补「录制结束」，否则录制经托盘终止时伴侣永远等不到跃迁通知。
+        let recording_serials: Vec<String> = sessions
+            .lock()
+            .map(|map| {
+                map.iter()
+                    .filter(|(_, state)| state.record_path.is_some() && state.process.is_some())
+                    .map(|(serial, _)| serial.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let taken = take_all_running_processes(&sessions);
         match taken {
             Ok(processes) if processes.is_empty() => {
                 tray_notify_error(app, "当前没有正在运行的镜像会话。");
             }
             Ok(processes) => {
+                let mut stopped_recording = false;
                 for (serial, mut process) in processes {
                     let result = process.stop().map_err(|_| {
                         AppError::new(
@@ -2681,6 +2704,8 @@ fn tray_connect_toggle(app: &AppHandle) {
                     });
                     log.record_outcome("mirror_stop", result.as_ref().err(), &[&serial]);
                     if result.is_ok() {
+                        // 只有真正停止成功才通知：停止失败的会话录制并未终止。
+                        stopped_recording |= recording_serials.contains(&serial);
                         disable_wireless_keep_awake(runtimes.adb.as_ref(), &sessions, &serial);
                     }
                     prune_idle_entry(&sessions, &serial);
@@ -2691,6 +2716,9 @@ fn tray_connect_toggle(app: &AppHandle) {
                     .map(|map| count_running_processes(&map))
                     .unwrap_or(usize::MAX);
                 maybe_restore_host_input_source(app, running);
+                if stopped_recording {
+                    notify_companion_recording(app, false);
+                }
             }
             Err(error) => tray_notify_error(app, &error.message),
         }
@@ -3860,6 +3888,21 @@ fn current_recording_with(store: &SessionStore) -> Result<Option<Recording>, App
         path,
         active: state.process.is_some(),
     }))
+}
+
+/// 是否存在「真正正在录制」的会话：持有录制路径**且**镜像进程仍在运行。
+///
+/// 与 [`current_recording_with`] 的展示语义不同：那条路径会回退到已结束的录制条目
+/// （界面要能展示「最近一次录像」）；伴侣通知的状态判定必须精确——进程没了，录制
+/// 就已经结束，绝不能把历史录制条目当成「仍在录制」（M4-3 通知跃迁判定）。
+fn any_session_recording(store: &SessionStore) -> bool {
+    store
+        .lock()
+        .map(|map| {
+            map.values()
+                .any(|state| state.record_path.is_some() && state.process.is_some())
+        })
+        .unwrap_or(false)
 }
 
 /// 删除一个录像文件，对应界面上的「撤销」。
@@ -5163,10 +5206,8 @@ fn stop_mirroring(
     serial: Option<String>,
 ) -> Result<(), AppError> {
     // 停止前快照录制状态：录制中的会话被结束 ⇒ 伴侣端要收到「录制结束」（M4-3）。
-    let was_recording = current_recording_with(&sessions)
-        .ok()
-        .flatten()
-        .is_some();
+    // 用精确判定：历史录制条目（进程已没）不算「正在录制」。
+    let was_recording = any_session_recording(&sessions);
     let result = stop_mirroring_with(&sessions, serial.clone());
     log.record_outcome("mirror_stop", result.as_ref().err(), &[]);
     // 会话已结束：还原该设备的无线亮屏补偿（若有）。失败时备份保留，等待重试。
@@ -5268,17 +5309,23 @@ fn update_session_options(
     // Pro 门控同样前置：免费版把录制重新打开时直接拒绝，不打断当前会话。
     ensure_edition_allows(&app, &options)?;
     // 改动前后的录制状态对比（M4-3）：变化了就推给活跃伴侣会话。
-    let was_recording = current_recording_with(&sessions).ok().flatten().is_some();
+    // 用精确判定：历史录制条目（进程已没）不算「正在录制」。
+    let was_recording = any_session_recording(&sessions);
     let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
     let result = apply_session_options_with(&runtimes, &sessions, options, record_path, serial);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
     if result.is_ok() {
-        let now_recording = current_recording_with(&sessions).ok().flatten().is_some();
+        let now_recording = any_session_recording(&sessions);
         if was_recording != now_recording {
             notify_companion_recording(&app, now_recording);
         }
         // 重启会话期间用户可能刚换了第三方输入法；幂等补一次托管（X10-39）。
         maybe_switch_host_input_source(&app);
+    } else if was_recording && !any_session_recording(&sessions) {
+        // 重启失败路径（M4-3 补齐）：旧镜像窗口可能已被结束 ⇒ 录制真的终止了。
+        // 只有在录制确实结束（没有任何「进程仍在录制」的会话）时才通知，不猜：
+        // 若旧窗口因「无法结束」仍在运行，录制并未停止，此刻通知就是谎报。
+        notify_companion_recording(&app, false);
     }
     refresh_tray_menu(&app);
     result
@@ -6777,13 +6824,12 @@ pub fn run() {
                 // `code == None` 是「最后一个窗口被关闭/销毁」触发的**隐式退出
                 // 请求**：一律拒绝（2026-10-01 用户报「关闭镜像窗口后整个客户端
                 // 被关掉」，此为系统性兜底）。应用的唯一出口是托盘菜单的退出项
-                // ——它走 `app.exit(0)`，`code = Some(0)`，不受本拦截影响。
+                // ——它走 `app.exit(0)`，`code = Some(0)`，不命中本臂（落入后面的
+                // 空臂，行为与原来的 if 判断完全一致）。
                 // 副作用：macOS 的 Cmd+Q 也不再直接杀进程（与「明确出口只有一个」
                 // 的设计一致：误触 Cmd+Q 本会连带杀掉镜像会话）。
-                tauri::RunEvent::ExitRequested { code, api, .. } => {
-                    if code.is_none() {
-                        api.prevent_exit();
-                    }
+                tauri::RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
+                    api.prevent_exit();
                 }
                 tauri::RunEvent::Exit => {
                     reclaim_children(app_handle);
@@ -10551,6 +10597,64 @@ mod tests {
         assert!(recording.active, "进程还在跑，录像就还在写");
 
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn companion_recording_notification_only_counts_truly_recording_sessions() {
+        // 空会话表：没有正在录制的会话。
+        let store = SessionStore::default();
+        assert!(!any_session_recording(&store));
+
+        // 进程在跑但没开录制 ⇒ 不算「正在录制」。
+        {
+            let runtimes = runtimes(
+                FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+                FakeMirror::running(),
+            );
+            let store = SessionStore::default();
+            start_mirroring_with(
+                &runtimes,
+                &store,
+                "phone".into(),
+                SessionOptions::default(),
+                None,
+            )
+            .unwrap();
+            assert!(!any_session_recording(&store));
+        }
+
+        // 进程在跑 + 持有录制路径 ⇒ 正在录制（伴侣通知判定的唯一真值条件）。
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions {
+                record: true,
+                ..Default::default()
+            },
+            Some(PathBuf::from("MirrorDock-recording.mp4")),
+        )
+        .unwrap();
+        assert!(any_session_recording(&store));
+
+        // 进程退出（异常中断或用户直接关窗）：监视线程清空进程、会话回失败态，
+        // 但录制条目仍留在会话上（与真实监视线程行为一致）。此刻录制已经结束，
+        // 通知判定不得再把这条历史条目当成「正在录制」。
+        {
+            let mut map = store.0.lock().unwrap();
+            let state = map.get_mut("phone").unwrap();
+            state.process = None;
+            state.session = resolve_process_exit("phone", false);
+        }
+        assert!(
+            !any_session_recording(&store),
+            "进程已退出 ⇒ 录制已随进程终止，残留录制条目不算「正在录制」"
+        );
     }
 
     #[test]
