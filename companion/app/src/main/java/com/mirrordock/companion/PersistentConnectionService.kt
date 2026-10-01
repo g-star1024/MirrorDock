@@ -70,12 +70,18 @@ class PersistentConnectionService : Service() {
 
     @Volatile private var running = false
     private var worker: Thread? = null
+    /** startInForeground 的 LinkState 监听只注册一次（服务实例可能被多次 onStartCommand）。 */
+    @Volatile private var listenerBound = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                // 经 startForegroundService 拉起的服务必须先 startForeground，
+                // 否则系统 5 秒判定超时直接崩溃（ForegroundServiceDidNotStartInTime，
+                // 2026-10-02 真机实锤：服务未运行时点「解除这台电脑」必崩）。
+                startInForeground()
                 running = false
                 LinkState.update(LinkPhase.IDLE, "已断开")
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -247,11 +253,14 @@ class PersistentConnectionService : Service() {
         } else {
             startForeground(NOTIF_LINK, notification)
         }
-        // LinkState 变化时同步刷新前台通知文案（订阅一次，服务生命周期内有效）。
-        LinkState.addListener {
-            if (!running) return@addListener
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIF_LINK, buildLinkNotification(LinkState.detail.ifEmpty { "运行中" }))
+        // LinkState 变化时同步刷新前台通知文案（只注册一次，服务生命周期内有效）。
+        if (!listenerBound) {
+            listenerBound = true
+            LinkState.addListener {
+                if (!running) return@addListener
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.notify(NOTIF_LINK, buildLinkNotification(LinkState.detail.ifEmpty { "运行中" }))
+            }
         }
     }
 

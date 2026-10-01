@@ -15,7 +15,8 @@
     <string name="action_show">查看</string>
     <string name="action_hide">收起</string>
     <string name="files_title">电脑发来的文件</string>
-    <string name="files_note">电脑端「发送到手机」的文件都在这里；APK 可以直接再次安装。</string>
+    <string name="action_send_to_pc">发送文件到电脑</string>
+    <string name="files_note">电脑端「发送到手机」的文件都在这里；APK 可以直接再次安装。点「发送文件到电脑」选择的文件会放进同一个文件夹，电脑端刷新即可取回。</string>
     <string name="files_empty">还没有收到文件。</string>
     <string name="files_need_permission">看不到文件：需要授予文件访问权限。</string>
     <string name="action_grant_files">授权文件访问</string>

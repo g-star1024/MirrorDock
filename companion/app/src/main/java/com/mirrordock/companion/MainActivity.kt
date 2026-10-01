@@ -60,6 +60,28 @@ class MainActivity : AppCompatActivity() {
     // 授权后按请求时的意图继续，而不是固定走某一条路。
     private var notificationFollowUp: (() -> Unit)? = null
 
+    /**
+     * 「发送文件到电脑」：系统选择器（SAF）选文件，结果交给 Outbox 复制进
+     * 下载/MirrorDock。多选；取消时列表为空，不当作错误。
+     */
+    private val sendToPcPicker =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            if (uris.isNullOrEmpty()) return@registerForActivityResult
+            val result = Outbox.send(this, uris)
+            log(result.message)
+            Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
+            refreshFiles()
+        }
+
+    private fun openSendPicker() {
+        runCatching {
+            sendToPcPicker.launch(arrayOf("*/*"))
+        }.onFailure {
+            log("无法打开系统文件选择器：${it.message}")
+            Toast.makeText(this, "无法打开系统文件选择器", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashGuard.install(applicationContext)
@@ -125,8 +147,9 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
 
-        // 文件卡：刷新按钮 + 空状态里的「授权文件访问」。
+        // 文件卡：刷新按钮 + 空状态里的「授权文件访问」+「发送文件到电脑」（a）。
         findViewById<Button>(R.id.button_files_refresh).setOnClickListener { refreshFiles() }
+        findViewById<Button>(R.id.button_send_to_pc).setOnClickListener { openSendPicker() }
         grantFilesButton.setOnClickListener {
             ReceivedFiles.allFilesAccessIntent(this)?.let { intent ->
                 runCatching { startActivity(intent) }
