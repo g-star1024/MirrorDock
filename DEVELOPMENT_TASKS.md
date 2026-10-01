@@ -534,10 +534,12 @@
 - [x] X10-54 关于卡按钮移位 + 托盘 GUI 验证脚本（2026-10-01 晨，用户反馈）。
   - 关于卡：「检查更新」从独立行移入按钮行，顺序 = 打开官网 / GitHub 仓库 / 检查更新（原独立说明行改为普通 note）。
   - 托盘 GUI 自动化：沙箱 System Events 被 TCC 拦（-10004，与键击结论一致），无法端到端；交付宿主机脚本 `MirrorDock-内部文档/托盘GUI验证.applescript`（自动验证菜单结构 + 动态文案 + 打开主窗口行为；连接/录制/唤醒/截图/退出仅列出不自动点击，避免真实改会话）。Rust 侧已有 pick_tray_target 3 项测试。
-- [ ] X10-56 `src/lib.rs` 的 clippy 告警 6 处（2026-10-01 夜守卫轮发现；均为人工会话近期提交引入，**非本轮改动**，故未修）。
-  - 清单：`717` `unused_mut`、`1342` `type_complexity`、`4089`/`4090` doc 缩进、`4321` 可折叠 `if`、`6719` 可折叠为 match guard。
-  - **风险提示（禁止盲目 `cargo clippy --fix`）**：`717` 的 `mut` 只在 `#[cfg(target_os = "windows")]` 分支被使用，macOS 上不可见——自动修复会**直接破坏 Windows 构建且本机无法发现**；`6719` 是「关闭镜像窗口不得退出客户端」的退出拦截兜底（X10-43 系统性兜底），属安全关键路径，折叠为 match guard 前须单独评估语义。
-  - 未在本轮修的理由：`lib.rs` 是人工会话正在演进的公共文件（M4-2 将在此新增常驻监听命令），避免合并冲突；且 CI 门禁不含 clippy（`build.yml` 只跑 `cargo test` + `pnpm build`），属纪律性告警而非构建阻塞。`companion_pairing.rs` 本轮已清零。
+- [x] X10-56 `src/lib.rs` 的 clippy 告警（2026-10-01 夜守卫轮发现 6 处；2026-10-02 凌晨守卫轮修复——工作区干净开工，M4-2~M4-5 已提交，原「避免与人工会话冲突」搁置理由解除）。实际现存 5 处（`6719` 可折叠 match guard 已被人工会话顺带解决）：
+  - `717` `unused_mut`（**Windows cfg 风险处**）：`quiet_command` 的 `mut` 仅在 `#[cfg(target_os = "windows")]` 分支使用，**未删 mut**（删除会破坏本机无法验证的 Windows 构建），改为 `#[allow(unused_mut)]` + 注释说明缘由——对两平台均零语义影响。
+  - `1342` `type_complexity`：抽 `type TakenProcess = (String, Box<dyn MirrorProcess>)` 别名（与 `companion_pairing.rs` 的 `DeviceBridge` 同做法），函数签名与调用方行为不变。
+  - `4093`/`4094` `doc_lazy_continuation`：无线序列号文档列表项与补充说明之间补空文档行。
+  - `4325` `collapsible_if`：`device_shadows_group` 内嵌套 `if` 折叠为单条件 `&&` 链（两条件均无副作用，语义等价）。
+  - 证据（2026-10-02 01:2x，HEAD=37a2790，工作区仅本改动）：`cargo clippy --all-targets` **零告警**；`cargo test --manifest-path src-tauri/Cargo.toml` **183 passed / 0 failed**（与基线一致，纯重构无行为变化）。CI 门禁不含 clippy（`build.yml` 只跑 `cargo test` + `pnpm build`），本轮为纪律性清零。
 - [ ] M4 伴侣 App 产品化（用户授权排期，2026-10-01；范围拆解如下，逐项实现前先给方案再动手）。
   - [x] **M4-1 配对产品化（2026-10-01 完成，X10-55，提交 c6831c5+后续）**：配对协议 MDP1→MDP2，从「一次性会话」升级为「持久互信」。桌面侧：EC P-256 长期身份（rcgen 自签证书，落 `app_data_dir/companion-identity/` 三文件 identity.key/.der/.fp，key 0600；指纹=SHA-256(SPKI)）；挑战-响应互信握手（桌面发 32B nonce 挑战 → 伴侣 `SHA256withECDSA` 签名 → 桌面验签 → 登记台账 `paired-companions.json`）；`RECONNECT <pairing_id>` 重连路径（凭台账公钥挑战验签，免扫码）；新命令 `companion_paired_devices`/`companion_unpair_device`（40 命令）+ 前端「已配对的伴侣设备」列表（移除互信）。伴侣侧：Android Keystore 生成不可导出 EC P-256 身份（PairingIdentity.kt），MDP2 握手客户端（device_hello 带 SPKI → challenge → SHA256withECDSA 应答 → paired_ok 存 SharedPreferences）。签名验证兼容 DER（Java）与定宽 r||s 双编码（p256 默认特性不开 ecdsa/der，`to_vec()` 出定宽——两端编码约定不一致的坑）。cargo 178 / vitest 41 / 伴侣 APK 构建全绿。真机待验：扫码配对 → 事件流「互信已建立」→ 桌面台账出现设备 → 移除互信后重连被拒。
   - **兼容性影响（M4-1 协议 tag 变更）**：二维码载荷前缀由 `MDP1` 改为 `MDP2`，桌面端（`src/App.tsx` 的 `pairingPayload`）与伴侣端（`PairingClient.parse`）在**同一提交**内同时切换；因此 97a8fb3 之前构建的伴侣 APK 与之后的桌面端**互不兼容**（旧 APK 解析不了 `MDP2|` 载荷）。伴侣 App 仍处 POC、未发布正式 APK（companion.yml 只产 artifact，版本 0.1.9），影响面限于本机调试产物；任意一侧更新后需**两端同版本**重装。

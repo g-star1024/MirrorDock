@@ -714,6 +714,9 @@ struct SystemAdbRuntime;
 /// scrcpy 是 GUI 子系统程序，本就没有控制台，该标志对它无副作用；
 /// 非 Windows 平台原样返回。
 fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    // `mut` 仅在下方 Windows 分支被真正使用；非 Windows 平台上保持声明不动，
+    // 用 allow 压制 rustc 的 unused_mut（删掉 mut 会破坏 Windows 构建）。
+    #[allow(unused_mut)]
     let mut command = Command::new(program);
     #[cfg(target_os = "windows")]
     {
@@ -1334,12 +1337,13 @@ fn take_running_process(
     Ok(process)
 }
 
+/// 结束会话时从会话表取出的进程句柄：设备序列号 + 镜像子进程。
+type TakenProcess = (String, Box<dyn MirrorProcess>);
+
 /// 结束**所有**进行中的会话并交还进程句柄（托盘「断开连接」、应用退出用）。
 ///
 /// 返回各设备交出的进程；任何一台停止失败都不影响其它设备先被结束。
-fn take_all_running_processes(
-    store: &SessionStore,
-) -> Result<Vec<(String, Box<dyn MirrorProcess>)>, AppError> {
+fn take_all_running_processes(store: &SessionStore) -> Result<Vec<TakenProcess>, AppError> {
     let mut map = store.lock()?;
     let mut taken = Vec::new();
     for (serial, state) in map.iter_mut() {
@@ -4090,6 +4094,7 @@ fn is_scrcpy_available() -> bool {
 /// 1. `IP:端口`（含冒号）；
 /// 2. 无线调试的 mDNS 发现条目，形如 `adb-<id>-<name>._adb-tls-connect._tcp`——
 ///    不含冒号但也不是 USB，漏判会把纯 Wi-Fi 设备误标成「USB + 无线」。
+///
 /// USB 序列号是纯硬件号（如 `79j7kn9tkjt8rwss`），不含冒号、点号与 `_tcp`。
 /// 与前端 `looksLikeWirelessEndpoint` 保持同一判定，仅用于通道归类与界面提示。
 fn is_wireless_endpoint(serial: &str) -> bool {
@@ -4322,13 +4327,13 @@ fn device_shadows_group(
         .chain(device.connections.iter().map(|c| &c.serial));
     for serial in serials {
         // mDNS 发现名（无线、不含冒号）内含组内 USB 序列号 → 同一台手机。
-        if is_wireless_endpoint(serial) && !serial.contains(':') {
-            if usb_serials
+        if is_wireless_endpoint(serial)
+            && !serial.contains(':')
+            && usb_serials
                 .iter()
                 .any(|usb| mdns_serial_contains_usb(serial, usb))
-            {
-                return true;
-            }
+        {
+            return true;
         }
         if let Some(ip) = wireless_ip_endpoint(serial) {
             if wireless_ips.iter().any(|known| known == ip) {
