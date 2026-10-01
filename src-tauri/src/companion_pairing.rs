@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::oneshot;
 
 /// 事件环形缓冲上限，与诊断日志口径一致。
@@ -27,6 +27,14 @@ pub const PROTOCOL_TAG: &str = "MDP2";
 
 /// 挑战 nonce 字节数（32 字节熵）。
 const CHALLENGE_BYTES: usize = 32;
+
+/// 单行消息硬上限（8 KiB）。
+///
+/// 配对监听期间端口对局域网开放，且服务端**不校验客户端身份**（互信靠握手阶段的
+/// 挑战签名建立）——即任意同网主机都能完成 TLS 并发送数据。协议里最大的行是
+/// `device_hello`（SPKI hex 约 180 字符 + 机型），远小于 8 KiB；设上限是为了
+/// 让「不发换行、持续灌数据」无法把进程内存吃满（fail-closed：超限即断开并如实告知）。
+const MAX_LINE_BYTES: usize = 8 * 1024;
 
 /// 单次配对暴露给前端的全部信息（就是二维码载荷的字段）。
 #[derive(Debug, Clone, Serialize)]
@@ -70,19 +78,21 @@ struct PairingInner {
     events: Vec<String>,
     offer: Option<PairingOffer>,
     shutdown: Option<oneshot::Sender<()>>,
-    /// 设备报到时触发的桥接回调（桌面侧注入）：入参为伴侣端来源 IP，
-    /// 返回要追加进事件流的文案。伴侣模块不感知 adb——镜像通道的
-    /// 自动连接逻辑（mDNS 匹配 + adb connect）由调用方闭包实现。
-    device_bridge: Option<Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>>,
+    device_bridge: Option<DeviceBridge>,
 }
+
+/// 设备报到时触发的桥接回调（桌面侧注入）：入参为伴侣端来源 IP，返回要追加进
+/// 事件流的文案。伴侣模块不感知 adb——镜像通道的自动连接逻辑（mDNS 匹配 +
+/// adb connect）由调用方闭包实现。
+pub type DeviceBridge = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
 impl PairingState {
     /// 注入设备报到桥接回调；应在任何配对开始前完成（run() 启动时设置一次）。
-    pub fn set_device_bridge(&self, bridge: Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>) {
+    pub fn set_device_bridge(&self, bridge: DeviceBridge) {
         self.inner.lock().unwrap().device_bridge = Some(bridge);
     }
 
-    fn take_device_bridge(&self) -> Option<Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>> {
+    fn take_device_bridge(&self) -> Option<DeviceBridge> {
         self.inner.lock().unwrap().device_bridge.clone()
     }
 
@@ -269,8 +279,9 @@ fn verifying_key_from_hex(pubkey_hex: &str) -> Option<p256::ecdsa::VerifyingKey>
     Some(p256::ecdsa::VerifyingKey::from(&public_key))
 }
 
+/// hex 解码；奇数长度直接判为非法（不补齐、不猜测）。
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
@@ -474,7 +485,7 @@ async fn run_accept_loop(
                     }
                     result = acceptor.accept(stream) => {
                         match result {
-                            Ok(tls) => serve_session(tls, &token_expected, &identity, &store, &state, peer.ip().to_string()).await,
+                            Ok(tls) => serve_session(tls, &token_expected, &store, &state, peer.ip().to_string()).await,
                             Err(e) => state.push_event(format!("TLS 握手失败：{e}")),
                         }
                     }
@@ -493,7 +504,6 @@ async fn run_accept_loop(
 async fn serve_session(
     tls: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     token_expected: &str,
-    identity: &PairingIdentity,
     store: &PairedStore,
     state: &PairingState,
     peer_ip: String,
@@ -502,10 +512,11 @@ async fn serve_session(
     let mut reader = BufReader::new(reader);
 
     // 第一行："MDP2 <token>"（首配，扫码）或 "MDP2 RECONNECT <pairing_id>"（互信重连）。
-    let hello = match read_line(&mut reader, std::time::Duration::from_secs(10)).await {
-        Some(line) => line,
-        None => {
-            state.push_event("握手超时或对端提前断开");
+    let hello = match read_line_bounded(&mut reader, std::time::Duration::from_secs(10), MAX_LINE_BYTES).await
+    {
+        Ok(line) => line,
+        Err(err) => {
+            state.push_event(format!("握手未完成（{}）", err.describe()));
             return;
         }
     };
@@ -557,8 +568,8 @@ async fn serve_session(
     }
 
     loop {
-        match read_line(&mut reader, std::time::Duration::from_secs(300)).await {
-            Some(line) => {
+        match read_line_bounded(&mut reader, std::time::Duration::from_secs(300), MAX_LINE_BYTES).await {
+            Ok(line) => {
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                     state.push_event("收到无法解析的行（已忽略）");
                     continue;
@@ -593,8 +604,8 @@ async fn serve_session(
                     None => {}
                 }
             }
-            None => {
-                state.push_event("会话结束（超时或断开）");
+            Err(err) => {
+                state.push_event(format!("会话结束（{}）", err.describe()));
                 return;
             }
         }
@@ -671,6 +682,7 @@ where
 
     // 公钥有效性：能解析成 P-256 公钥才继续（防止把垃圾字节写进台账）。
     if verifying_key_from_hex(&pubkey_hex).is_none() {
+        let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
         state.push_event("设备公钥格式不正确，互信未建立");
         return None;
     }
@@ -693,6 +705,9 @@ where
     }
     let sig = response.get("sig").and_then(|s| s.as_str()).unwrap_or("");
     if !verify_challenge(&pubkey_hex, &nonce, sig) {
+        // 显式拒绝：伴侣端据此显示「电脑没有接受本机的身份证明」，
+        // 而不是等到连接被关掉后误报「电脑没有回复」。
+        let _ = writer.write_all(b"{\"type\":\"rejected\"}\n").await;
         state.push_event("挑战签名验证失败，连接已拒绝（对端不持有申报的身份）");
         return None;
     }
@@ -732,25 +747,98 @@ where
     Some(device)
 }
 
-/// 读一行 JSON（10 秒超时）；超时/断开写事件流并返回 None。
-async fn read_json_line<L>(reader: &mut L, state: &PairingState, timeout_message: &str) -> Option<serde_json::Value>
+/// 带超时读一行 JSON（10 秒）；失败原因写入事件流并返回 None。
+async fn read_json_line<L>(reader: &mut L, state: &PairingState, what: &str) -> Option<serde_json::Value>
 where
     L: tokio::io::AsyncBufRead + Unpin,
 {
-    let line = read_line(reader, std::time::Duration::from_secs(10)).await?;
-    serde_json::from_str::<serde_json::Value>(&line).ok()
+    match read_line_bounded(reader, std::time::Duration::from_secs(10), MAX_LINE_BYTES).await {
+        Ok(line) => serde_json::from_str::<serde_json::Value>(&line).ok(),
+        Err(err) => {
+            state.push_event(format!("{what}（{}）", err.describe()));
+            None
+        }
+    }
 }
 
-/// 带超时读一行（UTF-8）；连接断开/超时返回 None。泛型同时服务生产与服务端/测试客户端。
-async fn read_line<L>(reader: &mut L, timeout: std::time::Duration) -> Option<String>
+/// 读一行的失败原因。区分「超时 / 对端断开 / 超长 / 非文本 / IO 错误」，
+/// 便于在事件流里给出可照做的说明，而不是统一成「连接失败」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineError {
+    Closed,
+    TimedOut,
+    TooLong,
+    NotUtf8,
+    Io,
+}
+
+impl LineError {
+    fn describe(&self) -> String {
+        match self {
+            LineError::Closed => "对端提前断开".into(),
+            LineError::TimedOut => "等待超时".into(),
+            LineError::TooLong => format!("对端消息超过 {MAX_LINE_BYTES} 字节上限，已断开"),
+            LineError::NotUtf8 => "消息不是有效文本".into(),
+            LineError::Io => "读取出错".into(),
+        }
+    }
+}
+
+/// 带超时、带上限读一行（UTF-8）。泛型同时服务生产路径与测试客户端。
+///
+/// 与 `read_line` 的差别：**先看缓冲区里有没有换行，再看累计长度**——超过
+/// `max_bytes` 立即返回 `TooLong`，不会把无换行的长数据一直堆进内存（同网任意
+/// 主机都能连上这个端口，上限是必需的 fail-closed 措施，见 `MAX_LINE_BYTES`）。
+async fn read_line_bounded<L>(
+    reader: &mut L,
+    timeout: std::time::Duration,
+    max_bytes: usize,
+) -> Result<String, LineError>
 where
     L: tokio::io::AsyncBufRead + Unpin,
 {
     use tokio::io::AsyncBufReadExt as _;
-    let mut buf = String::new();
-    match tokio::time::timeout(timeout, reader.read_line(&mut buf)).await {
-        Ok(Ok(n)) if n > 0 => Some(buf),
-        _ => None,
+
+    let read = async {
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            let mut line_complete = false;
+            let mut too_long = false;
+            let chunk_len: usize;
+            {
+                // 借用结束于本块：把该拿的都取出来（长度/是否含换行/内容），
+                // 之后再 consume，避免同时持有 `&mut reader` 与其借出的切片。
+                let available = reader.fill_buf().await.map_err(|_| LineError::Io)?;
+                if available.is_empty() {
+                    return Err(LineError::Closed);
+                }
+                chunk_len = match available.iter().position(|b| *b == b'\n') {
+                    Some(index) => {
+                        line_complete = true;
+                        index + 1
+                    }
+                    None => available.len(),
+                };
+                if out.len() + chunk_len > max_bytes {
+                    too_long = true;
+                } else {
+                    out.extend_from_slice(&available[..chunk_len]);
+                }
+            }
+            reader.consume(chunk_len);
+            if too_long {
+                return Err(LineError::TooLong);
+            }
+            if line_complete {
+                break;
+            }
+        }
+        String::from_utf8(out).map_err(|_| LineError::NotUtf8)
+    };
+
+    match tokio::time::timeout(timeout, read).await {
+        Ok(result) => result,
+        Err(_) => Err(LineError::TimedOut),
     }
 }
 
@@ -767,6 +855,7 @@ pub fn end_pairing(state: &Arc<PairingState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncBufReadExt as _;
 
     fn server_name() -> tokio_rustls::rustls::pki_types::ServerName<'static> {
         tokio_rustls::rustls::pki_types::ServerName::try_from("mirrordock-companion.local".to_string()).unwrap()
@@ -839,6 +928,36 @@ mod tests {
         SigningKey::from_bytes(&[42u8; 32].into()).unwrap()
     }
 
+    /// 签名的序列化编码。真机（Java `SHA256withECDSA`）用 DER；Rust 侧的
+    /// `to_vec()` 是定宽 r||s。两条路都必须能验签，故测试两种都覆盖。
+    #[derive(Clone, Copy, PartialEq)]
+    enum SigEncoding {
+        FixedWidth,
+        Der,
+    }
+
+    /// 起一个被测配对服务端（随机端口）。返回值里的 `_alive` 是关停通道的持有者，
+    /// 必须活到测试结束——丢弃即触发优雅关停（tokio 语义）。
+    async fn spawn_pairing_server(
+        state: &Arc<PairingState>,
+        workdir: &std::path::Path,
+    ) -> (u16, String, oneshot::Sender<()>) {
+        let (identity, _) = PairingIdentity::load_or_create(workdir).unwrap();
+        let store = PairedStore::new(workdir);
+        let token = generate_pairing_token();
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = std_listener.local_addr().unwrap().port();
+        let listener = set_nonblocking_and_convert(std_listener).unwrap();
+
+        let loop_state = state.clone();
+        let loop_token = token.clone();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            run_accept_loop(listener, identity, loop_token, store, loop_state, rx).await;
+        });
+        (port, token, tx)
+    }
+
     /// 客户端侧 TLS 连接（SPKI 指纹锁定，与伴侣 App 出带校验同构）。
     async fn tls_connect(
         port: u16,
@@ -859,7 +978,7 @@ mod tests {
     }
 
     /// 首配客户端：发 MDP2 <token>，走完 device_hello → challenge → 签名，
-    /// 返回服务端最后一条回复（paired_ok 或无）。
+    /// 返回服务端最后一条回复（paired_ok / rejected 或无）。
     async fn fresh_pair_client(
         port: u16,
         fingerprint: &str,
@@ -867,6 +986,7 @@ mod tests {
         model: &str,
         signing: &p256::ecdsa::SigningKey,
         sign_wrong_data: bool,
+        encoding: SigEncoding,
     ) -> Option<String> {
         use pkcs8::EncodePublicKey as _;
         use p256::ecdsa::signature::{SignatureEncoding, Signer};
@@ -903,7 +1023,11 @@ mod tests {
         } else {
             signing.sign(nonce.as_slice())
         };
-        let sig_hex = hex_lower(signature.to_vec().as_slice());
+        let sig_hex = match encoding {
+            SigEncoding::FixedWidth => hex_lower(signature.to_vec().as_slice()),
+            // 真机（Android Keystore / Java SHA256withECDSA）走这条。
+            SigEncoding::Der => hex_lower(signature.to_der().to_vec().as_slice()),
+        };
         write_half
             .write_all(format!("{{\"type\":\"challenge_response\",\"sig\":\"{sig_hex}\"}}\n").as_bytes())
             .await
@@ -916,30 +1040,39 @@ mod tests {
         let workdir = std::env::temp_dir().join(format!("md-e2e-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workdir);
         let state = Arc::new(PairingState::default());
-        let (identity, _) = PairingIdentity::load_or_create(&workdir).unwrap();
-        let store = PairedStore::new(&workdir);
-        let token = generate_pairing_token();
-        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = std_listener.local_addr().unwrap().port();
-        let listener = set_nonblocking_and_convert(std_listener).unwrap();
+        let (port, token, _alive) = spawn_pairing_server(&state, &workdir).await;
 
-        let loop_state = state.clone();
-        let loop_token = token.clone();
-        let (_tx, rx) = oneshot::channel::<()>();
-        tokio::spawn(async move {
-            run_accept_loop(listener, identity, loop_token, store, loop_state, rx).await;
-        });
-
-        // 错误签名必须被拒（对端不持有申报身份）。
+        // 错误签名必须被拒（对端不持有申报身份），且要给对端一条**显式**拒绝：
+        // 否则伴侣端只能等到连接关闭，显示成「电脑没有回复配对结果」。
         let signing = test_device_key();
-        let rejected = fresh_pair_client(port, &fingerprint_of(&workdir), &token, "Bad-Device", &signing, true)
-            .await;
-        assert!(rejected.is_none());
+        let rejected = fresh_pair_client(
+            port,
+            &fingerprint_of(&workdir),
+            &token,
+            "Bad-Device",
+            &signing,
+            true,
+            SigEncoding::FixedWidth,
+        )
+        .await
+        .expect("服务端必须显式拒绝错误签名");
+        let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
+        assert_eq!(rejected["type"], "rejected");
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert!(state.status().events.iter().any(|e| e.contains("挑战签名验证失败")));
 
         // 正确签名：完整握手 + 统计流 + bye。
-        let paired = match fresh_pair_client(port, &fingerprint_of(&workdir), &token, "POC-Test", &signing, false).await {
+        let paired = match fresh_pair_client(
+            port,
+            &fingerprint_of(&workdir),
+            &token,
+            "POC-Test",
+            &signing,
+            false,
+            SigEncoding::FixedWidth,
+        )
+        .await
+        {
             Some(v) => v,
             None => {
                 eprintln!("服务端事件流：{:#?}", state.status().events);
@@ -960,6 +1093,109 @@ mod tests {
     /// 读取身份指纹（测试辅助：指纹文件由 load_or_create 落盘）。
     fn fingerprint_of(dir: &std::path::Path) -> String {
         std::fs::read_to_string(dir.join("identity.fp")).unwrap().trim().to_string()
+    }
+
+    /// 真机（Android Keystore）用 Java `SHA256withECDSA` 签名，输出 **DER** 编码，
+    /// 而 Rust 测试客户端默认发定宽 r||s——两条编码都必须验签通过。
+    /// 这条用例专门锁住「实际生产路径」（DER），避免只测到自家客户端的写法。
+    #[tokio::test]
+    async fn der_encoded_signature_is_accepted() {
+        let workdir = std::env::temp_dir().join(format!("md-der-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        let state = Arc::new(PairingState::default());
+        let (port, token, _alive) = spawn_pairing_server(&state, &workdir).await;
+
+        let reply = fresh_pair_client(
+            port,
+            &fingerprint_of(&workdir),
+            &token,
+            "DER-Device",
+            &test_device_key(),
+            false,
+            SigEncoding::Der,
+        )
+        .await
+        .expect("DER 编码签名必须被接受");
+        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(reply["type"], "paired_ok");
+        assert_eq!(PairedStore::new(&workdir).load().len(), 1);
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    /// 单行上限的单元级证明：无换行的长数据在**等于上限**时尚可，一旦超过即
+    /// 立刻返回 `TooLong`（而不是无限堆进内存等换行）。
+    #[tokio::test]
+    async fn read_line_bounded_stops_at_the_cap() {
+        // 正常一行。
+        let mut reader = BufReader::new(&b"MDP2 AAAA\n"[..]);
+        let line = read_line_bounded(&mut reader, std::time::Duration::from_secs(1), 64)
+            .await
+            .unwrap();
+        assert_eq!(line, "MDP2 AAAA\n");
+
+        // 恰好等于上限（63 字节 + 换行）通过。
+        let mut exact = vec![b'C'; 63];
+        exact.push(b'\n');
+        let mut reader = BufReader::new(exact.as_slice());
+        let line = read_line_bounded(&mut reader, std::time::Duration::from_secs(1), 64)
+            .await
+            .unwrap();
+        assert_eq!(line.len(), 64);
+
+        // 超限（无换行）立即失败。
+        let big = vec![b'B'; 4096];
+        let mut reader = BufReader::new(big.as_slice());
+        let err = read_line_bounded(&mut reader, std::time::Duration::from_secs(1), 64)
+            .await
+            .unwrap_err();
+        assert_eq!(err, LineError::TooLong);
+
+        // 对端断开（读到 EOF）如实区分，不与超限混淆。
+        let mut reader = BufReader::new(&b""[..]);
+        let err = read_line_bounded(&mut reader, std::time::Duration::from_secs(1), 64)
+            .await
+            .unwrap_err();
+        assert_eq!(err, LineError::Closed);
+    }
+
+    /// 端到端：配对端口对同网开放且不校验客户端身份，因此「不发换行、持续灌数据」
+    /// 必须被**快速**掐断（在 10 秒读超时之前），且事件流如实说明原因。
+    #[tokio::test]
+    async fn an_oversized_line_ends_the_session_before_the_timeout() {
+        use tokio::io::AsyncWriteExt;
+
+        let workdir = std::env::temp_dir().join(format!("md-too-long-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        let state = Arc::new(PairingState::default());
+        let (port, _token, _alive) = spawn_pairing_server(&state, &workdir).await;
+
+        let tls = tls_connect(port, &fingerprint_of(&workdir)).await;
+        let (_read_half, mut write_half) = tokio::io::split(tls);
+
+        let started = std::time::Instant::now();
+        // 2 MiB、无换行。服务端一旦超限就断开，写入可能因此失败——忽略即可。
+        let payload = vec![b'A'; 2 * 1024 * 1024];
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            write_half.write_all(&payload),
+        )
+        .await;
+
+        let mut seen = false;
+        for _ in 0..30 {
+            if state.status().events.iter().any(|e| e.contains("字节上限")) {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(seen, "事件流应如实告知超限：{:#?}", state.status().events);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(6),
+            "超限必须在 10 秒读超时之前触发，实测 {:?}",
+            started.elapsed()
+        );
+        let _ = std::fs::remove_dir_all(&workdir);
     }
 
     /// 错误 token 必须被拒绝；未知 pairing_id 的重连同样被拒。

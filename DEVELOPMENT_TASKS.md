@@ -534,8 +534,20 @@
 - [x] X10-54 关于卡按钮移位 + 托盘 GUI 验证脚本（2026-10-01 晨，用户反馈）。
   - 关于卡：「检查更新」从独立行移入按钮行，顺序 = 打开官网 / GitHub 仓库 / 检查更新（原独立说明行改为普通 note）。
   - 托盘 GUI 自动化：沙箱 System Events 被 TCC 拦（-10004，与键击结论一致），无法端到端；交付宿主机脚本 `MirrorDock-内部文档/托盘GUI验证.applescript`（自动验证菜单结构 + 动态文案 + 打开主窗口行为；连接/录制/唤醒/截图/退出仅列出不自动点击，避免真实改会话）。Rust 侧已有 pick_tray_target 3 项测试。
+- [ ] X10-56 `src/lib.rs` 的 clippy 告警 6 处（2026-10-01 夜守卫轮发现；均为人工会话近期提交引入，**非本轮改动**，故未修）。
+  - 清单：`717` `unused_mut`、`1342` `type_complexity`、`4089`/`4090` doc 缩进、`4321` 可折叠 `if`、`6719` 可折叠为 match guard。
+  - **风险提示（禁止盲目 `cargo clippy --fix`）**：`717` 的 `mut` 只在 `#[cfg(target_os = "windows")]` 分支被使用，macOS 上不可见——自动修复会**直接破坏 Windows 构建且本机无法发现**；`6719` 是「关闭镜像窗口不得退出客户端」的退出拦截兜底（X10-43 系统性兜底），属安全关键路径，折叠为 match guard 前须单独评估语义。
+  - 未在本轮修的理由：`lib.rs` 是人工会话正在演进的公共文件（M4-2 将在此新增常驻监听命令），避免合并冲突；且 CI 门禁不含 clippy（`build.yml` 只跑 `cargo test` + `pnpm build`），属纪律性告警而非构建阻塞。`companion_pairing.rs` 本轮已清零。
 - [ ] M4 伴侣 App 产品化（用户授权排期，2026-10-01；范围拆解如下，逐项实现前先给方案再动手）。
   - [x] **M4-1 配对产品化（2026-10-01 完成，X10-55，提交 c6831c5+后续）**：配对协议 MDP1→MDP2，从「一次性会话」升级为「持久互信」。桌面侧：EC P-256 长期身份（rcgen 自签证书，落 `app_data_dir/companion-identity/` 三文件 identity.key/.der/.fp，key 0600；指纹=SHA-256(SPKI)）；挑战-响应互信握手（桌面发 32B nonce 挑战 → 伴侣 `SHA256withECDSA` 签名 → 桌面验签 → 登记台账 `paired-companions.json`）；`RECONNECT <pairing_id>` 重连路径（凭台账公钥挑战验签，免扫码）；新命令 `companion_paired_devices`/`companion_unpair_device`（40 命令）+ 前端「已配对的伴侣设备」列表（移除互信）。伴侣侧：Android Keystore 生成不可导出 EC P-256 身份（PairingIdentity.kt），MDP2 握手客户端（device_hello 带 SPKI → challenge → SHA256withECDSA 应答 → paired_ok 存 SharedPreferences）。签名验证兼容 DER（Java）与定宽 r||s 双编码（p256 默认特性不开 ecdsa/der，`to_vec()` 出定宽——两端编码约定不一致的坑）。cargo 178 / vitest 41 / 伴侣 APK 构建全绿。真机待验：扫码配对 → 事件流「互信已建立」→ 桌面台账出现设备 → 移除互信后重连被拒。
+  - **兼容性影响（M4-1 协议 tag 变更）**：二维码载荷前缀由 `MDP1` 改为 `MDP2`，桌面端（`src/App.tsx` 的 `pairingPayload`）与伴侣端（`PairingClient.parse`）在**同一提交**内同时切换；因此 97a8fb3 之前构建的伴侣 APK 与之后的桌面端**互不兼容**（旧 APK 解析不了 `MDP2|` 载荷）。伴侣 App 仍处 POC、未发布正式 APK（companion.yml 只产 artifact，版本 0.1.9），影响面限于本机调试产物；任意一侧更新后需**两端同版本**重装。
+  - **守卫轮加固与独立复核（2026-10-01 夜，自动化守卫轮，本项唯一改动文件 `src-tauri/src/companion_pairing.rs`）**：
+    - ①**单行消息上限 8 KiB（`MAX_LINE_BYTES`，安全加固）**：配对监听期间端口对局域网开放，且服务端**不校验客户端身份**（互信靠握手阶段的挑战签名建立）——任意同网主机都能完成 TLS 并发送数据；原实现用 `read_line` 无上限缓冲，「不发换行、持续灌数据」在 10 秒读超时前可把进程内存吃满。改为 `read_line_bounded`（**先探测换行、再判累计长度**，超限立即断开并 consume 残量），失败原因分 5 类如实入事件流（对端提前断开 / 等待超时 / 超过上限 / 非有效文本 / 读取出错），不再统一成「会话结束（超时或断开）」。
+    - ②**互信握手失败补显式拒绝**：公钥非法与挑战签名验证失败两条路径此前只写事件流就断开，对端（伴侣 App）等不到回复，只能显示成「电脑没有回复配对结果」；现补发 `{"type":"rejected"}`，伴侣端据此显示「电脑没有接受本机的身份证明」（**无需改动 Kotlin**）。
+    - ③**新增 3 项测试**：DER 编码签名被接受（**真机 Java `SHA256withECDSA` 实际走的编码路径，此前零覆盖**——原测试只发 Rust 侧 `to_vec()` 的定宽 r||s）、`read_line_bounded` 边界（等于上限通过 / 超限 `TooLong` / EOF 与超长不混淆）、端到端超长行（2 MiB 无换行必须在 10 秒读超时**之前**掐断，断言事件文案 + 耗时 < 6s）。
+    - ④顺手清理本模块 clippy：`serve_session` 的 `identity` 死参数、3 处 `type_complexity`（抽 `pub type DeviceBridge` 别名）、`hex_decode` 的 `is_multiple_of`。现 `companion_pairing.rs` **clippy 零告警**。
+    - **复核证据（2026-10-01 23:00–23:20，HEAD=97a8fb3，工作区开场干净）**：`cargo test --manifest-path src-tauri/Cargo.toml` **181 passed / 0 failed**（178 → 181）；`pnpm build` 通过、vitest **41 passed / 0 failed**；伴侣端 `:app:assembleDebug` **BUILD SUCCESSFUL**（经 gradle-run 包装器，`app-debug.apk` 4,459,024 B @ 07:57:32，晚于全部 Kotlin 源文件 mtime 07:56:48 ⇒ 确实包含 M4-1 改动）。真机面（互信往返、超长行中断的真实观感）仍为外部阻塞，未伪造。
+
   - **M4-2 常驻通道**：伴侣 App 前台服务 + 与桌面端心跳（mDNS 广播已有 companion_bridge_events 自动连接，补断连退避重试与 Android 13 通知权限引导）；RECONNECT 免扫码直连的用户入口（桌面端常驻监听端口）。
   - **M4-3 状态通知**：连接建立/断开/录制开始结束的系统通知（可关），App 内显示当前信任的桌面端列表（读取 SharedPreferences paired_computers）。
   - **M4-4 互信撤销**：伴侣 App 侧「解除这台电脑」按钮（删除本机 Keystore 身份 + paired_computers 记录），与桌面端 companion_unpair_device 双向对齐。
