@@ -88,6 +88,9 @@ struct PairingInner {
     session_out: Option<(u64, mpsc::UnboundedSender<String>)>,
     /// 会话计数器（配合 session_out 做只清自己的清除）。
     session_seq: u64,
+    /// 常驻通道监听端口（None = 未开启）。随 paired_ok 下发给伴侣端持久化，
+    /// 是免扫码重连的端口依据。
+    resident_port: Option<u16>,
 }
 
 /// 设备报到时触发的桥接回调（桌面侧注入）：入参为伴侣端来源 IP，返回要追加进
@@ -160,6 +163,11 @@ impl PairingState {
         if inner.session_out.as_ref().map(|(sid, _)| *sid) == Some(id) {
             inner.session_out = None;
         }
+    }
+
+    /// 当前常驻监听端口（未开启为 None）。随 paired_ok 下发。
+    pub fn resident_port(&self) -> Option<u16> {
+        self.inner.lock().unwrap().resident_port
     }
 
     fn set_phase(&self, phase: PairingPhase) {
@@ -457,14 +465,19 @@ pub fn begin_pairing(
     Ok(offer)
 }
 
+/// 常驻监听的**默认固定端口**。伴侣端免扫码重连按这个端口直连（见
+/// `begin_resident`）：固定端口让重连跨桌面端重启仍然有效；被占用时回退
+/// 随机端口并如实告知（此时手机需要重新扫码一次以学到新端口）。
+pub const RESIDENT_DEFAULT_PORT: u16 = 47017;
+
 /// 启动常驻通道（M4-2）：与一次性扫码配对同构的监听器，但：
 /// - 不出二维码、不发一次性 token（offer 保持 None）；
 /// - 只接受 `MDP2 RECONNECT <pairing_id>` 的免扫码重连（首配必须走扫码，
 ///   信任锚是二维码出带校验，常驻通道没有这个环节，不能降低门槛）；
-/// - 并发处理多个会话（每连接独立任务），支持心跳长连（见 serve_session）。
+/// - 并发处理多个会话（每连接独立任务），支持心跳长连（见 serve_session）；
+/// - 优先绑定固定端口 [`RESIDENT_DEFAULT_PORT`]，伴侣端重连按它直连。
 ///
-/// 返回监听端口（伴侣端手动输入重连时可见；正常路径凭扫码时记住的
-/// last_host 直连，无需用户知道端口）。
+/// 返回监听端口。
 pub fn begin_resident(
     state: &Arc<PairingState>,
     identity_dir: &Path,
@@ -483,27 +496,36 @@ pub fn begin_resident(
     }
 
     let std_listener =
-        std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| crate::AppError {
-            code: "pairing_bind_failed",
-            message: format!("常驻通道监听失败：{e}"),
-            recovery: "检查系统防火墙后重试。".into(),
-        })?;
+        std::net::TcpListener::bind(("0.0.0.0", RESIDENT_DEFAULT_PORT))
+            .or_else(|_| std::net::TcpListener::bind("0.0.0.0:0"))
+            .map_err(|e| crate::AppError {
+                code: "pairing_bind_failed",
+                message: format!("常驻通道监听失败：{e}"),
+                recovery: "检查系统防火墙后重试。".into(),
+            })?;
     let port = std_listener.local_addr().map_err(|e| crate::AppError {
         code: "pairing_bind_failed",
         message: format!("读取端口失败：{e}"),
         recovery: "重试一次。".into(),
     })?
     .port();
+    let used_fallback = port != RESIDENT_DEFAULT_PORT;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     {
         let mut inner = state.inner.lock().unwrap();
         inner.resident = true;
+        inner.resident_port = Some(port);
         inner.shutdown = Some(shutdown_tx);
         inner.phase = PairingPhase::Listening;
     }
     state.push_event(format!(
-        "常驻通道已开启（端口 {port}）：已配对的伴侣设备可免扫码直连"
+        "常驻通道已开启（端口 {port}{}）：已配对的伴侣设备可免扫码直连",
+        if used_fallback {
+            format!("，默认端口 {RESIDENT_DEFAULT_PORT} 被占用已回退")
+        } else {
+            String::new()
+        },
     ));
 
     let shared = state.clone();
@@ -515,12 +537,17 @@ pub fn begin_resident(
                 shared.set_phase(PairingPhase::Idle);
                 let mut inner = shared.inner.lock().unwrap();
                 inner.resident = false;
+                inner.resident_port = None;
                 return;
             }
         };
         run_accept_loop(listener, identity, String::new(), store, shared, shutdown_rx, true).await;
     });
     drop(handle);
+
+    // 已有活跃伴侣会话（扫码配对刚完成）：把端口推给手机持久化，
+    // 会话断开后它就能按新端口免扫码重连。
+    state.broadcast_line(format!("{{\"type\":\"resident_port\",\"port\":{port}}}"));
 
     Ok(port)
 }
@@ -702,9 +729,20 @@ async fn serve_session(
     };
     let Some(device) = handshake else { return }; // 失败原因已写入事件流。
 
-    let _ = stream
-        .write_all(format!("{{\"type\":\"paired_ok\",\"pairing_id\":\"{}\"}}\n", device.pairing_id).as_bytes())
-        .await;
+    // paired_ok 带上常驻端口（开启时）：伴侣端持久化后即可免扫码直连。
+    // 有活跃会话但常驻未开启时下发 null——伴侣端清除旧端口，避免拿着过期
+    // 端口反复重连失败（fail-closed：宁可不连也不乱试）。
+    let paired_ok = match state.resident_port() {
+        Some(port) => format!(
+            "{{\"type\":\"paired_ok\",\"pairing_id\":\"{}\",\"resident_port\":{port}}}\n",
+            device.pairing_id
+        ),
+        None => format!(
+            "{{\"type\":\"paired_ok\",\"pairing_id\":\"{}\",\"resident_port\":null}}\n",
+            device.pairing_id
+        ),
+    };
+    let _ = stream.write_all(paired_ok.as_bytes()).await;
     state.push_event(format!(
         "设备报到：{}（互信会话已建立，来源 {}，{}）",
         device.model,
@@ -1055,6 +1093,7 @@ pub fn end_pairing(state: &Arc<PairingState>) {
     inner.phase = PairingPhase::Idle;
     inner.offer = None;
     inner.resident = false;
+    inner.resident_port = None;
 }
 
 #[cfg(test)]
