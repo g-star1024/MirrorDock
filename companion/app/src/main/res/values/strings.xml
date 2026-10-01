@@ -22,4 +22,24 @@
     <string name="action_refresh">刷新</string>
     <string name="badge_apk">APK</string>
     <string name="badge_file">文件</string>
+
+    <!-- M4-2 常驻通道 / M4-4 解除互信 -->
+    <string name="computer_title">上次配对的电脑</string>
+    <string name="computer_info">地址 %1$s · 电脑身份 %2$s…</string>
+    <string name="computer_note">连接在后台保持，断开后自动重试。在电脑端开启「常驻通道」后可免扫码直连；解除互信后双方都需要重新扫码。</string>
+    <string name="action_link_start">连接上次配对的电脑</string>
+    <string name="action_link_stop">断开</string>
+    <string name="action_unpair">解除这台电脑</string>
+    <string name="unpair_title">解除这台电脑的互信？</string>
+    <string name="unpair_message">将删除本地保存的互信凭据与本机配对身份。之后再次连接这台电脑，需要重新扫码配对。</string>
+    <string name="link_state_idle">未连接。</string>
+    <string name="link_state_connecting">连接中：</string>
+    <string name="link_state_connected">已连接：</string>
+    <string name="link_state_retrying">重试中：</string>
+    <string name="link_event_connected">已与电脑建立常驻连接。</string>
+    <string name="link_event_disconnected">与电脑的连接已断开，将自动重试。</string>
+    <string name="link_event_rejected">电脑拒绝了连接（可能已解除互信）。</string>
+    <string name="link_event_no_credential">没有可直连的电脑，请先扫码配对。</string>
+    <string name="link_event_recording_start">电脑已开始屏幕录制。</string>
+    <string name="link_event_recording_stop">电脑已结束屏幕录制。</string>
 </resources>

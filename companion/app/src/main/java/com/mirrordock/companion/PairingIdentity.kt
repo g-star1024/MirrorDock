@@ -63,4 +63,16 @@ object PairingIdentity {
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
         return keyStore.getEntry(ALIAS, null) as KeyStore.PrivateKeyEntry
     }
+
+    /**
+     * 销毁本机身份（M4-4「解除这台电脑」）：删除 Keystore 条目。
+     * 私钥本就不可导出，删除即彻底作废——桌面端台账里的旧公钥再也配不出
+     * 有效签名，下次连接必须重新扫码。幂等。
+     */
+    fun destroy() {
+        runCatching {
+            val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+            keyStore.deleteEntry(ALIAS)
+        }
+    }
 }

@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- API 34 起媒体投影前台服务必须声明专用类型与权限。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- M4-2 常驻连接前台服务（dataSync 类型）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 读取「下载/MirrorDock」里电脑推送的文件：API ≤ 32 走运行时权限。 -->
     <uses-permission
@@ -57,6 +59,12 @@
             android:name=".CaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- M4-2 常驻连接：凭本地互信凭据免扫码直连已配对电脑。 -->
+        <service
+            android:name=".PersistentConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- 只共享「下载/MirrorDock」里的电脑推送文件，供查看与 APK 安装使用。 -->
         <provider

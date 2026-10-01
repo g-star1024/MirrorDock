@@ -49,6 +49,16 @@ class MainActivity : AppCompatActivity() {
 
     private val logLines = StringBuilder()
     private var client: PairingClient? = null
+    // M4-2/M4-3：常驻通道入口与状态显示。
+    private lateinit var computerCard: View
+    private lateinit var computerInfo: TextView
+    private lateinit var linkStatus: TextView
+    private lateinit var buttonLinkStart: Button
+    private lateinit var buttonLinkStop: Button
+    private var linkListener: (() -> Unit)? = null
+    // 通知权限的后续动作：屏幕捕获与常驻连接都会请求 POST_NOTIFICATIONS，
+    // 授权后按请求时的意图继续，而不是固定走某一条路。
+    private var notificationFollowUp: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -131,6 +141,24 @@ class MainActivity : AppCompatActivity() {
             logToggle.setText(if (expanded) R.string.action_show else R.string.action_hide)
         }
 
+        // 常驻通道（M4-2）：已配对电脑卡 + 免扫码直连入口；M4-4「解除这台电脑」。
+        computerCard = findViewById(R.id.computer_card)
+        computerInfo = findViewById(R.id.computer_info)
+        linkStatus = findViewById(R.id.link_status)
+        buttonLinkStart = findViewById(R.id.button_link_start)
+        buttonLinkStop = findViewById(R.id.button_link_stop)
+        buttonLinkStart.setOnClickListener { startPersistentLink() }
+        buttonLinkStop.setOnClickListener {
+            val intent = Intent(this, PersistentConnectionService::class.java)
+                .setAction(PersistentConnectionService.ACTION_STOP)
+            ContextCompat.startForegroundService(this, intent)
+        }
+        findViewById<Button>(R.id.button_unpair_computer).setOnClickListener { confirmUnpairComputer() }
+
+        linkListener = {
+            runOnUiThread { renderLinkState() }
+        }
+
         // 崩溃取证：上次会话崩溃时显示一条可收敛的红卡——默认只显示标题，
         // 详情按需展开；点「清除」删掉落盘堆栈后立即消失，不影响后续正常使用。
         CrashGuard.lastCrash(applicationContext)?.let { last ->
@@ -154,6 +182,91 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // 从系统设置（授权文件访问）或安装器返回时刷新列表。
         refreshFiles()
+        // 已配对电脑卡与常驻连接状态（M4-2）。
+        refreshComputerCard()
+        linkListener?.let { LinkState.addListener(it) }
+        renderLinkState()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        linkListener?.let { LinkState.removeListener(it) }
+    }
+
+    // -- 常驻通道（M4-2）与解除互信（M4-4） ----------------------------------
+
+    /** 已配对电脑卡：有互信凭据才显示；无凭据时隐藏（扫码配对入口照常）。 */
+    private fun refreshComputerCard() {
+        val prefs = getSharedPreferences("paired_computers", MODE_PRIVATE)
+        val pairingId = prefs.getString("pairing_id", null)
+        if (pairingId.isNullOrBlank()) {
+            computerCard.visibility = View.GONE
+            return
+        }
+        computerCard.visibility = View.VISIBLE
+        val host = prefs.getString("last_host", null)?.substringBeforeLast(':') ?: "未知地址"
+        val fingerprint = prefs.getString("desktop_fingerprint", null)?.take(16) ?: ""
+        val residentPort = prefs.getInt("resident_port", -1).takeIf { it > 0 }
+        val endpoint = if (residentPort != null) "$host:$residentPort" else host
+        computerInfo.text = getString(R.string.computer_info, endpoint, fingerprint)
+    }
+
+    private fun renderLinkState() {
+        linkStatus.text = when (LinkState.phase) {
+            LinkPhase.IDLE -> getString(R.string.link_state_idle)
+            LinkPhase.CONNECTING -> getString(R.string.link_state_connecting) + LinkState.detail
+            LinkPhase.CONNECTED -> getString(R.string.link_state_connected) + LinkState.detail
+            LinkPhase.RETRYING -> getString(R.string.link_state_retrying) + LinkState.detail
+        }
+        val running = LinkState.phase != LinkPhase.IDLE
+        buttonLinkStart.visibility = if (running) View.GONE else View.VISIBLE
+        buttonLinkStop.visibility = if (running) View.VISIBLE else View.GONE
+    }
+
+    /** 免扫码直连入口：Android 13+ 先请求通知权限（前台服务通知必须可见）。 */
+    private fun startPersistentLink() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationFollowUp = { actuallyStartPersistentLink() }
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATION)
+            return
+        }
+        actuallyStartPersistentLink()
+    }
+
+    private fun actuallyStartPersistentLink() {
+        val intent = Intent(this, PersistentConnectionService::class.java)
+            .setAction(PersistentConnectionService.ACTION_START)
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    /**
+     * 解除这台电脑（M4-4）：停常驻服务 + 清互信凭据 + 销毁本机 Keystore 身份。
+     * 与桌面端「移除互信」双向对齐——两端都作废后，下次连接必须重新扫码。
+     * 确认对话框明示后果，不静默执行。
+     */
+    private fun confirmUnpairComputer() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.unpair_title)
+            .setMessage(R.string.unpair_message)
+            .setPositiveButton(R.string.action_unpair) { _, _ -> unpairComputer() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun unpairComputer() {
+        // ① 停常驻连接（还在重试也要立刻停，避免解除后继续重连被拒刷通知）。
+        val intent = Intent(this, PersistentConnectionService::class.java)
+            .setAction(PersistentConnectionService.ACTION_STOP)
+        ContextCompat.startForegroundService(this, intent)
+        // ② 清互信凭据；③ 销毁 Keystore 身份（私钥不可导出，销毁即作废）。
+        getSharedPreferences("paired_computers", MODE_PRIVATE).edit().clear().apply()
+        PairingIdentity.destroy()
+        refreshComputerCard()
+        log("已解除与这台电脑的互信：本地凭据与身份已删除，下次连接需重新扫码。")
+        Toast.makeText(this, "已解除互信", Toast.LENGTH_SHORT).show()
     }
 
     override fun onRequestPermissionsResult(
@@ -169,7 +282,14 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "扫码需要相机权限", Toast.LENGTH_SHORT).show()
                 }
             }
-            REQUEST_NOTIFICATION -> if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) requestCaptureConsent()
+            REQUEST_NOTIFICATION -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    notificationFollowUp?.invoke()
+                } else {
+                    Toast.makeText(this, "需要通知权限才能显示连接状态", Toast.LENGTH_SHORT).show()
+                }
+                notificationFollowUp = null
+            }
             REQUEST_READ_FILES -> refreshFiles()
         }
     }
@@ -210,6 +330,7 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
         ) {
+            notificationFollowUp = { requestCaptureConsent() }
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATION)
             return
         }
@@ -250,13 +371,19 @@ class MainActivity : AppCompatActivity() {
                     statusText.text = "正在与电脑完成身份互验…"
                 }
 
-                override fun onPaired(pairingId: String) = runOnUiThread {
+                override fun onPaired(pairingId: String, residentPort: Int?) = runOnUiThread {
                     statusText.text = "已与电脑建立互信会话。"
                     setStatusConnected(true)
                     log("配对成功（互信已建立，本机身份已登记到电脑）")
-                    rememberComputer(pairingId, payload)
+                    rememberComputer(pairingId, payload, residentPort)
                     // 边界如实告知（X10-31）：这条会话是伴侣通道，不等于镜像连接。
                     log("提示：这是伴侣助手通道，不会让手机出现在电脑的连接列表里；要镜像请用数据线或在电脑端完成无线调试配对。")
+                    if (residentPort != null) {
+                        log("电脑常驻通道已开启（端口 $residentPort），之后可在上方「上次配对的电脑」一键重连。")
+                    } else {
+                        log("电脑常驻通道未开启：在电脑端打开后，这里可以免扫码重连。")
+                    }
+                    refreshComputerCard()
                 }
 
                 override fun onRejected() = runOnUiThread {
@@ -281,18 +408,19 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 本地记住这台电脑（M4-1）：pairing_id + 桌面身份指纹 + 最近主机。
-     * M4-2 常驻通道上线后，重连将凭它免扫码直连；桌面端「移除互信」后
-     * 这份记录随之作废（对端会拒绝 RECONNECT）。
+     * M4-2 起同时保存桌面常驻通道端口（residentPort），重连凭它免扫码直连；
+     * 桌面端「移除互信」后这份记录随之作废（对端会拒绝 RECONNECT）。
      */
-    private fun rememberComputer(pairingId: String, payload: PairingPayload) {
+    private fun rememberComputer(pairingId: String, payload: PairingPayload, residentPort: Int?) {
         if (pairingId.isBlank()) return
         runCatching {
-            getSharedPreferences("paired_computers", MODE_PRIVATE).edit()
+            val editor = getSharedPreferences("paired_computers", MODE_PRIVATE).edit()
                 .putString("pairing_id", pairingId)
                 .putString("desktop_fingerprint", payload.fingerprint)
                 .putString("last_host", payload.hosts.firstOrNull())
                 .putLong("paired_at", System.currentTimeMillis())
-                .apply()
+            if (residentPort != null) editor.putInt("resident_port", residentPort) else editor.remove("resident_port")
+            editor.apply()
         }
     }
 

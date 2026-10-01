@@ -40,27 +40,44 @@ data class PairingPayload(
 }
 
 /**
- * 同网加密会话客户端（C4-01 POC）。
+ * 同网加密会话客户端（C4-01 POC → M4-1 持久互信 → M4-2 免扫码重连）。
  *
  * 安全设计：
  * - 不使用系统信任库：唯一的信任锚是二维码携带的 SPKI SHA-256 指纹（出带校验），
  *   同网中间人伪造的证书指纹无法匹配。
  * - token 只经加密通道发送，且一次性。
+ *
+ * M4-2：`reconnectId` 非空时走免扫码重连——首行发 `MDP2 RECONNECT <pairing_id>`，
+ * 跳过 device_hello（桌面端从台账里取本机公钥），直接应答挑战。token 字段忽略。
+ * 服务端消息经 [Listener.onServerMessage] 回调（心跳 pong、桌面事件如录制状态）。
  */
-class PairingClient(private val payload: PairingPayload, private val log: (String) -> Unit) {
+class PairingClient(
+    private val payload: PairingPayload,
+    private val reconnectId: String? = null,
+    private val log: (String) -> Unit,
+) {
 
     interface Listener {
         /** TLS 建立且服务端欢迎（互信握手开始）。 */
         fun onWelcome()
-        /** 互信握手完成：桌面端已把本机登记进配对台账。 */
-        fun onPaired(pairingId: String)
+        /**
+         * 互信握手完成：桌面端已把本机登记进配对台账。
+         * `residentPort`：桌面端常驻通道端口（未开启为 null）——免扫码重连
+         * 的端口依据，持久化后断线可直连（M4-2）。
+         */
+        fun onPaired(pairingId: String, residentPort: Int?)
         fun onRejected()
         fun onError(message: String)
         fun onDisconnected()
+        /** 会话期服务端消息（已解析 JSON）。默认忽略。 */
+        fun onServerMessage(json: org.json.JSONObject) {}
     }
 
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var readerThread: Thread? = null
+    // M4-2：握手与会话期共用同一个 writer；sendLine 凭 checkError 感知断链
+    // （PrintWriter 吞 IOException，靠返回值判断会永远「成功」）。
+    @Volatile private var writer: PrintWriter? = null
 
     /** 校验服务器证书 SPKI 指纹的 TrustManager。 */
     private inner class PinnedTrustManager : X509TrustManager {
@@ -85,7 +102,7 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
     /** 逐主机尝试连接并完成握手；成功后回调 onWelcome。阻塞式，须在后台线程调用。 */
     fun connect(listener: Listener) {
         val plain = tryConnectAnyHost() ?: run {
-            listener.onError("无法连接电脑（请确认同一 Wi-Fi 且电脑配对未结束）")
+            listener.onError("无法连接电脑（请确认同一 Wi-Fi 且电脑配对/常驻通道已开启）")
             return
         }
         val tls = try {
@@ -102,9 +119,16 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
         socket = tls
         log("TLS 已建立：${tls.session.protocol} / ${tls.session.cipherSuite}")
         try {
-            val writer = PrintWriter(tls.outputStream, true)
-            writer.println("MDP2 ${payload.token}")
+            val out = PrintWriter(tls.outputStream, true).also { writer = it }
             val reader = BufferedReader(InputStreamReader(tls.inputStream, Charsets.UTF_8))
+
+            // 首配发一次性配对码；重连发本地保存的 pairing_id（免扫码，M4-2）。
+            val reconnect = reconnectId?.takeIf { it.isNotBlank() }
+            if (reconnect != null) {
+                out.println("MDP2 RECONNECT $reconnect")
+            } else {
+                out.println("MDP2 ${payload.token}")
+            }
 
             fun readLineOrFail(what: String): String? {
                 val line = reader.readLine()
@@ -120,10 +144,12 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
             }
             listener.onWelcome()
 
-            // 申报身份：机型 + 公钥（SPKI hex），随后用 Keystore 私钥应答挑战。
-            val model = android.os.Build.MODEL.replace("\"", "").ifEmpty { "android" }
-            val pubkeyHex = PairingIdentity.publicKeySpkiHex()
-            writer.println("{\"type\":\"device_hello\",\"model\":\"$model\",\"pubkey\":\"$pubkeyHex\"}")
+            if (reconnect == null) {
+                // 首配才申报身份：机型 + 公钥（SPKI hex）。重连时桌面端从台账取。
+                val model = android.os.Build.MODEL.replace("\"", "").ifEmpty { "android" }
+                val pubkeyHex = PairingIdentity.publicKeySpkiHex()
+                out.println("{\"type\":\"device_hello\",\"model\":\"$model\",\"pubkey\":\"$pubkeyHex\"}")
+            }
 
             val challengeLine = readLineOrFail("挑战消息") ?: run { runCatching { tls.close() }; return }
             val challenge = runCatching {
@@ -141,24 +167,31 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
                 return
             }
             val sigHex = PairingIdentity.sign(nonce).toHex()
-            writer.println("{\"type\":\"challenge_response\",\"sig\":\"$sigHex\"}")
+            out.println("{\"type\":\"challenge_response\",\"sig\":\"$sigHex\"}")
 
             val verdict = readLineOrFail("配对结果") ?: run { runCatching { tls.close() }; return }
             val verdictJson = runCatching { org.json.JSONObject(verdict) }.getOrNull()
             if (verdictJson == null || verdictJson.optString("type") != "paired_ok") {
-                listener.onError("电脑没有接受本机的身份证明")
+                listener.onError(if (reconnect != null) "电脑拒绝了这次免扫码重连（可能已在本机解除互信）" else "电脑没有接受本机的身份证明")
                 runCatching { tls.close() }
                 return
             }
             val pairingId = verdictJson.optString("pairing_id")
-            listener.onPaired(pairingId)
-            // 持续读取服务端消息（POC 里服务端基本不发；断开即回调）。
+            // resident_port：JSON null → 保存为 null（清掉过期端口）。
+            val residentPort = if (verdictJson.isNull("resident_port")) null
+            else verdictJson.optInt("resident_port", -1).takeIf { it > 0 }
+            listener.onPaired(pairingId, residentPort)
+            // 持续读取服务端消息（心跳 pong、桌面事件如录制状态）。断开即回调。
             // 读超时只服务于上面的握手回复：会话期必须解除，否则服务端
             // 不主动发消息时，15 秒后 readLine 必然超时误报「已断开」。
             tls.soTimeout = 0
             readerThread = Thread {
                 try {
-                    while (reader.readLine() != null) { /* POC 不处理服务端主动消息 */ }
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        val json = runCatching { org.json.JSONObject(line) }.getOrNull() ?: continue
+                        listener.onServerMessage(json)
+                    }
                     listener.onDisconnected()
                 } catch (_: Exception) {
                     listener.onDisconnected()
@@ -170,11 +203,14 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
         }
     }
 
-    /** 发送一行 JSON（阻塞，须在后台线程调用）。 */
+    /**
+     * 发送一行 JSON（阻塞，须在后台线程调用）。
+     * 返回 false = 写入出错或连接已断（PrintWriter 吞异常，必须用 checkError 探测）。
+     */
     fun sendLine(line: String): Boolean = runCatching {
-        val s = socket ?: return false
-        PrintWriter(s.outputStream, true).println(line)
-        true
+        val out = writer ?: return false
+        out.println(line)
+        !out.checkError()
     }.getOrDefault(false)
 
     fun close() {
@@ -199,7 +235,7 @@ class PairingClient(private val payload: PairingPayload, private val log: (Strin
 }
 
 /** hex 工具（与桌面端 companion_pairing.rs 的编码约定一致，小写无分隔）。 */
-private fun String.hexToBytes(): ByteArray? {
+fun String.hexToBytes(): ByteArray? {
     if (length % 2 != 0) return null
     val out = ByteArray(length / 2)
     for (i in out.indices) {
@@ -209,4 +245,4 @@ private fun String.hexToBytes(): ByteArray? {
     return out
 }
 
-private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
