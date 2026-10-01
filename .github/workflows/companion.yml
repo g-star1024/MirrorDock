@@ -49,9 +49,17 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           gradle :app:assembleDebug --no-daemon
+      # M4-5：artifact 名带伴侣端版本号（读 build.gradle.kts 的 versionName），
+      # 多版本 artifact 不再互相混淆。
+      - name: Rename APK with version
+        run: |
+          VERSION=$(grep -o 'versionName = "[^"]*"' companion/app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "companion version: ${VERSION}"
+          mv companion/app/build/outputs/apk/debug/app-debug.apk \
+             "companion/app/build/outputs/apk/debug/MirrorDock-companion-${VERSION}.apk"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: mirrordock-companion-debug
-          path: companion/app/build/outputs/apk/debug/app-debug.apk
+          path: companion/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

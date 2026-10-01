@@ -319,12 +319,21 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           gradle :app:assembleDebug --no-daemon
+      # M4-5：APK 资产名带版本号（基础版本号，与桌面资产口径一致），
+      # 否则 Release 里永远叫 app-debug.apk，多版本无法区分。
+      - name: 规范化 APK 资产名
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%%-*}"
+          mv companion/app/build/outputs/apk/debug/app-debug.apk \
+             "companion/app/build/outputs/apk/debug/MirrorDock-companion-${VERSION}.apk"
       - name: 上传 APK
         uses: actions/upload-artifact@v4
         with:
           name: MirrorDock-companion-apk
           if-no-files-found: error
-          path: companion/app/build/outputs/apk/debug/app-debug.apk
+          path: companion/app/build/outputs/apk/debug/*.apk
 
   # 打 tag 即发布：汇总全部产物（桌面安装包 + 哈希/SBOM + 伴侣 APK）创建 GitHub Release。
   release:
