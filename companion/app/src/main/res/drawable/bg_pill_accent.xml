@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 主 CTA：蓝底上的白色胶囊按钮。 -->
+<!-- 主 CTA（X10-73）：品牌青碧实心胶囊。旧版是「墨色卡上的白胶囊」，
+     新结构改为浅色卡片后 CTA 必须是实心品牌色，否则在白底上无从辨识主次。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="#E4F3F4" />
+            <solid android:color="@color/accent_dark" />
             <corners android:radius="999dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#FFFFFF" />
+            <solid android:color="@color/accent" />
             <corners android:radius="999dp" />
         </shape>
     </item>

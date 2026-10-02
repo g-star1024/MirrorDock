@@ -4,6 +4,61 @@
     <string name="app_tagline">与电脑建立加密连接，画面与文件只经过同一 Wi-Fi。</string>
     <string name="scan_hint">将相机对准电脑上的配对二维码</string>
     <string name="status_idle">未连接电脑</string>
+
+    <!-- X10-73 三 Tab 导航 -->
+    <string name="tab_devices">设备</string>
+    <string name="tab_files">文件</string>
+    <string name="tab_settings">设置</string>
+    <string name="settings_title">设置</string>
+
+    <!-- X10-73 设备中心 -->
+    <string name="my_devices">我的设备</string>
+    <string name="devices_empty">还没有配对电脑。\n在下方扫码连接，或手动输入配对码。</string>
+    <string name="pair_note">配对后这台电脑会出现在「我的设备」里，可随时一键重连。画面、文件与通知只在这台电脑与本机之间直连，不经任何服务器。</string>
+    <string name="action_manage_groups">分组</string>
+    <string name="action_pin_shortcut">添加到桌面快捷方式</string>
+    <string name="group_all">全部</string>
+    <string name="group_ungrouped">未分组</string>
+    <string name="group_manage_title">设备分组</string>
+    <string name="group_manage_hint">给设备起一个分组名，例如「公司」「家里」。留空表示未分组。</string>
+    <string name="action_group">归入分组</string>
+    <string name="group_saved">已归入「%1$s」</string>
+    <string name="group_removed">已移出分组</string>
+
+    <!-- X10-73 连接质量面板。%1$d 是毫秒；未采样到时用 quality_unknown -->
+    <string name="quality_encrypted">端到端加密</string>
+    <string name="quality_rtt">延迟 %1$d ms</string>
+    <string name="quality_unknown">—</string>
+    <string name="quality_duration">已连接 %1$s</string>
+    <string name="quality_duration_minutes">%1$d 分钟</string>
+    <string name="quality_duration_hours">%1$d 小时 %2$d 分</string>
+    <string name="quality_row_idle">尚未连接，连接后显示延迟与时长</string>
+
+    <!-- 设备行状态 -->
+    <string name="device_state_online">在线</string>
+    <string name="device_state_offline">离线</string>
+    <string name="device_meta">%1$s · 身份 %2$s…</string>
+    <string name="device_last_connected">上次连接：%1$s</string>
+    <string name="device_never_connected">还没有连接过</string>
+    <string name="action_rename">重命名</string>
+    <string name="device_rename_title">给这台电脑起个名字</string>
+    <string name="device_name_hint">名称</string>
+    <string name="device_connected_toast">已切换到「%1$s」</string>
+    <string name="device_removed_toast">已解除与「%1$s」的互信</string>
+
+    <!-- X10-73 互信管理 -->
+    <string name="trust_title">互信管理</string>
+    <string name="trust_note">解除后，这台电脑的凭据会从本机删除；再次连接需重新扫码。其它已配对电脑不受影响。</string>
+    <string name="action_unpair_active">解除当前电脑的互信</string>
+    <string name="unpair_none_title">还没有配对电脑</string>
+
+    <!-- X10-73 屏幕捕获 -->
+    <string name="capture_title">屏幕捕获</string>
+    <string name="capture_note">授权后 MirrorDock 可以把手机屏幕画面交给电脑。每次授权都由系统弹窗确认，本机不会静默开始。</string>
+
+    <!-- 隐私承诺 -->
+    <string name="privacy_title">隐私</string>
+    <string name="privacy_note">画面、文件、通知与崩溃记录只在本机与已配对电脑之间传输，不上传任何服务器。通知镜像可随时关闭，崩溃记录可随时清除。</string>
     <string name="action_scan">扫码连接电脑</string>
     <string name="action_manual">手动输入</string>
     <string name="action_capture">屏幕捕获</string>
@@ -25,9 +80,6 @@
     <string name="badge_file">文件</string>
 
     <!-- M4-2 常驻通道 / M4-4 解除互信 -->
-    <string name="computer_title">上次配对的电脑</string>
-    <string name="computer_info">地址 %1$s · 电脑身份 %2$s…</string>
-    <string name="computer_note">连接在后台保持，断开后自动重试。在电脑端开启「常驻通道」后可免扫码直连；解除互信后双方都需要重新扫码。</string>
     <string name="action_link_start">连接上次配对的电脑</string>
     <string name="action_link_stop">断开</string>
     <string name="action_unpair">解除这台电脑</string>

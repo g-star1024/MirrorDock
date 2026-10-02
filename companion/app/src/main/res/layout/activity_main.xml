@@ -1,460 +1,737 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  X10-73 主界面：三 Tab（设备 / 文件 / 设置）+ 设备中心首页。
+
+  为什么改结构（不是改配色）：单 Activity 竖向长滚在功能增多后必然拥挤——
+  配对、文件、通知镜像、崩溃、日志全挤在一屏，用户找不到入口。新结构按
+  ToDesk 的信息架构切成三页：设备页是「我的设备」中心，文件与设置各自独立。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:background="@color/screen_bg">
 
-    <!-- 现代扁平风：浅灰底 + 白色大圆角卡片 + 蓝色渐变 hero 卡。内容分区块，不挤在头部。 -->
-    <ScrollView
+    <!-- ============ 设备 Tab（默认页） ============ -->
+    <FrameLayout
+        android:id="@+id/page_devices"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:fillViewport="true"
-        android:scrollbars="none">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-        <LinearLayout
+        <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:paddingLeft="20dp"
-            android:paddingRight="20dp"
-            android:paddingTop="28dp"
-            android:paddingBottom="32dp">
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:scrollbars="none">
 
-            <!-- 标题区：留白充足，层级清晰。 -->
-            <TextView
-                android:id="@+id/app_title"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/app_name"
-                android:textColor="@color/text_primary"
-                android:textSize="24sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/app_tagline"
-                android:textColor="@color/text_secondary"
-                android:textSize="13.5sp" />
-
-            <!-- Hero 卡：状态 + 主 CTA。 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
                 android:orientation="vertical"
-                android:background="@drawable/bg_hero"
-                android:paddingLeft="22dp"
-                android:paddingRight="22dp"
+                android:paddingLeft="20dp"
+                android:paddingRight="20dp"
                 android:paddingTop="24dp"
-                android:paddingBottom="22dp">
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <View
-                        android:id="@+id/status_dot"
-                        android:layout_width="10dp"
-                        android:layout_height="10dp"
-                        android:background="@drawable/bg_dot" />
-
-                    <TextView
-                        android:id="@+id/status_text"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginLeft="9dp"
-                        android:text="@string/status_idle"
-                        android:textColor="#FFFFFF"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
-
-                <Button
-                    android:id="@+id/button_scan"
-                    style="@style/PrimaryButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="52dp"
-                    android:layout_marginTop="20dp"
-                    android:text="@string/action_scan" />
-            </LinearLayout>
-
-            <!-- 次要操作并排。 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="14dp">
-
-                <Button
-                    android:id="@+id/button_manual"
-                    style="@style/SecondaryButton"
-                    android:layout_width="0dp"
-                    android:layout_height="48dp"
-                    android:layout_weight="1"
-                    android:layout_marginRight="5dp"
-                    android:text="@string/action_manual" />
-
-                <Button
-                    android:id="@+id/button_capture"
-                    style="@style/SecondaryButton"
-                    android:layout_width="0dp"
-                    android:layout_height="48dp"
-                    android:layout_weight="1"
-                    android:layout_marginLeft="5dp"
-                    android:text="@string/action_capture" />
-            </LinearLayout>
-
-            <!-- 手动输入（默认隐藏）：点「手动输入」展开即聚焦弹键盘。 -->
-            <EditText
-                android:id="@+id/manual_input"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:visibility="gone"
-                android:background="@drawable/bg_input_field"
-                android:padding="14dp"
-                android:textSize="13sp"
-                android:textColor="@color/text_primary"
-                android:textColorHint="@color/text_tertiary"
-                android:hint="@string/manual_hint"
-                android:inputType="text"
-                android:imeOptions="actionGo"
-                android:maxLines="1"
-                android:autofillHints="none" />
-
-            <!-- 上次配对的电脑（M4-2）：免扫码直连入口 + 解除互信（M4-4）。
-                 只在本地存有互信凭据时显示。 -->
-            <LinearLayout
-                android:id="@+id/computer_card"
-                style="@style/Card"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:orientation="vertical"
-                android:visibility="gone">
+                android:paddingBottom="20dp">
 
                 <TextView
+                    style="@style/SectionTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/computer_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
+                    android:text="@string/app_name" />
 
                 <TextView
-                    android:id="@+id/computer_info"
-                    android:layout_width="match_parent"
+                    style="@style/CardBody"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12.5sp" />
+                    android:text="@string/app_tagline" />
 
-                <TextView
-                    android:id="@+id/link_status"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp" />
-
+                <!-- 连接状态主卡：取代旧版墨色 hero，改为白卡 + 品牌色左条。 -->
                 <LinearLayout
+                    android:id="@+id/status_card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:orientation="horizontal">
+                    android:layout_marginTop="18dp"
+                    android:background="@drawable/bg_status_card"
+                    android:orientation="vertical"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="16dp"
+                    android:paddingBottom="16dp">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <View
+                            android:id="@+id/status_dot"
+                            android:layout_width="10dp"
+                            android:layout_height="10dp"
+                            android:background="@drawable/bg_dot" />
+
+                        <TextView
+                            android:id="@+id/status_text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginLeft="9dp"
+                            android:text="@string/status_idle"
+                            android:textColor="@color/text_primary"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <!-- X10-73 连接质量面板：延迟 / 已连接时长 / 加密直连。
+                         采样不到时显示「—」，不显示 0（0 会被读成"极快"）。 -->
+                    <LinearLayout
+                        android:id="@+id/quality_row"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/quality_rtt"
+                            style="@style/CardBody"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+
+                        <TextView
+                            android:id="@+id/quality_duration"
+                            style="@style/CardBody"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginLeft="16dp" />
+
+                        <TextView
+                            style="@style/CardBody"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginLeft="16dp"
+                            android:text="@string/quality_encrypted" />
+                    </LinearLayout>
 
                     <Button
                         android:id="@+id/button_link_start"
                         style="@style/PrimaryButton"
-                        android:layout_width="0dp"
-                        android:layout_height="44dp"
-                        android:layout_weight="1"
-                        android:layout_marginRight="5dp"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="14dp"
                         android:text="@string/action_link_start" />
 
                     <Button
                         android:id="@+id/button_link_stop"
                         style="@style/SecondaryButton"
-                        android:layout_width="0dp"
+                        android:layout_width="match_parent"
                         android:layout_height="44dp"
-                        android:layout_weight="1"
-                        android:layout_marginRight="5dp"
+                        android:layout_marginTop="8dp"
                         android:visibility="gone"
                         android:text="@string/action_link_stop" />
-
-                    <Button
-                        android:id="@+id/button_unpair_computer"
-                        style="@style/SecondaryButton"
-                        android:layout_width="0dp"
-                        android:layout_height="44dp"
-                        android:layout_weight="1"
-                        android:layout_marginLeft="5dp"
-                        android:text="@string/action_unpair" />
                 </LinearLayout>
 
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:text="@string/computer_note"
-                    android:textColor="@color/text_tertiary"
-                    android:textSize="11.5sp" />
-            </LinearLayout>
-
-            <!-- X10-66 通知镜像：默认关；开启需系统设置授予「读取通知」。
-                 可见且可撤销，状态行如实反映当前授权与连接情况。 -->
-            <LinearLayout
-                android:id="@+id/notify_mirror_card"
-                style="@style/Card"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:orientation="vertical">
-
+                <!-- 我的设备（X10-73）：多设备列表 + 分组筛选。 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
+                    android:layout_marginTop="22dp"
+                    android:orientation="vertical">
 
-                    <TextView
-                        android:layout_width="0dp"
+                    <LinearLayout
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/notify_mirror_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
 
-                    <Button
-                        android:id="@+id/button_notify_mirror"
-                        style="@style/SecondaryButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="40dp"
-                        android:text="@string/action_notify_mirror_on" />
+                        <TextView
+                            style="@style/CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/my_devices" />
+
+                        <Button
+                            android:id="@+id/button_manage_groups"
+                            style="@style/TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/action_manage_groups" />
+                    </LinearLayout>
+
+                    <!-- 分组筛选 chips：横向滚动，空列表时不占位。 -->
+                    <HorizontalScrollView
+                        android:id="@+id/group_filter_scroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:scrollbars="none"
+                        android:visibility="gone">
+
+                        <LinearLayout
+                            android:id="@+id/group_filter_row"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal" />
+                    </HorizontalScrollView>
+
+                    <LinearLayout
+                        android:id="@+id/device_list"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="vertical" />
+
+                    <!-- 空状态：没配对过电脑时显示，如实说明怎么开始。 -->
+                    <LinearLayout
+                        android:id="@+id/device_empty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_card"
+                        android:gravity="center"
+                        android:orientation="vertical"
+                        android:paddingTop="24dp"
+                        android:paddingBottom="24dp">
+
+                        <TextView
+                            style="@style/CardBody"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/devices_empty" />
+                    </LinearLayout>
                 </LinearLayout>
 
-                <TextView
+                <!-- 配对入口卡：扫码为主、手动为辅（TV 模式下自动只留手动）。 -->
+                <LinearLayout
+                    style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/notify_mirror_note"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12.5sp" />
+                    android:layout_marginTop="18dp"
+                    android:orientation="vertical">
 
-                <TextView
-                    android:id="@+id/notify_mirror_status"
+                    <Button
+                        android:id="@+id/button_scan"
+                        style="@style/PrimaryButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:text="@string/action_scan" />
+
+                    <Button
+                        android:id="@+id/button_manual"
+                        style="@style/SecondaryButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="46dp"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/action_manual" />
+
+                    <!-- 手动输入（默认隐藏）：点「手动输入」展开即聚焦弹键盘。
+                         TV 模式下默认可见并展开（电视没有相机，手动是唯一路径）。 -->
+                    <EditText
+                        android:id="@+id/manual_input"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:autofillHints="none"
+                        android:background="@drawable/bg_input_field"
+                        android:hint="@string/manual_hint"
+                        android:imeOptions="actionGo"
+                        android:inputType="text"
+                        android:maxLines="1"
+                        android:padding="14dp"
+                        android:textColor="@color/text_primary"
+                        android:textColorHint="@color/text_tertiary"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/pair_note" />
+
+                    <!-- X10-73：把「连接上次配对的电脑」钉到桌面，点一下就连上。
+                         需系统弹窗由用户确认，不会静默出现在桌面。 -->
+                    <Button
+                        android:id="@+id/button_pin_shortcut"
+                        style="@style/SecondaryButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="46dp"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/action_pin_shortcut" />
+                </LinearLayout>
+
+                <!-- 崩溃取证卡：只在确实发生过崩溃时出现，可查看详情、可清除。 -->
+                <LinearLayout
+                    android:id="@+id/crash_card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12.5sp" />
+                    android:layout_marginTop="18dp"
+                    android:background="@drawable/bg_danger_card"
+                    android:orientation="vertical"
+                    android:padding="18dp"
+                    android:visibility="gone">
 
-                <Button
-                    android:id="@+id/button_grant_listener"
-                    style="@style/SecondaryButton"
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/crash_title"
+                        android:textColor="@color/danger_text"
+                        android:textSize="14.5sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/crash_detail"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:background="@drawable/bg_input"
+                        android:fontFamily="monospace"
+                        android:padding="12dp"
+                        android:textColor="@color/danger_text"
+                        android:textIsSelectable="true"
+                        android:textSize="11sp"
+                        android:visibility="gone" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/button_crash_view"
+                            style="@style/SecondaryButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:text="@string/action_view_detail" />
+
+                        <Button
+                            android:id="@+id/button_crash_clear"
+                            style="@style/SecondaryButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:layout_marginLeft="10dp"
+                            android:text="@string/action_clear" />
+                    </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <!-- ============ 文件 Tab ============ -->
+    <FrameLayout
+        android:id="@+id/page_files"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingLeft="20dp"
+                android:paddingRight="20dp"
+                android:paddingTop="24dp"
+                android:paddingBottom="20dp">
+
+                <TextView
+                    style="@style/SectionTitle"
                     android:layout_width="wrap_content"
-                    android:layout_height="40dp"
-                    android:layout_marginTop="8dp"
-                    android:visibility="gone"
-                    android:text="@string/action_grant_listener" />
-            </LinearLayout>
-
-            <!-- 电脑发来的文件：可直接查看；APK 可再次安装。 -->
-            <LinearLayout
-                android:id="@+id/files_card"
-                style="@style/Card"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:orientation="vertical">
+                    android:layout_height="wrap_content"
+                    android:text="@string/files_title" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/files_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
+                    android:layout_marginTop="14dp"
+                    android:orientation="horizontal">
 
                     <Button
                         android:id="@+id/button_send_to_pc"
-                        style="@style/TextButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
+                        style="@style/PrimaryButton"
+                        android:layout_width="0dp"
+                        android:layout_height="48dp"
+                        android:layout_weight="1"
                         android:text="@string/action_send_to_pc" />
 
                     <Button
                         android:id="@+id/button_files_refresh"
-                        style="@style/TextButton"
+                        style="@style/SecondaryButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
+                        android:layout_height="48dp"
+                        android:layout_marginLeft="10dp"
                         android:text="@string/action_refresh" />
                 </LinearLayout>
 
                 <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/files_note"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12.5sp" />
-
-                <LinearLayout
-                    android:id="@+id/file_list"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:orientation="vertical" />
-
-                <!-- 空状态 / 需要权限：居中、留白。 -->
-                <LinearLayout
-                    android:id="@+id/file_empty"
+                    style="@style/CardBody"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:orientation="vertical"
-                    android:gravity="center"
-                    android:paddingTop="22dp"
-                    android:paddingBottom="22dp">
-
-                    <TextView
-                        android:id="@+id/file_empty_text"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/files_empty"
-                        android:textColor="@color/text_tertiary"
-                        android:textSize="13.5sp" />
-
-                    <Button
-                        android:id="@+id/button_grant_files"
-                        style="@style/SecondaryButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="42dp"
-                        android:layout_marginTop="12dp"
-                        android:visibility="gone"
-                        android:text="@string/action_grant_files" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- 崩溃取证卡：只在确实发生过崩溃时出现，可查看详情、可清除。 -->
-            <LinearLayout
-                android:id="@+id/crash_card"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:orientation="vertical"
-                android:background="@drawable/bg_danger_card"
-                android:padding="18dp"
-                android:visibility="gone">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/crash_title"
-                    android:textColor="@color/danger_text"
-                    android:textSize="14.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/crash_detail"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:visibility="gone"
-                    android:background="@drawable/bg_input"
-                    android:padding="12dp"
-                    android:textSize="11sp"
-                    android:textColor="@color/danger_text"
-                    android:fontFamily="monospace"
-                    android:textIsSelectable="true" />
+                    android:text="@string/files_note" />
 
                 <LinearLayout
+                    style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="10dp">
+                    android:layout_marginTop="14dp"
+                    android:orientation="vertical">
 
-                    <Button
-                        android:id="@+id/button_crash_view"
-                        style="@style/SecondaryButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="40dp"
-                        android:text="@string/action_view_detail" />
-
-                    <Button
-                        android:id="@+id/button_crash_clear"
-                        style="@style/SecondaryButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="40dp"
-                        android:layout_marginLeft="10dp"
-                        android:text="@string/action_clear" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- 运行日志卡：默认收起；点「查看」展开，随时可收起。 -->
-            <LinearLayout
-                android:id="@+id/log_card"
-                style="@style/Card"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:orientation="vertical">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:id="@+id/log_title"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/log_title"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <Button
-                        android:id="@+id/button_log_toggle"
-                        style="@style/TextButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/action_show" />
-                </LinearLayout>
-
-                <ScrollView
-                    android:id="@+id/log_scroller"
-                    android:layout_width="match_parent"
-                    android:layout_height="220dp"
-                    android:layout_marginTop="10dp"
-                    android:visibility="gone"
-                    android:background="@drawable/bg_input">
-
-                    <TextView
-                        android:id="@+id/log_text"
+                    <LinearLayout
+                        android:id="@+id/file_list"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:padding="12dp"
-                        android:textSize="12sp"
-                        android:textColor="@color/text_primary"
-                        android:fontFamily="monospace"
-                        android:textIsSelectable="true" />
-                </ScrollView>
+                        android:orientation="vertical" />
+
+                    <!-- 空状态 / 需要权限：居中、留白。 -->
+                    <LinearLayout
+                        android:id="@+id/file_empty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:orientation="vertical"
+                        android:paddingTop="28dp"
+                        android:paddingBottom="28dp">
+
+                        <TextView
+                            android:id="@+id/file_empty_text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/files_empty"
+                            android:textColor="@color/text_tertiary"
+                            android:textSize="13.5sp" />
+
+                        <Button
+                            android:id="@+id/button_grant_files"
+                            style="@style/SecondaryButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="42dp"
+                            android:layout_marginTop="12dp"
+                            android:visibility="gone"
+                            android:text="@string/action_grant_files" />
+                    </LinearLayout>
+                </LinearLayout>
             </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <!-- ============ 设置 Tab ============ -->
+    <FrameLayout
+        android:id="@+id/page_settings"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingLeft="20dp"
+                android:paddingRight="20dp"
+                android:paddingTop="24dp"
+                android:paddingBottom="20dp">
+
+                <TextView
+                    style="@style/SectionTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_title" />
+
+                <!-- 通知镜像（X10-66 一期）：三态如实反映，默认关。 -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            style="@style/CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/notify_mirror_title" />
+
+                        <Button
+                            android:id="@+id/button_notify_mirror"
+                            style="@style/SecondaryButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="40dp"
+                            android:text="@string/action_notify_mirror_on" />
+                    </LinearLayout>
+
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/notify_mirror_note" />
+
+                    <TextView
+                        android:id="@+id/notify_mirror_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/text_primary"
+                        android:textSize="12.5sp" />
+
+                    <Button
+                        android:id="@+id/button_grant_listener"
+                        style="@style/SecondaryButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="40dp"
+                        android:layout_marginTop="10dp"
+                        android:visibility="gone"
+                        android:text="@string/action_grant_listener" />
+                </LinearLayout>
+
+                <!-- 屏幕捕获授权 -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/capture_title" />
+
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/capture_note" />
+
+                    <Button
+                        android:id="@+id/button_capture"
+                        style="@style/SecondaryButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="46dp"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/action_capture" />
+                </LinearLayout>
+
+                <!-- 互信管理（X10-73）：解除单台 / 全部。 -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/trust_title" />
+
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/trust_note" />
+
+                    <Button
+                        android:id="@+id/button_unpair_computer"
+                        style="@style/DangerButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="46dp"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/action_unpair_active" />
+                </LinearLayout>
+
+                <!-- 隐私承诺 -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/privacy_title" />
+
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/privacy_note" />
+                </LinearLayout>
+
+                <!-- 运行日志卡：默认收起；点「查看」展开，随时可收起。 -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            style="@style/CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/log_title" />
+
+                        <Button
+                            android:id="@+id/button_log_toggle"
+                            style="@style/TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/action_show" />
+                    </LinearLayout>
+
+                    <ScrollView
+                        android:id="@+id/log_scroller"
+                        android:layout_width="match_parent"
+                        android:layout_height="220dp"
+                        android:layout_marginTop="10dp"
+                        android:background="@drawable/bg_input"
+                        android:visibility="gone">
+
+                        <TextView
+                            android:id="@+id/log_text"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:padding="12dp"
+                            android:textColor="@color/text_primary"
+                            android:textIsSelectable="true"
+                            android:textSize="12sp" />
+                    </ScrollView>
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+
+    <!-- ============ 底部导航（X10-73） ============ -->
+    <LinearLayout
+        android:id="@+id/bottom_nav"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/nav_bg"
+        android:orientation="horizontal"
+        android:paddingLeft="12dp"
+        android:paddingRight="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:id="@+id/nav_devices"
+            style="@style/NavItem"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="4dp"
+            android:layout_weight="1"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <ImageView
+                android:id="@+id/nav_devices_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@string/tab_devices"
+                android:src="@drawable/ic_tab_devices" />
+
+            <TextView
+                android:id="@+id/nav_devices_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="@string/tab_devices"
+                android:textColor="@color/nav_unselected"
+                android:textSize="11sp" />
         </LinearLayout>
-    </ScrollView>
+
+        <LinearLayout
+            android:id="@+id/nav_files"
+            style="@style/NavItem"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="4dp"
+            android:layout_marginRight="4dp"
+            android:layout_weight="1"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <ImageView
+                android:id="@+id/nav_files_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@string/tab_files"
+                android:src="@drawable/ic_tab_files" />
+
+            <TextView
+                android:id="@+id/nav_files_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="@string/tab_files"
+                android:textColor="@color/nav_unselected"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/nav_settings"
+            style="@style/NavItem"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="4dp"
+            android:layout_weight="1"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <ImageView
+                android:id="@+id/nav_settings_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@string/tab_settings"
+                android:src="@drawable/ic_tab_settings" />
+
+            <TextView
+                android:id="@+id/nav_settings_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="@string/tab_settings"
+                android:textColor="@color/nav_unselected"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
 </LinearLayout>

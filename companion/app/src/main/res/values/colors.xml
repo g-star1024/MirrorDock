@@ -1,26 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 视觉体系：石墨墨色主色 + 中性浅灰底 + 白卡片（无彩现代风）。 -->
+<!--
+  视觉体系（X10-73 重构）：保留青碧主色（用户拍板方案 B —— 只换结构与交互，
+  不换品牌色）。主要变化是把「墨色渐变 hero」换成 ToDesk 式的**浅色卡片 +
+  主色 CTA** 结构：层级靠柔和投影与留白建立，而不是靠深色块压住界面。
+-->
 <resources>
-    <!-- 强调色：青碧（取自应用图标）；文字用加深档保证白底可读。 -->
+    <!-- 品牌主色：青碧（不变）。 -->
     <color name="accent">#2F98A1</color>
     <color name="accent_bright">#50B0B8</color>
     <color name="accent_tint">#E6F4F5</color>
-    <!-- hero 卡渐变：墨色底、带青碧冷调。 -->
-    <color name="hero_start">#23393C</color>
-    <color name="hero_end">#131E20</color>
-    <color name="screen_bg">#F5F5F7</color>
+    <!-- 主色深：按压态与强调文字。 -->
+    <color name="accent_dark">#257A82</color>
+
+    <!-- 页面与卡片：冷调浅灰底 + 纯白卡。 -->
+    <color name="screen_bg">#F2F4F7</color>
     <color name="card_bg">#FFFFFF</color>
+    <color name="card_bg_subtle">#F7F9FC</color>
+
+    <!-- 文字三档。 -->
     <color name="text_primary">#16181D</color>
-    <color name="text_secondary">#6B7280</color>
-    <color name="text_tertiary">#9CA3AF</color>
+    <color name="text_secondary">#5B6470</color>
+    <color name="text_tertiary">#9AA1AC</color>
+    <color name="text_on_accent">#FFFFFF</color>
+
+    <!-- 状态语义色（ToDesk 式：在线绿 / 离线灰 / 连接中琥珀 / 危险红）。 -->
+    <color name="success">#21BA72</color>
+    <color name="success_bg">#E7F7EF</color>
+    <color name="warn">#F59E0B</color>
+    <color name="warn_bg">#FEF4E6</color>
+    <color name="danger">#E5484D</color>
     <color name="danger_text">#B91C1C</color>
     <color name="danger_bg">#FEF2F2</color>
     <color name="danger_border">#FECACA</color>
-    <color name="input_border">#E7E7EA</color>
-    <color name="input_bg">#F7F7F9</color>
-    <color name="hero_text_secondary">#A7B7B9</color>
+
+    <!-- 分隔线与输入框。 -->
+    <color name="divider">#EEF1F4</color>
+    <color name="input_border">#E2E7EE</color>
+    <color name="input_bg">#F7F9FC</color>
+
+    <!-- 状态点：ready 改用品牌青碧（旧 #6FE3E8 在白底上对比度不足）。 -->
     <color name="dot_idle">#93A0A3</color>
-    <color name="dot_ready">#6FE3E8</color>
+    <color name="dot_ready">#2F98A1</color>
     <color name="file_badge_bg">#E6F4F5</color>
-    <color name="divider">#F0F0F2</color>
+
+    <!-- 底部导航：白底 + 顶部细线，选中用品牌色。 -->
+    <color name="nav_bg">#FFFFFF</color>
+    <color name="nav_unselected">#9AA1AC</color>
 </resources>

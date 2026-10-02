@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置 Tab 图标：齿轮。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="@color/nav_unselected">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,8.5a3.5,3.5 0 1 0 0,7a3.5,3.5 0 0 0 0,-7zM12,10.3a1.7,1.7 0 1 1 0,3.4a1.7,1.7 0 0 1 0,-3.4z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10.7,2h2.6l0.4,2.1a7,7 0 0 1 1.6,0.9l1.9,-1l1.8,1.8l-1,1.9a7,7 0 0 1 0.9,1.6l2.1,0.4v2.6l-2.1,0.4a7,7 0 0 1 -0.9,1.6l1,1.9l-1.8,1.8l-1.9,-1a7,7 0 0 1 -1.6,0.9l-0.4,2.1h-2.6l-0.4,-2.1a7,7 0 0 1 -1.6,-0.9l-1.9,1l-1.8,-1.8l1,-1.9a7,7 0 0 1 -0.9,-1.6l-2.1,-0.4v-2.6l2.1,-0.4a7,7 0 0 1 0.9,-1.6l-1,-1.9l1.8,-1.8l1.9,1a7,7 0 0 1 1.6,-0.9z" />
+</vector>

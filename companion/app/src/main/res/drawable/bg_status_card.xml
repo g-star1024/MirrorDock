@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 连接状态主卡（X10-73）：白底圆角 + 品牌色左侧强调条。
+     取代旧版的整块墨色渐变 hero —— 状态信息不该靠深色块压场。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/card_bg" />
+            <corners android:radius="18dp" />
+            <stroke android:width="1dp" android:color="@color/input_border" />
+        </shape>
+    </item>
+    <item android:width="4dp" android:gravity="left">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent" />
+            <corners
+                android:topLeftRadius="18dp"
+                android:bottomLeftRadius="18dp" />
+        </shape>
+    </item>
+</layer-list>

@@ -3,13 +3,14 @@ package com.mirrordock.companion
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -20,7 +21,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 主界面：配对入口 + 捕获入口 + 电脑发来的文件 + 日志展示（C4-01/C4-02 POC）。
+ * 主界面（X10-73 重构）：三 Tab 设备中心。
+ *
+ * 结构变化（配色不变，用户拍板方案 B）：
+ * - 设备页 = 状态主卡 + 连接质量面板 + **我的设备列表（多设备）** + 分组筛选 + 配对入口；
+ * - 文件页 = 电脑发来的文件 + 发送文件到电脑（从旧版长滚里提升为一级入口）；
+ * - 设置页 = 通知镜像 / 屏幕捕获 / 互信管理 / 隐私 / 运行日志。
+ *
+ * 红线（本次重构不动）：加密直连与配对协议、扫码与手动输入两条路径、
+ * 文件收发目录、解除互信的双端语义、日志不落敏感数据。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -32,39 +41,56 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_READ_FILES = 45
         /** 上一次崩溃堆栈的落盘文件名（见 CrashGuard）。 */
         const val CRASH_FILE = "last_crash.txt"
+
+        /** 三个 Tab 的枚举下标（与 layout 中 page_* 的顺序一致）。 */
+        private const val TAB_DEVICES = 0
+        private const val TAB_FILES = 1
+        private const val TAB_SETTINGS = 2
     }
 
+    // -- 设备页 ---------------------------------------------------------------
     private lateinit var statusText: TextView
     private lateinit var statusDot: View
+    private lateinit var qualityRtt: TextView
+    private lateinit var qualityDuration: TextView
+    private lateinit var qualityRow: LinearLayout
+    private lateinit var deviceList: LinearLayout
+    private lateinit var deviceEmpty: View
+    private lateinit var groupFilterScroll: View
+    private lateinit var groupFilterRow: LinearLayout
+    private lateinit var buttonLinkStart: Button
+    private lateinit var buttonLinkStop: Button
+
+    // -- 文件页 ---------------------------------------------------------------
+    private lateinit var fileList: LinearLayout
+    private lateinit var fileEmpty: View
+    private lateinit var fileEmptyText: TextView
+    private lateinit var grantFilesButton: Button
+
+    // -- 设置页 ---------------------------------------------------------------
     private lateinit var logText: TextView
     private lateinit var manualInput: EditText
     private lateinit var crashCard: View
     private lateinit var crashDetail: TextView
     private lateinit var logScroller: View
     private lateinit var logToggle: Button
-    private lateinit var fileList: LinearLayout
-    private lateinit var fileEmpty: View
-    private lateinit var fileEmptyText: TextView
-    private lateinit var grantFilesButton: Button
-    // X10-66 通知镜像：开关 + 如实状态（是否已授予读取通知）。
     private lateinit var notifyMirrorButton: Button
     private lateinit var notifyMirrorStatus: TextView
     private lateinit var grantListenerButton: Button
 
     private val logLines = StringBuilder()
     private var client: PairingClient? = null
-    // M4-2/M4-3：常驻通道入口与状态显示。
-    private lateinit var computerCard: View
-    private lateinit var computerInfo: TextView
-    private lateinit var linkStatus: TextView
-    private lateinit var buttonLinkStart: Button
-    private lateinit var buttonLinkStop: Button
     private var linkListener: (() -> Unit)? = null
     /** 本会话内已上报过崩溃堆栈（避免每次界面刷新重复推送）。 */
     @Volatile private var crashReported = false
     // 通知权限的后续动作：屏幕捕获与常驻连接都会请求 POST_NOTIFICATIONS，
     // 授权后按请求时的意图继续，而不是固定走某一条路。
     private var notificationFollowUp: (() -> Unit)? = null
+
+    /** 当前所在 Tab；设备列表按它决定刷新时机（文件/设置页不重建设备列表）。 */
+    private var currentTab = TAB_DEVICES
+    /** 设备列表当前筛选的分组；空串 = 全部。 */
+    private var groupFilter = ""
 
     /**
      * 「发送文件到电脑」：系统选择器（SAF）选文件，结果交给 Outbox 复制进
@@ -119,27 +145,13 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         CrashGuard.install(applicationContext)
         setContentView(R.layout.activity_main)
-        statusText = findViewById(R.id.status_text)
-        statusDot = findViewById(R.id.status_dot)
-        logText = findViewById(R.id.log_text)
-        manualInput = findViewById(R.id.manual_input)
-        crashCard = findViewById(R.id.crash_card)
-        crashDetail = findViewById(R.id.crash_detail)
-        logScroller = findViewById(R.id.log_scroller)
-        logToggle = findViewById(R.id.button_log_toggle)
-        fileList = findViewById(R.id.file_list)
-        fileEmpty = findViewById(R.id.file_empty)
-        fileEmptyText = findViewById(R.id.file_empty_text)
-        grantFilesButton = findViewById(R.id.button_grant_files)
-        notifyMirrorButton = findViewById(R.id.button_notify_mirror)
-        notifyMirrorStatus = findViewById(R.id.notify_mirror_status)
-        grantListenerButton = findViewById(R.id.button_grant_listener)
-        notifyMirrorButton.setOnClickListener { toggleNotifyMirror() }
-        grantListenerButton.setOnClickListener {
-            NotificationMirrorService.openListenerSettings(this)
-        }
-
+        bindViews()
         setStatusConnected(false)
+        setupTabs()
+        setupDevicePage()
+        setupFilesPage()
+        setupSettingsPage()
+        setupPairing()
 
         if (isTv()) {
             // TV 模式（X10-28）：电视没有相机，扫码不可用；手动输入是唯一配对路径，
@@ -149,6 +161,390 @@ class MainActivity : AppCompatActivity() {
             log("TV 模式：已隐藏扫码入口，请使用手动输入配对码连接电脑。")
         }
 
+        // 崩溃取证：上次会话崩溃时显示一条可收敛的红卡——默认只显示标题，
+        // 详情按需展开；点「清除」删掉落盘堆栈后立即消失，不影响后续正常使用。
+        CrashGuard.lastCrash(applicationContext)?.let { last ->
+            crashCard.visibility = View.VISIBLE
+            crashDetail.text = last
+            findViewById<Button>(R.id.button_crash_view).setOnClickListener {
+                crashDetail.visibility =
+                    if (crashDetail.visibility == View.GONE) View.VISIBLE else View.GONE
+            }
+            findViewById<Button>(R.id.button_crash_clear).setOnClickListener {
+                CrashGuard.clear(applicationContext)
+                crashCard.visibility = View.GONE
+                log("已清除上次的崩溃记录。")
+            }
+            log("检测到上次运行崩溃，详情见设备页红色卡片。")
+        }
+        log("伴侣 App 已启动。")
+    }
+
+    private fun bindViews() {
+        statusText = findViewById(R.id.status_text)
+        statusDot = findViewById(R.id.status_dot)
+        qualityRow = findViewById(R.id.quality_row)
+        qualityRtt = findViewById(R.id.quality_rtt)
+        qualityDuration = findViewById(R.id.quality_duration)
+        deviceList = findViewById(R.id.device_list)
+        deviceEmpty = findViewById(R.id.device_empty)
+        groupFilterScroll = findViewById(R.id.group_filter_scroll)
+        groupFilterRow = findViewById(R.id.group_filter_row)
+        buttonLinkStart = findViewById(R.id.button_link_start)
+        buttonLinkStop = findViewById(R.id.button_link_stop)
+
+        fileList = findViewById(R.id.file_list)
+        fileEmpty = findViewById(R.id.file_empty)
+        fileEmptyText = findViewById(R.id.file_empty_text)
+        grantFilesButton = findViewById(R.id.button_grant_files)
+
+        logText = findViewById(R.id.log_text)
+        manualInput = findViewById(R.id.manual_input)
+        crashCard = findViewById(R.id.crash_card)
+        crashDetail = findViewById(R.id.crash_detail)
+        logScroller = findViewById(R.id.log_scroller)
+        logToggle = findViewById(R.id.button_log_toggle)
+        notifyMirrorButton = findViewById(R.id.button_notify_mirror)
+        notifyMirrorStatus = findViewById(R.id.notify_mirror_status)
+        grantListenerButton = findViewById(R.id.button_grant_listener)
+    }
+
+    // -- 三 Tab 导航（X10-73） ------------------------------------------------
+
+    private fun setupTabs() {
+        val pages = listOf<View>(findViewById(R.id.page_devices), findViewById(R.id.page_files), findViewById(R.id.page_settings))
+        val navs = listOf<View>(findViewById(R.id.nav_devices), findViewById(R.id.nav_files), findViewById(R.id.nav_settings))
+        val icons = listOf<ImageView>(findViewById(R.id.nav_devices_icon), findViewById(R.id.nav_files_icon), findViewById(R.id.nav_settings_icon))
+        val labels = listOf<TextView>(findViewById(R.id.nav_devices_label), findViewById(R.id.nav_files_label), findViewById(R.id.nav_settings_label))
+        val accent = ContextCompat.getColor(this, R.color.accent)
+        val idle = ContextCompat.getColor(this, R.color.nav_unselected)
+
+        fun select(index: Int) {
+            currentTab = index
+            pages.forEachIndexed { i, page -> page.visibility = if (i == index) View.VISIBLE else View.GONE }
+            navs.forEachIndexed { i, nav ->
+                val active = i == index
+                nav.isSelected = active
+                // 选中态同时改图标 tint 与文字色，色弱用户不只靠颜色区分（有底色块）。
+                icons[i].setColorFilter(if (active) accent else idle)
+                labels[i].setTextColor(if (active) accent else idle)
+            }
+            // 切到文件页时刷新一次列表：桌面端可能在后台又推了新文件过来。
+            if (index == TAB_FILES) refreshFiles()
+            if (index == TAB_DEVICES) renderDeviceList()
+        }
+
+        navs.forEachIndexed { i, nav -> nav.setOnClickListener { select(i) } }
+        select(TAB_DEVICES)
+    }
+
+    // -- 设备页 ---------------------------------------------------------------
+
+    private fun setupDevicePage() {
+        buttonLinkStart.setOnClickListener { startPersistentLink() }
+        buttonLinkStop.setOnClickListener {
+            val intent = Intent(this, PersistentConnectionService::class.java)
+                .setAction(PersistentConnectionService.ACTION_STOP)
+            ContextCompat.startForegroundService(this, intent)
+        }
+        findViewById<Button>(R.id.button_manage_groups).setOnClickListener { showGroupManager() }
+        findViewById<Button>(R.id.button_unpair_computer).setOnClickListener { confirmUnpairComputer() }
+        // X10-73 桌面快捷方式：由系统弹确认框，未获用户同意不会静默上桌面。
+        findViewById<Button>(R.id.button_pin_shortcut).setOnClickListener {
+            Toast.makeText(this, LinkShortcutManager.requestPin(this), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /**
+     * 设备列表（X10-73 多设备）：逐台渲染，点行即把它设为当前连接目标。
+     *
+     * 状态如实表达：当前连接目标打勾；能否连上不猜——只有常驻服务真的连上
+     * 且 pairing_id 匹配时才显示"在线"，其余一律"离线"，避免用户以为能连。
+     */
+    private fun renderDeviceList() {
+        val computers = ComputerStore.list(this)
+        val activeId = ComputerStore.active(this)?.pairingId
+        val connectedId = LinkQuality.currentPairingId.takeIf { LinkState.phase == LinkPhase.CONNECTED }
+
+        val visible = if (groupFilter.isBlank()) computers else computers.filter { it.group == groupFilter }
+        deviceList.removeAllViews()
+        deviceEmpty.visibility = if (visible.isEmpty()) View.VISIBLE else View.GONE
+
+        for (computer in visible) {
+            deviceList.addView(buildDeviceRow(computer, computer.pairingId == activeId, computer.pairingId == connectedId))
+        }
+        renderGroupFilter(computers)
+    }
+
+    private fun buildDeviceRow(computer: PairedComputer, isActive: Boolean, isOnline: Boolean): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = ContextCompat.getDrawable(context, R.drawable.bg_device_item)
+            isSelected = isActive
+            isClickable = true
+            isFocusable = true
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            params.bottomMargin = dp(8)
+            layoutParams = params
+        }
+
+        // 左列：名称 + 徽标 + 元信息。
+        val left = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = params
+        }
+        val nameRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        nameRow.addView(TextView(this).apply {
+            text = computer.displayName()
+            setTextColor(ContextCompat.getColor(context, R.color.text_primary))
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            maxLines = 1
+        })
+        // 状态徽标：在线绿 / 离线灰，如实区分。
+        nameRow.addView(TextView(this).apply {
+            text = getString(if (isOnline) R.string.device_state_online else R.string.device_state_offline)
+            setTextColor(
+                ContextCompat.getColor(context, if (isOnline) R.color.success else R.color.text_tertiary),
+            )
+            textSize = 11f
+            setTypeface(typeface, Typeface.BOLD)
+            background = ContextCompat.getDrawable(context, R.drawable.bg_status_pill)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            lp.leftMargin = dp(8)
+            layoutParams = lp
+        })
+        if (computer.group.isNotBlank()) {
+            nameRow.addView(TextView(this).apply {
+                text = computer.group
+                setTextColor(ContextCompat.getColor(context, R.color.accent_dark))
+                textSize = 11f
+                background = ContextCompat.getDrawable(context, R.drawable.bg_status_pill)
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                lp.leftMargin = dp(6)
+                layoutParams = lp
+            })
+        }
+        left.addView(nameRow)
+        left.addView(TextView(this).apply {
+            text = getString(R.string.device_meta, computer.endpoint(), computer.fingerprint)
+            setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+            textSize = 12f
+        })
+        left.addView(TextView(this).apply {
+            text = if (computer.lastConnectedAt > 0) {
+                getString(R.string.device_last_connected, relativeTime(computer.lastConnectedAt))
+            } else {
+                getString(R.string.device_never_connected)
+            }
+            setTextColor(ContextCompat.getColor(context, R.color.text_tertiary))
+            textSize = 11.5f
+        })
+        row.addView(left)
+
+        // 右列：操作（当前目标打勾 + 更多菜单）。
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        if (isActive) {
+            right.addView(TextView(this).apply {
+                text = "✓"
+                setTextColor(ContextCompat.getColor(context, R.color.accent))
+                textSize = 16f
+                setTypeface(typeface, Typeface.BOLD)
+            })
+        }
+        right.addView(Button(this).apply {
+            text = "⋯"
+            setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
+            textSize = 18f
+            background = null
+            setPadding(dp(10), 0, dp(4), 0)
+            minWidth = 0
+            minHeight = 0
+            setOnClickListener { showDeviceMenu(computer) }
+        })
+        row.addView(right)
+
+        // 点整行 = 设为当前连接目标（与「连接上次配对的电脑」一致）。
+        row.setOnClickListener {
+            ComputerStore.setActive(this, computer.pairingId)
+            renderDeviceList()
+            Toast.makeText(this, getString(R.string.device_connected_toast, computer.displayName()), Toast.LENGTH_SHORT).show()
+        }
+        return row
+    }
+
+    /** 分组筛选 chips：全部 + 各分组。 */
+    private fun renderGroupFilter(computers: List<PairedComputer>) {
+        val groups = computers.map { it.group }.filter { it.isNotBlank() }.distinct().sorted()
+        groupFilterRow.removeAllViews()
+        // 只有一台以上、或存在分组时才显示筛选条（单台电脑时筛选无意义）。
+        if (computers.size <= 1 && groups.isEmpty()) {
+            groupFilterScroll.visibility = View.GONE
+            return
+        }
+        groupFilterScroll.visibility = View.VISIBLE
+        val options = listOf("" to getString(R.string.group_all)) +
+            groups.map { it to it } +
+            (if (computers.any { it.group.isBlank() }) listOf("__none__" to getString(R.string.group_ungrouped)) else emptyList())
+        for ((value, label) in options) {
+            val selected = if (value == "__none__") groupFilter == "__none__" else groupFilter == value
+            groupFilterRow.addView(TextView(this).apply {
+                text = label
+                textSize = 12.5f
+                setTextColor(
+                    ContextCompat.getColor(context, if (selected) R.color.accent_dark else R.color.text_secondary),
+                )
+                setTypeface(typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
+                background = ContextCompat.getDrawable(context, R.drawable.bg_status_pill)
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                isClickable = true
+                setOnClickListener {
+                    groupFilter = value
+                    renderDeviceList()
+                }
+                val params = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                params.rightMargin = dp(8)
+                layoutParams = params
+            })
+        }
+    }
+
+    /** 设备行「⋯」菜单：重命名 / 归入分组 / 解除这台。 */
+    private fun showDeviceMenu(computer: PairedComputer) {
+        val actions = arrayOf(getString(R.string.action_rename), getString(R.string.action_group), getString(R.string.action_unpair))
+        android.app.AlertDialog.Builder(this)
+            .setTitle(computer.displayName())
+            .setItems(actions) { _, which ->
+                when (which) {
+                    0 -> showRenameDialog(computer)
+                    1 -> showGroupPicker(computer)
+                    2 -> confirmUnpairComputer(computer)
+                }
+            }
+            .show()
+    }
+
+    private fun showRenameDialog(computer: PairedComputer) {
+        val input = EditText(this).apply {
+            setText(computer.label)
+            hint = getString(R.string.device_name_hint)
+            setSingleLine()
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.device_rename_title)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                ComputerStore.rename(this, computer.pairingId, input.text.toString())
+                renderDeviceList()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showGroupPicker(computer: PairedComputer) {
+        val existing = ComputerStore.groups(this)
+        val options = (listOf("") + existing).toTypedArray()
+        val preselected = options.indexOf(computer.group).coerceAtLeast(0)
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.action_group)
+            .setSingleChoiceItems(options, preselected) { dialog, which ->
+                ComputerStore.setGroup(this, computer.pairingId, options[which])
+                renderDeviceList()
+                dialog.dismiss()
+                // 空串是「移出分组」，不是错误路径，文案如实区分。
+                Toast.makeText(
+                    this,
+                    if (options[which].isBlank()) getString(R.string.group_removed)
+                    else getString(R.string.group_saved, options[which]),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** 分组管理入口：一次看完所有设备及其分组，并可直接改。 */
+    private fun showGroupManager() {
+        val computers = ComputerStore.list(this)
+        if (computers.isEmpty()) {
+            Toast.makeText(this, getString(R.string.unpair_none_title), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = computers.map { computer ->
+            val group = computer.group.ifBlank { getString(R.string.group_ungrouped) }
+            "${computer.displayName()} — $group"
+        }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.group_manage_title)
+            .setItems(labels) { _, which -> showGroupPicker(computers[which]) }
+            .setMessage(R.string.group_manage_hint)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    /** 相对时间（用于「上次连接」）。与桌面端口径一致。 */
+    private fun relativeTime(epochMs: Long): String {
+        val diff = System.currentTimeMillis() - epochMs
+        val minutes = diff / 60_000
+        return when {
+            minutes < 1 -> "刚刚"
+            minutes < 60 -> "$minutes 分钟前"
+            minutes < 60 * 24 -> "${minutes / 60} 小时前"
+            else -> "${minutes / (60 * 24)} 天前"
+        }
+    }
+
+    // -- 文件页 ---------------------------------------------------------------
+
+    private fun setupFilesPage() {
+        findViewById<Button>(R.id.button_files_refresh).setOnClickListener { refreshFiles() }
+        findViewById<Button>(R.id.button_send_to_pc).setOnClickListener { openSendPicker() }
+        grantFilesButton.setOnClickListener {
+            ReceivedFiles.allFilesAccessIntent(this)?.let { intent ->
+                runCatching { startActivity(intent) }
+                    .onFailure { Toast.makeText(this, "无法打开系统设置", Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
+
+    // -- 设置页 ---------------------------------------------------------------
+
+    private fun setupSettingsPage() {
+        notifyMirrorButton.setOnClickListener { toggleNotifyMirror() }
+        grantListenerButton.setOnClickListener {
+            NotificationMirrorService.openListenerSettings(this)
+        }
+        findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
+        // 运行日志默认收起：正常使用时不需要看；点「查看」展开、再点「收起」。
+        logToggle.setOnClickListener {
+            val expanded = logScroller.visibility == View.VISIBLE
+            logScroller.visibility = if (expanded) View.GONE else View.VISIBLE
+            logToggle.setText(if (expanded) R.string.action_show else R.string.action_hide)
+        }
+    }
+
+    // -- 配对（设备页） -------------------------------------------------------
+
+    private fun setupPairing() {
         findViewById<Button>(R.id.button_scan).setOnClickListener {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED
@@ -185,60 +581,6 @@ class MainActivity : AppCompatActivity() {
                 false
             }
         }
-        findViewById<Button>(R.id.button_capture).setOnClickListener { startCaptureFlow() }
-
-        // 文件卡：刷新按钮 + 空状态里的「授权文件访问」+「发送文件到电脑」（a）。
-        findViewById<Button>(R.id.button_files_refresh).setOnClickListener { refreshFiles() }
-        findViewById<Button>(R.id.button_send_to_pc).setOnClickListener { openSendPicker() }
-        grantFilesButton.setOnClickListener {
-            ReceivedFiles.allFilesAccessIntent(this)?.let { intent ->
-                runCatching { startActivity(intent) }
-                    .onFailure { Toast.makeText(this, "无法打开系统设置", Toast.LENGTH_SHORT).show() }
-            }
-        }
-
-        // 运行日志默认收起：正常使用时不需要看；点「查看」展开、再点「收起」。
-        logToggle.setOnClickListener {
-            val expanded = logScroller.visibility == View.VISIBLE
-            logScroller.visibility = if (expanded) View.GONE else View.VISIBLE
-            logToggle.setText(if (expanded) R.string.action_show else R.string.action_hide)
-        }
-
-        // 常驻通道（M4-2）：已配对电脑卡 + 免扫码直连入口；M4-4「解除这台电脑」。
-        computerCard = findViewById(R.id.computer_card)
-        computerInfo = findViewById(R.id.computer_info)
-        linkStatus = findViewById(R.id.link_status)
-        buttonLinkStart = findViewById(R.id.button_link_start)
-        buttonLinkStop = findViewById(R.id.button_link_stop)
-        buttonLinkStart.setOnClickListener { startPersistentLink() }
-        buttonLinkStop.setOnClickListener {
-            val intent = Intent(this, PersistentConnectionService::class.java)
-                .setAction(PersistentConnectionService.ACTION_STOP)
-            ContextCompat.startForegroundService(this, intent)
-        }
-        findViewById<Button>(R.id.button_unpair_computer).setOnClickListener { confirmUnpairComputer() }
-
-        linkListener = {
-            runOnUiThread { renderLinkState() }
-        }
-
-        // 崩溃取证：上次会话崩溃时显示一条可收敛的红卡——默认只显示标题，
-        // 详情按需展开；点「清除」删掉落盘堆栈后立即消失，不影响后续正常使用。
-        CrashGuard.lastCrash(applicationContext)?.let { last ->
-            crashCard.visibility = View.VISIBLE
-            crashDetail.text = last
-            findViewById<Button>(R.id.button_crash_view).setOnClickListener {
-                crashDetail.visibility =
-                    if (crashDetail.visibility == View.GONE) View.VISIBLE else View.GONE
-            }
-            findViewById<Button>(R.id.button_crash_clear).setOnClickListener {
-                CrashGuard.clear(applicationContext)
-                crashCard.visibility = View.GONE
-                log("已清除上次的崩溃记录。")
-            }
-            log("检测到上次运行崩溃，详情见上方红色卡片。")
-        }
-        log("伴侣 App 已启动。")
     }
 
     override fun onResume() {
@@ -247,9 +589,16 @@ class MainActivity : AppCompatActivity() {
         refreshFiles()
         // X10-66：从系统通知授权页返回时，如实刷新镜像开关状态。
         refreshNotifyMirrorUi()
-        // 已配对电脑卡与常驻连接状态（M4-2）。
-        refreshComputerCard()
+        // 设备中心（M4-2 / X10-73）。
+        renderDeviceList()
         linkListener?.let { LinkState.addListener(it) }
+        linkListener = {
+            runOnUiThread {
+                renderLinkState()
+                // 设备行上的「在线」标记依赖连接状态，连接变化要跟着重画。
+                if (currentTab == TAB_DEVICES) renderDeviceList()
+            }
+        }
         renderLinkState()
     }
 
@@ -260,25 +609,8 @@ class MainActivity : AppCompatActivity() {
 
     // -- 常驻通道（M4-2）与解除互信（M4-4） ----------------------------------
 
-    /** 已配对电脑卡：有互信凭据才显示；无凭据时隐藏（扫码配对入口照常）。 */
-    private fun refreshComputerCard() {
-        val prefs = getSharedPreferences("paired_computers", MODE_PRIVATE)
-        val pairingId = prefs.getString("pairing_id", null)
-        if (pairingId.isNullOrBlank()) {
-            computerCard.visibility = View.GONE
-            return
-        }
-        computerCard.visibility = View.VISIBLE
-        val host = prefs.getString("last_host", null)?.substringBeforeLast(':') ?: "未知地址"
-        val fingerprint = prefs.getString("desktop_fingerprint", null)?.take(16) ?: ""
-        val residentPort = prefs.getInt("resident_port", -1).takeIf { it > 0 }
-        // X10-64B：与服务的回退口径一致——没学到端口也按默认端口显示，不显示成「连不上」。
-        val endpoint = if (residentPort != null) "$host:$residentPort" else "$host:47017（默认）"
-        computerInfo.text = getString(R.string.computer_info, endpoint, fingerprint)
-    }
-
     private fun renderLinkState() {
-        linkStatus.text = when (LinkState.phase) {
+        linkStatusText().text = when (LinkState.phase) {
             LinkPhase.IDLE -> getString(R.string.link_state_idle)
             LinkPhase.CONNECTING -> getString(R.string.link_state_connecting) + LinkState.detail
             LinkPhase.CONNECTED -> getString(R.string.link_state_connected) + LinkState.detail
@@ -287,8 +619,44 @@ class MainActivity : AppCompatActivity() {
         val running = LinkState.phase != LinkPhase.IDLE
         buttonLinkStart.visibility = if (running) View.GONE else View.VISIBLE
         buttonLinkStop.visibility = if (running) View.VISIBLE else View.GONE
+        renderQualityPanel()
         maybeReportLastCrash()
     }
+
+    /**
+     * 连接质量面板（X10-73）：延迟 / 已连接时长 / 加密直连。
+     *
+     * 未连接时显示引导语而不是空行；RTT 没采到样显示「—」，不显示 0 ——
+     * 0 会被读成"延迟极低"，那是假的。
+     */
+    private fun renderQualityPanel() {
+        val connected = LinkState.phase == LinkPhase.CONNECTED
+        qualityRow.visibility = View.VISIBLE
+        if (!connected) {
+            qualityRtt.text = getString(R.string.quality_row_idle)
+            qualityDuration.text = ""
+            return
+        }
+        val rtt = LinkQuality.rttMs
+        qualityRtt.text = if (rtt != null) getString(R.string.quality_rtt, rtt) else getString(R.string.quality_unknown)
+        val seconds = LinkQuality.connectedSeconds()
+        qualityDuration.text = getString(R.string.quality_duration, formatDuration(seconds))
+    }
+
+    private fun formatDuration(seconds: Long): String {
+        val minutes = seconds / 60
+        return when {
+            minutes < 1 -> "不到 1 分钟"
+            minutes < 60 -> getString(R.string.quality_duration_minutes, minutes.toInt())
+            else -> getString(
+                R.string.quality_duration_hours,
+                (minutes / 60).toInt(), (minutes % 60).toInt(),
+            )
+        }
+    }
+
+    /** 状态主卡的状态行（X10-73 里就是 statusText，单独取以便阅读）。 */
+    private fun linkStatusText(): TextView = statusText
 
     /**
      * 崩溃堆栈经本地点对点通道报给电脑（X10-60）：常驻连接就绪且有未上报的
@@ -364,30 +732,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 解除这台电脑（M4-4）：停常驻服务 + 清互信凭据 + 销毁本机 Keystore 身份。
-     * 与桌面端「移除互信」双向对齐——两端都作废后，下次连接必须重新扫码。
-     * 确认对话框明示后果，不静默执行。
+     * 解除互信（M4-4 / X10-73）：停常驻服务 + 删**这一台**的凭据 + 销毁本机
+     * Keystore 身份。与桌面端「移除互信」双向对齐——两端都作废后，下次连接
+     * 必须重新扫码。确认对话框明示后果，不静默执行。
+     *
+     * 传 null = 解除当前连接目标那台。
      */
-    private fun confirmUnpairComputer() {
+    private fun confirmUnpairComputer(target: PairedComputer? = null) {
+        val computer = target ?: ComputerStore.active(this)
+        if (computer == null) {
+            Toast.makeText(this, getString(R.string.unpair_none_title), Toast.LENGTH_SHORT).show()
+            return
+        }
         android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.unpair_title)
-            .setMessage(R.string.unpair_message)
-            .setPositiveButton(R.string.action_unpair) { _, _ -> unpairComputer() }
+            .setTitle(getString(R.string.unpair_title))
+            .setMessage(getString(R.string.unpair_message) + "\n\n" + computer.displayName())
+            .setPositiveButton(R.string.action_unpair) { _, _ -> unpairComputer(computer) }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
-    private fun unpairComputer() {
+    private fun unpairComputer(computer: PairedComputer) {
         // ① 停常驻连接（还在重试也要立刻停，避免解除后继续重连被拒刷通知）。
         val intent = Intent(this, PersistentConnectionService::class.java)
             .setAction(PersistentConnectionService.ACTION_STOP)
         ContextCompat.startForegroundService(this, intent)
-        // ② 清互信凭据；③ 销毁 Keystore 身份（私钥不可导出，销毁即作废）。
-        getSharedPreferences("paired_computers", MODE_PRIVATE).edit().clear().apply()
+        // ② 删这一台互信凭据（其它已配对电脑不受影响）。
+        ComputerStore.remove(this, computer.pairingId)
+        // ③ 销毁 Keystore 身份（私钥不可导出，销毁即作废）。
+        //    身份是**本机**的而非每台电脑一份，所以任何一台解除后重新配对都要
+        //    重新握手；但已保存的其它电脑凭据不会被连带清掉，重新扫码即可各自恢复。
         PairingIdentity.destroy()
-        refreshComputerCard()
-        log("已解除与这台电脑的互信：本地凭据与身份已删除，下次连接需重新扫码。")
-        Toast.makeText(this, "已解除互信", Toast.LENGTH_SHORT).show()
+        renderDeviceList()
+        renderLinkState()
+        log("已解除与「${computer.displayName()}」的互信：本地凭据与身份已删除，下次连接需重新扫码。")
+        Toast.makeText(this, getString(R.string.device_removed_toast, computer.displayName()), Toast.LENGTH_SHORT).show()
     }
 
     override fun onRequestPermissionsResult(
@@ -500,13 +879,13 @@ class MainActivity : AppCompatActivity() {
                     // 边界如实告知（X10-31）：这条会话是伴侣通道，不等于镜像连接。
                     log("提示：这是伴侣助手通道，不会让手机出现在电脑的连接列表里；要镜像请用数据线或在电脑端完成无线调试配对。")
                     if (residentPort != null) {
-                        log("电脑常驻通道已开启（端口 $residentPort），之后可在上方「上次配对的电脑」一键重连。")
+                        log("电脑常驻通道已开启（端口 $residentPort），之后可在「我的设备」里一键重连。")
                     } else {
                         // X10-64：文案必须与真实能力一致——本机会回退默认端口 47017
                         // 重连；只有电脑端口被占用回退到随机端口时才需要重新扫码。
-                        log("电脑常驻通道未开启：在电脑端打开「常驻通道」后，上方「上次配对的电脑」即可免扫码重连（本机按默认端口 47017 直连；仅当电脑端口被占用回退到其他端口时需要重新扫一次码）。")
+                        log("电脑常驻通道未开启：在电脑端打开「常驻通道」后，「我的设备」里即可免扫码重连（本机按默认端口 47017 直连；仅当电脑端口被占用回退到其他端口时需要重新扫一次码）。")
                     }
-                    refreshComputerCard()
+                    renderDeviceList()
                 }
 
                 override fun onRejected() = runOnUiThread {
@@ -530,21 +909,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 本地记住这台电脑（M4-1）：pairing_id + 桌面身份指纹 + 最近主机。
-     * M4-2 起同时保存桌面常驻通道端口（residentPort），重连凭它免扫码直连；
-     * 桌面端「移除互信」后这份记录随之作废（对端会拒绝 RECONNECT）。
+     * 本地记住这台电脑（M4-1 / X10-73）：按 pairing_id 存进列表。
+     *
+     * 旧版把凭据平铺进一份 prefs，配第二台就覆盖第一台；现在 upsert 到列表并
+     * 设为当前连接目标。桌面常驻端口（residentPort）一并存下，重连凭它免扫码
+     * 直连；桌面端「移除互信」后这份记录随之作废（对端会拒绝 RECONNECT）。
      */
     private fun rememberComputer(pairingId: String, payload: PairingPayload, residentPort: Int?) {
         if (pairingId.isBlank()) return
-        runCatching {
-            val editor = getSharedPreferences("paired_computers", MODE_PRIVATE).edit()
-                .putString("pairing_id", pairingId)
-                .putString("desktop_fingerprint", payload.fingerprint)
-                .putString("last_host", payload.hosts.firstOrNull())
-                .putLong("paired_at", System.currentTimeMillis())
-            if (residentPort != null) editor.putInt("resident_port", residentPort) else editor.remove("resident_port")
-            editor.apply()
-        }
+        val host = payload.hosts.firstOrNull().orEmpty()
+        val existing = ComputerStore.find(this, pairingId)
+        ComputerStore.upsert(
+            this,
+            PairedComputer(
+                pairingId = pairingId,
+                // 重新配对同一台时保留用户改过的显示名与分组，别把人家的整理成果冲掉。
+                label = existing?.label.orEmpty(),
+                fingerprint = payload.fingerprint,
+                host = host,
+                residentPort = residentPort,
+                pairedAt = existing?.pairedAt ?: System.currentTimeMillis(),
+                lastConnectedAt = System.currentTimeMillis(),
+                group = existing?.group.orEmpty(),
+            ),
+        )
     }
 
     private fun setStatusConnected(connected: Boolean) {

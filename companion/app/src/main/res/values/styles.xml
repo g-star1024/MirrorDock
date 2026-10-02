@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 按钮与卡片样式；主题本体在 themes.xml（两者不重复定义）。 -->
+<!-- 按钮与卡片样式（X10-73 重构）；主题本体在 themes.xml（两者不重复定义）。 -->
 <resources>
-    <!-- 主 CTA：白胶囊（置于墨色 hero 卡上）。stateListAnimator 置空去掉系统默认投影灰边。 -->
+    <!-- 主 CTA：品牌青碧实心胶囊。stateListAnimator 置空去掉系统默认投影灰边。 -->
     <style name="PrimaryButton">
-        <item name="android:background">@drawable/bg_pill_white</item>
-        <item name="android:textColor">@color/accent</item>
+        <item name="android:background">@drawable/bg_pill_accent</item>
+        <item name="android:textColor">@color/text_on_accent</item>
         <item name="android:textSize">16sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:textAllCaps">false</item>
@@ -14,9 +14,9 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- 次要操作：白底圆角，无边框、无投影。 -->
+    <!-- 次要操作：白底 + 细边框圆角。 -->
     <style name="SecondaryButton">
-        <item name="android:background">@drawable/bg_ghost_button</item>
+        <item name="android:background">@drawable/bg_outline_button</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">14sp</item>
         <item name="android:textStyle">bold</item>
@@ -26,7 +26,12 @@
         <item name="android:stateListAnimator">@null</item>
     </style>
 
-    <!-- 文字按钮：无底色，仅墨色文字。 -->
+    <!-- 危险操作（解除互信）：白底红字，视觉上与普通次要操作区分。 -->
+    <style name="DangerButton" parent="SecondaryButton">
+        <item name="android:textColor">@color/danger</item>
+    </style>
+
+    <!-- 文字按钮：无底色，仅品牌色文字。 -->
     <style name="TextButton">
         <item name="android:background">?android:attr/selectableItemBackgroundBorderless</item>
         <item name="android:textColor">@color/accent</item>
@@ -41,5 +46,33 @@
     <style name="Card">
         <item name="android:background">@drawable/bg_card</item>
         <item name="android:padding">18dp</item>
+    </style>
+
+    <!-- 区块标题：一级标题 20sp、二级 16sp，统一墨色，层级靠字号与留白。 -->
+    <style name="SectionTitle">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="CardTitle">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="CardBody">
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">12.5sp</item>
+    </style>
+
+    <!-- 底部导航项：图标文字竖排，选中用品牌色。 -->
+    <style name="NavItem">
+        <item name="android:background">@drawable/bg_nav_item</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:gravity">center</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:stateListAnimator">@null</item>
     </style>
 </resources>

@@ -11,10 +11,12 @@ android {
         applicationId = "com.mirrordock.companion"
         minSdk = 26
         targetSdk = 34
+        // 0.3.0 = X10-73 三 Tab 设备中心重构 + 多设备列表/分组 + 连接质量面板
+        //        + 桌面 pinned shortcut（协议对旧版桌面端双向兼容）。
         // 0.2.5 = X10-69 快捷回复（notification_reply 下行 + RemoteInput 填充）。
         // 0.2.4 = X10-66 通知镜像一期 + X10-64B 默认端口回退；0.2.3 = 常驻会话保活修复。
-        versionCode = 16
-        versionName = "0.2.5"
+        versionCode = 17
+        versionName = "0.3.0"
     }
 
     // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本

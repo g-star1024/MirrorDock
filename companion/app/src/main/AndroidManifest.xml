@@ -55,6 +55,17 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
+        <!-- X10-73 桌面快捷方式落点：透明无界面，点图标即启动常驻连接后 finish。
+             必须 exported=true（桌面启动器以不同 uid 启动它），但不接收外部
+             Intent 的数据输入 —— 传入的 extras 一律不读，targetActivity 也不做参数注入。 -->
+        <activity
+            android:name=".LinkShortcutActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
         <service
             android:name=".CaptureService"
             android:exported="false"
