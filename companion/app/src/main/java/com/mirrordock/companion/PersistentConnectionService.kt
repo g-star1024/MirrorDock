@@ -227,6 +227,15 @@ class PersistentConnectionService : Service() {
                         "resident_port" -> json.optInt("port", -1).takeIf { it > 0 }?.let { port ->
                             prefs.edit().putInt("resident_port", port).apply()
                         }
+                        // 快捷回复（X10-69）：桌面端下发的通知回复文本，交给
+                        // 监听服务填进原通知的 RemoteInput 动作。字段缺失直接忽略。
+                        "notification_reply" -> {
+                            val key = json.optString("key")
+                            val text = json.optString("text")
+                            if (key.isNotBlank() && text.isNotBlank()) {
+                                NotificationMirrorService.handleReply(key, text)
+                            }
+                        }
                         // pong 及未知类型静默忽略。
                     }
                 }

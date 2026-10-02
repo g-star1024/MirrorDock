@@ -11,9 +11,10 @@ android {
         applicationId = "com.mirrordock.companion"
         minSdk = 26
         targetSdk = 34
-        // 0.2.4 = X10-65 通知镜像一期 + X10-64B 默认端口回退；0.2.3 = 常驻会话保活修复。
-        versionCode = 15
-        versionName = "0.2.4"
+        // 0.2.5 = X10-69 快捷回复（notification_reply 下行 + RemoteInput 填充）。
+        // 0.2.4 = X10-66 通知镜像一期 + X10-64B 默认端口回退；0.2.3 = 常驻会话保活修复。
+        versionCode = 16
+        versionName = "0.2.5"
     }
 
     // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本
