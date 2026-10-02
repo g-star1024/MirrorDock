@@ -666,6 +666,21 @@
   - **已由真机验证覆盖（2026-10-02，用户无需重复验收）**：X10-64B 端口回退实连、X10-66 通知转发端到端、0.2.5 转发链路（sent=true）、两端升级本身。
   - **伴侣 APK 0.2.2 来源**：`companion.yml`（workflow「Companion App」）随 4bbfe0b 的 push 已成功产出 artifact `mirrordock-companion-debug`（约 3.8 MB，run 36953624864），可直接下载安装验收。
 
+- [x] ✅ **X10-72 按设备桌面模式模块可见化（2026-10-03 00:00 夜间；用户报告"看起来还是全局设置、找不到按设备设置的模块"）**：**根因不是漏写功能，是 X10-71 的可见性缺陷**——①设备选择器只在 `sessionActive && activeSessionList.length > 1` 时渲染（App.tsx:2847），单设备/未镜像时**入口完全不存在**；②`settingsDesktopTarget` 为空时读写落到**全局 options**（App.tsx:1687-1688）；③文案"多台设备时按应用到哪台设备单独保存"在单设备场景下是**假话**。修复：新增纯函数 `buildDesktopPrefDevices()`（候选 = adb 列表**含未授权/离线** ∪ 会话设备 ∪ **已有偏好的历史设备**；按 `physical_serial` 合并 USB/无线多通道，ready 优先）；新增独立 state `desktopTargetSerial`（**不随会话结束重置**，让未插线设备可提前配置，与「镜像窗口」卡的 `settingsTargetSerial` 分离）；桌面模式从「镜像窗口」卡**移出**独立成「按设备设置 · 桌面模式」卡（设备下拉 + 逐台状态清单点行切换 + "下面两项正在编辑：<设备名>" + 每项"仅对某台设备生效"）；`settingsDesktopTarget` 回退链补 `readySerial` 消灭"无会话即全局"空洞；App.css 新增 `.device-pref-*`；删除与实现不符的表述。测试：新增 6 个 `buildDesktopPrefDevices` 单测 + 2 个渲染回归测试（锁定"单设备无会话时模块也必须可见且写明归属"、"无设备时才回落全局"），**vitest 58 → 66**。验证：`pnpm build`（tsc+vite）通过。commit `28a6fb5`。
+- [x] ✅ **X10-73 伴侣 App 三 Tab 重构 + 多设备 + 连接质量 + 桌面快捷方式（2026-10-03 00:00 夜间；用户拍板方案 B）**：用户裁定**保留青碧 #2F98A1 只换结构与交互**，且**桌面端 Tauri/React 配色一律不动**，**多设备列表/分组一并开发**。桌面端**本就支持多设备**（`PairedStore` 是 `Vec`，`upsert`/`remove` 均按 `pairing_id`），单设备限制只在手机端——旧版把 `pairing_id`/`last_host`/`resident_port` 平铺在一份 prefs 里，**配第二台会覆盖第一台**。
+  - **新增 `PairedComputer.kt`**：`PairedComputer` 记录 + `ComputerStore` 台账（存 `computers_v2` JSON 数组 + `active_pairing_id`）。迁移：旧键原样搬进列表再标 `legacy_migrated`（幂等）；**任何一步失败都退回旧键，不让用户丢凭据**（升级覆盖安装不能把老用户「忘记电脑」）。排序：当前连接目标优先，其余按最近连接倒序（对齐 ToDesk「我的设备」直觉）。`remove` 按 `pairing_id` 精确删除（旧版 `edit().clear()` 一台都没了）；`removeAll` 独立提供且调用方必须二次确认。分组 `group` / 重命名 `rename`。
+  - **结构重构**（单屏长滚 → 三 Tab）：设备页（状态主卡 + 连接质量面板 + 我的设备列表 + 分组筛选 + 配对入口 + 桌面快捷方式 + 崩溃取证）/ 文件页 / 设置页（通知镜像、屏幕捕获、互信管理、隐私、运行日志默认收起）。
+  - **视觉**（层级靠投影与留白，不靠深色块压场）：墨色渐变 hero → 白卡 + 品牌色左强调条；主 CTA 白胶囊 → 品牌青碧实心；次要按钮纯白无边框 → 白底 1dp 细边（浅灰页面上原本没有边界）；新增语义色（success/warn/danger + 浅底）、导航选中底块、状态徽标底；三个 Tab 图标，选中态同时改图标 tint + 文字色 + 底色块（不只靠颜色区分，色弱用户可辨）。圆角统一 14-18dp。
+  - **多设备交互**：设备行显示名称/在线离线徽标/分组徽标/端点+身份/上次连接时间；**状态如实**——只有常驻服务真连上且 pairing_id 匹配才显示"在线"，其余一律"离线"；点整行 = 设为当前连接目标；点「⋯」= 重命名 / 归入分组 / 解除这台；分组筛选 chips（单台时自动隐藏）；解除互信对话框显示正在解除哪台，**其它已配对电脑不受影响**；重新配对同一台时保留用户改过的显示名与分组。
+  - **连接质量面板**：延迟（RTT）/ 已连接时长 / 端到端加密。RTT 经 **ping 带单调时钟戳 → pong 原样回带**实测（桌面端 `companion_pairing.rs`：ping 带 `t` 时回带，不带 `t` 的旧版仍回固定 `PONG_LINE`，**双向兼容**）；`LinkQuality` 采样失败一律 `null`，界面显示「—」而非 0（0 会被读成"延迟极低"，那是假的）；只采信 0..10s 区间。
+  - **桌面快捷方式**：`LinkShortcutManager.requestPin`（走 `ShortcutManager.requestPinShortcut`，由**系统弹窗**确认，未同意不静默上桌面；无已配对电脑时不提供固定请求）+ `LinkShortcutActivity`（`Theme.NoDisplay` 透明无界面，启动常驻连接后 finish；`exported=true` 因为桌面启动器以不同 uid 启动，但不读任何传入 extras）。**不申请任何新权限**。
+  - **红线未动**：加密直连与配对协议、扫码/手动两条配对路径、文件收发私有目录 + FileProvider、解除互信的双端语义、日志不落敏感数据。
+  - **资源治理**：删除已无引用的 `bg_hero`/`bg_pill_white`/`bg_ghost_button`；移除 6 条死字符串。
+  - **验证**：伴侣 0.2.5 → **0.3.0**（versionCode 16→17）。本地无 gradle 且沙箱拦大文件下载（curl 拉 gradle 发行版 exit 56），故新增 `scripts/verify-companion.py` 静态交叉校验（XML 合法性 / `@string` `@color` `@style` `@drawable` 引用完整性 / `findViewById` 的 id 是否声明 / Manifest 类是否存在 / Kotlin 括号平衡 / 死资源检测）并接入 `AGENTS.md` 强制闸门——**全部通过**；Rust 侧 `reconnect_client_with_ping` 断言"不带 t 不回显 t、带 t 原样带回"，**cargo test companion_pairing 13 passed / 全量 192 passed，clippy 0 warning**；`pnpm build` + **vitest 66 passed**。commit `9259184` / `ec73c73` / `e0aa9a4` / `7a2bcd9`。
+  - **未验证面（如实标记）**：APK 真编译与真机行为由 CI（`companion.yml` / `build.yml` 的 `companion-apk` job）+ 用户真机承担；本地无 gradle 无法预编译，静态校验只能覆盖资源引用与语法结构类错误，**不能替代编译**。
+- [ ] **v0.4.7-beta 发版（2026-10-03 夜间；含 X10-72 + X10-73）**：版本 0.4.6→0.4.7（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处；伴侣 App 0.2.5→0.3.0）；新增 `docs/releases/v0.4.7-beta.md`。tag `v0.4.7-beta` → CI 四平台打包 + updater 签名 + 伴侣 APK（0.3.0 代码）+ latest.json + Release。
+  - **发版证据（tag 推送 + Release 核验后回填，此行不预填）**：
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。
