@@ -82,16 +82,24 @@ class MainActivity : AppCompatActivity() {
             refreshFiles()
         }
 
-    /** 经常驻连接推一行 JSON 给电脑；无连接或写出失败返回 false。 */
+    // X10-62：网络写入必须在后台线程——Android 主线程做 socket 写会抛
+    // NetworkOnMainThreadException，被 PrintWriter 静默吞掉后 checkError 恒真，
+    // 表现为「心跳（工作线程）全通、UI 线程推送全失败」（真机验证桩实锤）。
+    // 单线程串行执行，保证消息顺序与心跳下行不乱序。
+    private val linkSendExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /**
+     * 经常驻连接推一行 JSON 给电脑（异步，主线程安全）。
+     * 返回 false = 当前没有可用的常驻连接（调用方据此走「手动刷新」兜底提示）；
+     * 返回 true = 已交由后台串行发送，结果记录在 logcat。
+     */
     private fun pushLinkLine(line: String): Boolean {
-        val sender = LinkState.lineSender
-        if (sender == null) {
-            android.util.Log.w("PersistentLink", "pushLinkLine: lineSender=null (phase=${LinkState.phase})")
-            return false
+        val sender = LinkState.lineSender ?: return false
+        linkSendExecutor.execute {
+            val ok = runCatching { sender(line) }.getOrDefault(false)
+            android.util.Log.i("PersistentLink", "pushLinkLine: sent=$ok line=$line")
         }
-        val ok = runCatching { sender(line) }.getOrDefault(false)
-        android.util.Log.i("PersistentLink", "pushLinkLine: sent=$ok line=$line")
-        return ok
+        return true
     }
 
     private fun openSendPicker() {
