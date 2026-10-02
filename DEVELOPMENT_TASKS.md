@@ -683,7 +683,12 @@
   - **修复**：进入「工具」页即自动加载（首次也加载）；`files_changed` 不再要求 `deviceFiles !== null` 且自动切到工具页；面板移出 `readyDevice` 门禁改用 `transferDeviceSerial`（`readyDevice?.serial ?? sessionSerial`），APK 安装仍留门禁内（需设备就绪）；**读取失败时 `deviceFiles` 置 null**（不许用上次列表冒充、不把「读不到」说成「没有」）；设备切换时清空列表与提示。
   - **测试（做了两轮反向验证）**：新增 3 个回归测试（自动加载 / 无镜像会话时面板可见 / 读取失败不伪装成空）。**第一轮反向验证失败**——我只去掉 `deviceFiles !== null` 守卫，测试仍全绿，说明没真正锁住修复；**第二轮把整个自动加载 effect 删掉后 3 个全部失败**，恢复后全绿。**教训：反向验证必须回到"完全移除修复"的程度，只改一半会给虚假的安全感。** vitest 66 → **69**。
   - 验证：`pnpm build` ✅ / vitest 69 ✅ / cargo 192 ✅ / 伴侣静态校验 ✅ / 伴侣 Kotlin 0 error ✅；**真机复现验证**：用后端真实 argv 形式 `adb -s <serial> shell ls -1 /sdcard/Download/MirrorDock` 返回 8 个条目、退出码 0，证明数据侧无问题，修复后界面会自动呈现。0.4.8 已装到 Mac（`/Applications`，x86_64）。
-- [ ] **v0.4.8-beta 发版**：版本 0.4.7→0.4.8（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处）；新增 `docs/releases/v0.4.8-beta.md`。伴侣 App 本版**未改动**（0.3.0），APK 随桌面发版重打包。tag `v0.4.8-beta` → CI 四平台 + Release。
+- [x] ✅ **v0.4.8-beta 已成功发版（run `37074871816`，2026-10-03 07:11 完成）**：**7 个 job 全绿**（验证 ✅ / 伴侣 App APK ✅ / macos-arm64 ✅ / linux-x64 ✅ / windows-x64 ✅ / macos-x64 ✅ / 发布 Release ✅）。tag `v0.4.8-beta` → `69e405b`。
+  - **Release 已发布**：id `402213895`，draft=false / prerelease=true，published 2026-10-02T23:10:18Z，**30 资产全齐**（`MirrorDock_0.4.8_x64.dmg` / `_aarch64.dmg` / `_x64-setup.exe` / `_x64_en-US.msi` / `_amd64.AppImage` / `_amd64.deb` / `MirrorDock-0.4.8-1.x86_64.rpm` / 伴侣 APK `MirrorDock-companion-0.4.8.apk` / `latest.json` + updater 归档 4 份 + `.sig` 7 份 + SHA256SUMS 4 份 + SBOM 8 份）。
+  - **updater 端点已核验**：`latest.json` → `version=0.4.8`、`pub_date=2026-10-02T23:10:24Z`、`platforms=4` 且**四平台签名全部非空**。
+  - **Mac**：0.4.8 已在 `/Applications/MirrorDock.app`（x86_64，旧版备份 `/tmp/MirrorDock.app.bak.20261003-064919`），**需重启客户端生效**。
+  - **伴侣 App 本版未改动**（维持 0.3.0 / versionCode 17），APK 随桌面发版重打包。
+- [x] ✅ **v0.4.8-beta 发版**：版本 0.4.7→0.4.8（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处）；新增 `docs/releases/v0.4.8-beta.md`。伴侣 App 本版**未改动**（0.3.0），APK 随桌面发版重打包。tag `v0.4.8-beta` → CI 四平台 + Release。
   - **发版证据（tag 推送 + Release 核验后回填，此行不预填）**：
 - [x] ✅ **v0.4.7-beta 发版（2026-10-03 夜间；含 X10-72 + X10-73）**：版本 0.4.6→0.4.7（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处；伴侣 App 0.2.5→0.3.0）；新增 `docs/releases/v0.4.7-beta.md`。tag `v0.4.7-beta` → CI 四平台打包 + updater 签名 + 伴侣 APK（0.3.0 代码）+ latest.json + Release。
   - **⚠ 首次发版失败（run 37034993379，2026-10-03 00:35 → 01:05）**：`verify` ✅（Rust 192 + 前端 66 + build）、四个平台 `package` ✅ 全过，但**`companion-apk` ❌ 失败在第 5 步「构建 debug APK」**（Kotlin 编译错误）→ `release` job 被跳过，**没有产生任何 Release 资产**。根因三处（均在我本次新增代码里，**静态校验当时没覆盖到**）：
