@@ -405,12 +405,20 @@ describe("composeOptionsWithDesktop", () => {
 });
 
 describe("buildDesktopPrefDevices", () => {
-  const adbDevice = (serial: string, physical: string | null, state: string, label = serial) => ({
+  // state 必须是 DeviceState 联合类型，不能是宽泛的 string —— 否则 tsc 会拒收
+  // 这个夹具（Type 'string' is not assignable to type 'DeviceState'）。
+  type DeviceStateLiteral = "ready" | "unauthorized" | "offline" | "unknown";
+  const adbDevice = (
+    serial: string,
+    physical: string | null,
+    state: DeviceStateLiteral,
+    label = serial,
+  ) => ({
     serial,
     label,
     state,
     physical_serial: physical,
-    connections: [],
+    connections: [] as { serial: string; kind: "usb" | "wireless"; state: DeviceStateLiteral }[],
   });
 
   it("lists_single_ready_device_so_per_device_module_is_always_visible", () => {
