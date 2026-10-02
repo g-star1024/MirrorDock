@@ -227,7 +227,7 @@
             <td><span class="yes">✅ v0.4.2-beta</span></td>
             <td><span class="no">❌ 未验证</span></td>
             <td><span class="no">❌ 未验证</span></td>
-            <td>无官方 scrcpy 包，运行时回退系统 PATH 中的 scrcpy</td>
+            <td>随包分发 scrcpy 4.1 与 adb（Linux 无官方预编译包，由流水线从官方源码编译，自 v0.3.0 起）；SDL3 等运行时库由发行版提供</td>
           </tr>
         </tbody>
       </table>
@@ -334,6 +334,13 @@
           <span>
             <b>只支持 USB 与同一局域网无线两条路径</b>
             <span class="t">跨网段、穿透内网、经服务器中继均不支持。画面与文件只在你自己的设备之间流动。</span>
+          </span>
+        </li>
+        <li>
+          <span class="dot" aria-hidden="true">✓</span>
+          <span>
+            <b>Linux 安装包需要发行版提供运行库</b>
+            <span class="t">自 v0.3.0 起 Linux 安装包已随包分发 scrcpy 4.1（自官方源码编译，配套 adb 同为 platform-tools 官方二进制）；但 scrcpy 4.x 依赖的 SDL3 与 FFmpeg 动态库不随包，要由你的系统提供。Ubuntu 25.04+ 可直接安装，22.04 / 24.04 需先获取 SDL3，具体命令见仓库 README 的「Linux 运行库说明」。</span>
           </span>
         </li>
         <li>
