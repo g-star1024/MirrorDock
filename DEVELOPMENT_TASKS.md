@@ -574,7 +574,7 @@
 - [x] **a) 手机→电脑发送（2026-10-02 早，Outbox.kt + MainActivity + 文件卡）**：文件卡新增「发送文件到电脑」——SAF 多选 → 复制进下载/MirrorDock（与桌面 `list_device_files`/`fetch_file_from_device` 同目录）：已授权所有文件访问走直接写；API≥29 走 MediaStore Downloads（RELATIVE_PATH，无需权限）；<29 且未授权如实引导。同名顺延不覆盖。**端到端真机验证**：SAF 选 send_test.txt → 手机文件卡实时显示 → `adb pull`（= 桌面取回路径）内容一致 ✓。**排障实录**：首次两次「没有文件被发送」为「最近」列表陈旧条目（底层文件已删，SAF 打开来源 ENOENT），非写入问题；MediaStore 路径一次成功。
 - [x] **b) 输入法托管启动提示（X10-41 待拍板项收口，2026-10-02）**：核实发现该能力已随 X10-39 完整落地——`maybe_switch_host_input_source` 已挂在托盘启动/`mirror_start`/`update_session_options` 三条会话启动路径，切换时 emit `host-input-source-switched`，前端已有提示条（"已临时切换到 ABC 布局，镜像结束后自动恢复"）。任务文档过时的「待拍板」记录就此关闭；真机第三方输入法场景观感并入用户验收清单。
 - [x] **d) 伴侣端 MediaProjection 镜像接入（C4-02 延伸）搁置决策（2026-10-02，用户授权并行处理 abcd 后裁定）**：与 scrcpy 路线能力重叠、工程量大（实时帧传输要走新数据通道）、且「用电脑看手机」主路径（adb/scrcpy）已可用——C4 POC 保持现状（能力探测/统计上行），不进入产品化。若未来出现「无 adb 授权也要看屏」的真实需求再重启评审。
-- [ ] **c) RC 演练**：并入 v0.4.2-beta 发版（按 docs/release-runbook.md 门禁清单走）。前置：workflow 提交 5f8efdc 需用户本地推送（PAT 无 workflow scope；原提交 38590d9 已在代码拆分推送后由 5f8efdc 重建取代，38590d9 为本地悬空提交可回收）。
+- [ ] **c) RC 演练**：并入 v0.4.2-beta 发版（按 docs/release-runbook.md 门禁清单走）。前置已解除：用户已于 2026-10-02 推送 workflow 提交 5f8efdc（remote main=52d1a3f）。本次发版内容=M4 全量（常驻通道/状态通知/双向解除互信/发送区/FGS 崩溃修复/配对加固）+ versioned APK 资产；伴侣端 0.2.1（versionCode 12）随 Release 分发。
 
 ## 最终成品退出条件
 
