@@ -595,8 +595,15 @@
 - [x] **X10-62 常驻会话建立即断的真 bug 修复（2026-10-02 真机验证桩实锤）**：用户报「手机传 APK 提示成功、电脑客户端没有正常显示」。排查路径：①真机查发送区——文件确实已落盘（`安装狮.apk.1` 在 `/sdcard/Download/MirrorDock`），手机端无问题；②手机装的是 0.2.1（无 files_changed 推送能力）+ 桌面 0.4.2（无 X10-60 处理）——版本不对齐是第一层；③自建 MDP2 验证桩（Python，用桌面真实 TLS 身份 identity.der/key + 台账做完整 RECONNECT 握手）实测 0.2.2：**握手与验签全通、paired_ok 后对端立刻 EOF，5 秒一次重连死循环**。根因=`PairingClient.connect()` 完成握手、启动读线程后**立即返回**，而 `PersistentConnectionService` runLoop 紧接着 `client.close()`——会话建立即被自己掐断（b54a222 引入，M4-2 真机测试被「每次重连都能完成握手」掩盖，心跳/下行事件/推送从未真正有存活窗口）。修复=connect() 在读线程上 `join()`，语义改为「返回 = 会话已结束」（扫码配对的一次性会话同样受益；MainActivity/服务的 connect 调用均在后台线程，阻塞无害）。
   - 证据：gradle assembleDebug 绿；companion 0.2.3（versionCode 14）随 CI 出包后真机覆盖安装复测（见下）。
   - 排障插曲：重装 0.2.2 重置了 POST_NOTIFICATIONS 运行时权限（点连接弹权限框挡住流程，pm grant 解决）；run-as 修 prefs 时 SharedPreferences 进程内缓存脏读到空凭据致服务自停（force-stop 重启解决）；手机 prefs 无 `resident_port`（扫码配对时桌面常驻通道未开，paired_ok 未带端口）——用户可感知的影响=「连接上次配对的电脑」提示无可直连电脑，属产品待改进项（配对页应引导开启常驻通道）。
-- [ ] **待验收（X10-59/60/61/62）**：新 APK（0.2.3）+ 新客户端装真机后：拔线出现提示条并自动恢复、工具页收到实时「新文件」提示、发送区删除生效、崩溃卡展示（可制造一次崩溃验证）、设置页开关口径与帮助中心新条目可见、常驻会话持续在线（状态通知不再每 5 秒重连）。
-  - **验收前置条件（守卫轮 2026-10-02 明确，避免误验收）**：桌面端 X10-59/60 修复**不在任何已发布客户端内**——v0.4.2-beta 的 tag=6ad4e15 早于 a2400c3，其安装包既无 USB 自动重连也无本次文案。验收必须用**本地 `pnpm tauri build` 构建的客户端**，或等下一版 tag 发布后再下载；直接在 v0.4.2-beta 上验收拔线行为必然失败。
+- [x] **X10-62 收口：两层根因全修、真机端到端验证通过（2026-10-02 11:4x）**：
+  - **根因一（会话建立即断）**：`PairingClient.connect()` 握手完就返回，服务 runLoop 立即 `client.close()` → 修复=a8a32b3 `readerThread?.join()`（返回=会话结束）。真机复测：会话持续在线（心跳 15s 全通 >2 分钟无断），插拔重连退避正常。
+  - **根因二（UI 线程推送全失败）**：`files_changed`/`last_crash` 推送在主线程做 socket 写 → Android 抛 `NetworkOnMainThreadException` 被 PrintWriter 静默吞掉 → `checkError()` 恒真 → `sendLine` 恒 false（诊断插桩 0515246 实锤：同一客户端心跳工作线程全通、UI 线程 sent=false）。修复=c5b02b4：`linkSendExecutor`（单线程串行）后台发送，`pushLinkLine` 改异步语义（false=无连接走兜底提示）。
+  - **端到端证据（验证桩 /tmp/resident_probe.py，桌面真实 TLS 身份+台账握手）**：`[11:42:50] 上行消息 >>> {"type":"files_changed"}` + `pushLinkLine: sent=true`；心跳 15s 节拍稳定。测试产物已清理（发送区重复副本/probe_test.txt/临时 prefs）。
+  - 诊断日志保留（PersistentLink tag，logcat 可查）。companion versionCode 14 / 0.2.3 线上 artifact 为最终修复版。
+- [x] **X10-63 拖拽传文件（桌面 → 手机发送区）**：Webview 拖放事件按扩展名路由——`.apk` → 安装到当前就绪手机（沿用「多个只装第一个」规则），**其他文件 → 逐个 `send_file_to_device` 发到该手机发送区**（下载/MirrorDock），结果走右下角浮层如实汇报（部分失败列出每个文件原因）；拖拽全屏提示文案同步改为「APK 安装，其他文件进入发送区」。反向拖出（手机 → 桌面）受 scrcpy 窗口机制限制不做，拖入已覆盖高频场景。
+  - 证据：`pnpm build` 通过；vitest 45 passed / 0 failed；真机端到端验证随 X10-62 验证桩轮完成（send_file_to_device 命令链路已在 M4 前真机验证过），拖拽手势本身待用户下一版验收。
+- [ ] **待验收（X10-59/60/61/62/63）**：新 APK（0.2.3，CI artifact `MirrorDock-companion-0.2.3.apk` 起）+ 新桌面客户端装真机后：拔线出现提示条并自动恢复、工具页收到实时「新文件」提示且列表自动刷新、发送区删除生效、崩溃卡展示、设置页开关口径与帮助中心新条目可见、常驻会话持续在线（状态通知不再每 5 秒重连）、拖非 APK 文件到窗口进发送区。
+  - **验收前置条件（守卫轮 2026-10-02 明确，避免误验收）**：桌面端 X10-59/60 修复**不在任何已发布客户端内**——v0.4.2-beta 的 tag=6ad4e15 早于 a2400c3，其安装包既无 USB 自动重连也无本次文案。验收必须用**下一版（v0.4.3-beta）发布包**或本地 `pnpm tauri build` 构建；直接在 v0.4.2-beta 上验收必然失败。
   - **伴侣 APK 0.2.2 来源**：`companion.yml`（workflow「Companion App」）随 4bbfe0b 的 push 已成功产出 artifact `mirrordock-companion-debug`（约 3.8 MB，run 36953624864），可直接下载安装验收。
 
 ## 最终成品退出条件

@@ -1512,14 +1512,45 @@ function App() {
   dragTargetRef.current = readyDevice
     ? { serial: readyDevice.serial, label: displayLabels[readyDevice.serial] ?? readyDevice.label }
     : null;
-  // 拖入的文件里挑出 APK 安装包安装到当前就绪手机；多个时只装第一个并说明，
-  // 不静默批量安装。结果走右下角浮层反馈（拖拽可发生在任何页签）。
-  async function installDroppedApk(paths: string[]) {
+  // 拖拽路由（X10-63）：APK → 安装到当前就绪手机；其他文件 → 发送到该手机的
+  // 发送区（下载/MirrorDock）。混拖时各走各路，分别如实汇报。
+  function handleDroppedFiles(paths: string[]) {
     const apks = paths.filter((path) => path.toLowerCase().endsWith(".apk"));
-    if (apks.length === 0) {
-      setDropInstallNotice({ kind: "error", text: "拖入的文件里没有 APK 安装包，未执行安装。" });
+    const others = paths.filter((path) => !path.toLowerCase().endsWith(".apk"));
+    if (apks.length > 0) void installDroppedApk(apks);
+    if (others.length > 0) void sendDroppedFiles(others);
+  }
+  // 拖入非 APK 文件 → 逐个发送到手机发送区；结果走右下角浮层反馈（拖拽可发生在任何页签）。
+  async function sendDroppedFiles(paths: string[]) {
+    const target = dragTargetRef.current;
+    if (!target) {
+      setDropInstallNotice({ kind: "error", text: "请先在「连接」页连接手机，再拖拽发送文件。" });
       return;
     }
+    const names = paths.map((path) => path.split(/[\\/]/).pop() ?? path);
+    setDropInstallNotice({ kind: "info", text: `正在把 ${names[0]}${paths.length > 1 ? ` 等 ${paths.length} 个文件` : ""} 发送到 ${target.label} 的发送区…` });
+    let sent = 0;
+    const failures: string[] = [];
+    for (let i = 0; i < paths.length; i++) {
+      try {
+        await invoke("send_file_to_device", { serial: target.serial, localPath: paths[i] });
+        sent += 1;
+      } catch (error) {
+        failures.push(`${names[i]}：${errorMessage(error, "发送失败")}`);
+      }
+    }
+    if (failures.length > 0) {
+      setDropInstallNotice({ kind: "error", text: `发送到手机发送区：${sent}/${paths.length} 成功。${failures.join(" ")}` });
+    } else {
+      setDropInstallNotice({
+        kind: "info",
+        text: `已把 ${sent} 个文件发送到 ${target.label} 的发送区（手机「下载 / MirrorDock」）。`,
+      });
+    }
+  }
+  // 拖入的文件里挑出 APK 安装包安装到当前就绪手机；多个时只装第一个并说明，
+  // 不静默批量安装。结果走右下角浮层反馈（拖拽可发生在任何页签）。
+  async function installDroppedApk(apks: string[]) {
     const target = dragTargetRef.current;
     if (!target) {
       setDropInstallNotice({ kind: "error", text: "请先在「连接」页连接手机，再拖拽安装 APK。" });
@@ -1551,7 +1582,7 @@ function App() {
           setApkDragOver(false);
         } else if (event.payload.type === "drop") {
           setApkDragOver(false);
-          void installDroppedApk(event.payload.paths);
+          void handleDroppedFiles(event.payload.paths);
         }
       })
       .then((dispose) => {
@@ -1803,12 +1834,12 @@ function App() {
             <button className="text-button" type="button" onClick={() => setDropInstallNotice(null)}>知道了</button>
           </div>
         )}
-        {/* 拖入 APK 时的全屏提示：说明松手后会发生什么、装到哪台手机。 */}
+        {/* 拖入文件时的全屏提示：APK 装到手机，其他文件进发送区。 */}
         {apkDragOver && (
           <div className="drop-overlay" aria-hidden="true">
             <div className="drop-overlay-card">
-              <strong>松开鼠标，安装 APK</strong>
-              <p>{dragTargetRef.current ? `将安装到：${dragTargetRef.current.label}` : "请先连接一台手机"}</p>
+              <strong>松开鼠标，传文件到手机</strong>
+              <p>{dragTargetRef.current ? `目标：${dragTargetRef.current.label}（APK 安装，其他文件进入发送区）` : "请先连接一台手机"}</p>
             </div>
           </div>
         )}
