@@ -599,6 +599,33 @@ describe("general settings (tray, autostart, dock)", () => {
     ).toBeInTheDocument();
   });
 
+  it("auto_reconnect_switch_copy_covers_both_data_cable_and_wireless", async () => {
+    // X10-59 起该开关同时覆盖 USB 与无线：拔线后同样会自动等待重新插线。
+    // 旧文案（「无线断线自动重连」）会让拔线用户以为这条恢复路径与自己无关。
+    invokeMock.mockImplementation((cmd: string, args?: { settings?: { auto_reconnect?: boolean } }) => {
+      if (cmd === "set_app_settings") {
+        return Promise.resolve({
+          hide_dock_icon: false,
+          auto_reconnect: args?.settings?.auto_reconnect !== false,
+        });
+      }
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+    const checkbox = await screen.findByRole("checkbox", { name: "断线自动重连" });
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
+    expect(await screen.findByText(/无线掉线等手机回网/)).toBeInTheDocument();
+    expect(await screen.findByText(/数据线被拔掉等重新插线/)).toBeInTheDocument();
+    // 手动关闭后仍如实说明影响范围（两种连接都要手动重连）。
+    fireEvent.click(checkbox);
+    expect(await screen.findByText("已关闭自动重连：断开后需要手动重新连接。")).toBeInTheDocument();
+    // 重新开启时提示必须点明 USB 也在覆盖范围内。
+    fireEvent.click(checkbox);
+    expect(
+      await screen.findByText(/已开启断线自动重连：无线掉线或数据线被拔掉后/),
+    ).toBeInTheDocument();
+  });
+
   it("shows_the_dock_option_only_on_macos", async () => {
     const stubUserAgent = (userAgent: string) => {
       Object.defineProperty(window.navigator, "userAgent", { value: userAgent, configurable: true });

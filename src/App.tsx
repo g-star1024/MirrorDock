@@ -163,7 +163,7 @@ type PairingStatus = {
 type WirelessServices = { pairing: string[]; connect: string[] };
 
 // 应用级设置（后端持久化到 app-settings.json）：只影响客户端自身行为
-// （窗口、图标、无线自动重连），与镜像会话参数（SessionOptions）严格分开。
+// （窗口、图标、断线自动重连），与镜像会话参数（SessionOptions）严格分开。
 export type AppSettingsView = { hide_dock_icon: boolean; auto_reconnect: boolean };
 // 平台判断：只有 macOS 提供「隐藏 Dock 图标」。做成纯函数方便测试。
 export function isMacPlatform(userAgent: string): boolean {
@@ -658,7 +658,7 @@ function App() {
     try {
       const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, auto_reconnect: enabled } });
       setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true, auto_reconnect: saved.auto_reconnect !== false });
-      setGeneralNotice(enabled ? "无线镜像意外断开时，会等待手机回网并自动恢复（最多 15 分钟）。" : "已关闭自动重连：无线断开后需要手动重新连接。");
+      setGeneralNotice(enabled ? "已开启断线自动重连：无线掉线或数据线被拔掉后，会等待连接恢复并自动重建镜像（最多 15 分钟）。" : "已关闭自动重连：断开后需要手动重新连接。");
     } catch (error) {
       setAppSettings(previous);
       setGeneralNotice(errorMessage(error, "无法修改自动重连设置。"));
@@ -2377,7 +2377,7 @@ function App() {
 
             <section className="settings-card">
               <header className="settings-card-head">
-                <div><h2>通用</h2><p>窗口关闭行为、菜单栏/托盘与开机启动。</p></div>
+                <div><h2>通用</h2><p>窗口关闭行为、断线自动重连、菜单栏/托盘与开机启动。</p></div>
               </header>
               <div className="settings-rows">
                 <div className="setting-row">
@@ -2398,10 +2398,10 @@ function App() {
                 )}
                 <div className="setting-row">
                   <div className="setting-info">
-                    <span className="setting-name">无线断线自动重连</span>
-                    <span className="setting-desc">无线镜像意外断开（如手机熄屏后从网络消失）时，自动等待手机回网并恢复镜像（最多 15 分钟）。手动关闭镜像窗口不会触发。</span>
+                    <span className="setting-name">断线自动重连</span>
+                    <span className="setting-desc">镜像意外断开时自动等待连接恢复并重建镜像（最多 15 分钟）：无线掉线等手机回网，数据线被拔掉等重新插线。手动关闭镜像窗口不会触发。</span>
                   </div>
-                  <label className="setting-toggle"><input type="checkbox" aria-label="无线断线自动重连" checked={appSettings.auto_reconnect} onChange={e => void toggleAutoReconnect(e.target.checked)} /></label>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="断线自动重连" checked={appSettings.auto_reconnect} onChange={e => void toggleAutoReconnect(e.target.checked)} /></label>
                 </div>
                 <p className="setting-note">点窗口关闭按钮 = 最小化到菜单栏/托盘，不会结束镜像会话。菜单栏/托盘里可以：连接/断开、开始/结束屏幕录制、屏幕唤醒、手机截图。</p>
                 <p className="setting-note">镜像画面黑屏（手机熄屏）时，在镜像窗口上点右键即可直接点亮屏幕，不必回到本窗口。</p>

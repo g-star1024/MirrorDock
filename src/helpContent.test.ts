@@ -31,4 +31,16 @@ describe("helpContent", () => {
     // 与脱敏承诺一致：帮助文案必须如实说明诊断包不含序列号/配对码/路径。
     expect(text).toContain("抹去");
   });
+
+  it("faq_explains_recovery_for_both_the_data_cable_and_wireless_drops", () => {
+    const faq = helpArticles.find((entry) => entry.id === "faq");
+    expect(faq).toBeDefined();
+    const text = faq?.paragraphs.join("\n") ?? "";
+    // X10-59 起「断线自动重连」同时覆盖数据线与无线；帮助文案两种都要说清，
+    // 并指明可在设置里关闭——否则用户既不知道拔线也会恢复，也找不到开关。
+    expect(text).toContain("断线自动重连");
+    expect(text).toContain("数据线");
+    expect(text).toContain("无线");
+    expect(text).toContain("设置 → 通用");
+  });
 });
