@@ -32,6 +32,19 @@ describe("helpContent", () => {
     expect(text).toContain("抹去");
   });
 
+  it("faq_explains_companion_one_tap_reconnect_needs_resident_enabled_first", () => {
+    const faq = helpArticles.find((entry) => entry.id === "faq");
+    expect(faq).toBeDefined();
+    const text = faq?.paragraphs.join("\n") ?? "";
+    // X10-64：常驻端口只在扫码那一刻交给手机，顺序反了会走进「没有可直连的
+    // 电脑」的死胡同。帮助文案必须给出顺序要求与补救动作（重新扫码），
+    // 并且不能出现「不必开启」这类会让用户踩坑的说法。
+    expect(text).toContain("常驻通道");
+    expect(text).toContain("先开启");
+    expect(text).toContain("重新扫一次码");
+    expect(text).not.toContain("扫码配对时无需开启");
+  });
+
   it("faq_explains_recovery_for_both_the_data_cable_and_wireless_drops", () => {
     const faq = helpArticles.find((entry) => entry.id === "faq");
     expect(faq).toBeDefined();

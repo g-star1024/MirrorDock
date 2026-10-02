@@ -492,6 +492,9 @@ function App() {
   const [residentPort, setResidentPort] = useState<number | null>(null);
   const [residentBusy, setResidentBusy] = useState(false);
   const [residentMessage, setResidentMessage] = useState<string | null>(null);
+  // 开启成功后的如实提醒（X10-64）：端口只在扫码那一刻交给手机，已断开的手机
+  // 收不到更新——这类提示不是错误，用独立状态、与失败消息分开呈现。
+  const [residentNotice, setResidentNotice] = useState<string | null>(null);
   const [pairingQr, setPairingQr] = useState<string | null>(null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingError, setPairingError] = useState<string | null>(null);
@@ -1199,10 +1202,17 @@ function App() {
   async function startResident() {
     setResidentBusy(true);
     setResidentMessage(null);
+    setResidentNotice(null);
     try {
       const port = await invoke<number>("companion_begin_resident");
       setResidentActive(true);
       setResidentPort(port);
+      // 如实告知边界（X10-64）：端口只在扫码配对的那一刻交给手机，桌面端无法
+      // 主动通知已经断开的手机。此前在关闭状态下配对过的设备必须重新扫一次码，
+      // 否则「连接上次配对的电脑」会一直显示没有可直连的电脑。
+      setResidentNotice(
+        `常驻通道已开启（端口 ${port}）。端口在扫码配对时才会交给手机：手机上若提示「没有可直连的电脑」，请在手机上重新扫一次码。`
+      );
     } catch (error) {
       setResidentMessage(errorMessage(error, "常驻通道开启失败。"));
     } finally {
@@ -1213,6 +1223,7 @@ function App() {
   async function stopResident() {
     setResidentBusy(true);
     setResidentMessage(null);
+    setResidentNotice(null);
     try {
       await invoke("companion_end_resident");
       setResidentActive(false);
@@ -2340,6 +2351,11 @@ function App() {
                   结束配对
                 </button>
               </span>
+              {/* X10-64：常驻端口只在扫码那一刻交给手机，顺序反了就会走进
+                  「没有可直连的电脑」的死胡同——在扫码入口旁边先说清顺序。 */}
+              {!residentActive && (
+                <p className="capability-pending">提示：想让手机用一键免扫码重连，请先在下方开启「常驻通道」，再让手机扫码——通道端口只在扫码配对时交给手机。</p>
+              )}
               {pairingOffer && (
                 <div className="screenshot-result">
                   <p className="capability-summary">
@@ -2377,7 +2393,7 @@ function App() {
               {/* M4-2 常驻通道：开启后已配对设备在伴侣 App 内一键免扫码直连。 */}
               <div className="trusted-devices" aria-label="常驻通道">
                 <strong>常驻通道（免扫码重连）</strong>
-                <p className="capability-pending">开启后，已配对的伴侣设备打开 App 里的「连接上次配对的电脑」，即可直接建立互信会话并尝试自动回连镜像通道，无需重新扫码。扫码配对时无需开启。</p>
+                <p className="capability-pending">开启后，已配对的伴侣设备打开 App 里的「连接上次配对的电脑」，即可直接建立互信会话并尝试自动回连镜像通道，无需重新扫码。要注意先后顺序：通道端口是在扫码配对的那一刻交给手机的，电脑只会把端口变化告诉当前连着的手机——所以请先开启常驻通道、再在手机上扫码；如果手机是在关闭状态下配过对，需要在手机上重新扫一次码（电脑这边不用改）。关闭常驻通道后，已配对的手机会如实显示「没有可直连的电脑」。</p>
                 <span>
                   <button className="secondary-button" type="button" disabled={residentBusy || residentActive} onClick={() => void startResident()}>
                     开启常驻通道
@@ -2387,6 +2403,7 @@ function App() {
                   </button>
                 </span>
                 {residentActive && <p className="capability-summary">常驻监听中{residentPort ? `（端口 ${residentPort}）` : ""} · 等待伴侣设备连接。</p>}
+                {residentNotice && <p className="capability-summary">{residentNotice}</p>}
                 {residentMessage && <p className="capability-pending" role="alert">{residentMessage}</p>}
                 {residentActive && pairingStatus && pairingStatus.events.length > 0 && (
                   <ul className="transfer-file-list">

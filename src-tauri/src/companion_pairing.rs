@@ -539,7 +539,7 @@ pub fn begin_resident(
         inner.phase = PairingPhase::Listening;
     }
     state.push_event(format!(
-        "常驻通道已开启（端口 {port}{}）：已配对的伴侣设备可免扫码直连",
+        "常驻通道已开启（端口 {port}{}）：此后扫码配对的伴侣设备可免扫码直连（此前在关闭状态下配过对的手机需重新扫一次码）",
         if used_fallback {
             format!("，默认端口 {RESIDENT_DEFAULT_PORT} 被占用已回退")
         } else {

@@ -570,6 +570,20 @@ describe("companion pairing", () => {
       expect(screen.queryByText(/等待伴侣扫码/)).not.toBeInTheDocument();
     });
   });
+
+  it("resident_channel_copy_states_ordering_and_rescan_recovery", async () => {
+    render(<App />);
+    // X10-64：常驻端口只在扫码配对的那一刻交给手机，电脑无法通知已断开的手机。
+    // 界面必须写清顺序要求与补救动作（重新扫码），不得再出现会让用户走进
+    // 「没有可直连的电脑」死胡同的「扫码配对时无需开启」说法。
+    expect(await screen.findByText(/先开启常驻通道、再在手机上扫码/)).toBeInTheDocument();
+    expect(await screen.findByText(/需要在手机上重新扫一次码（电脑这边不用改）/)).toBeInTheDocument();
+    expect(screen.queryByText(/扫码配对时无需开启/)).not.toBeInTheDocument();
+    // 常驻通道关闭时，扫码入口旁边要先说清顺序。
+    expect(
+      await screen.findByText(/请先在下方开启「常驻通道」，再让手机扫码/),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("general settings (tray, autostart, dock)", () => {
