@@ -12,7 +12,12 @@
 `android.jar` + AndroidX 的 classes.jar，**直接跑 kotlinc 做前端类型检查**。
 
 用法（在仓库根目录执行）：
-    python3 scripts/check-companion-kotlin.py [--full]
+    python3 scripts/check-companion-kotlin.py
+
+**故意不接入 CI**：本脚本依赖本机的 `~/.gradle` 依赖缓存与
+`~/Library/Android/sdk`，GitHub runner 上两者都不存在，放进 `verify` job 会直接
+失败（2026-10-03 实测）。它的定位是**本地提交前的快速类型检查**；CI 里的等价物
+就是 `companion-apk` job 的真实 gradle 构建。
 
 默认模式：跑**前端类型检查**（-Xuse-k2 已不需要，只要不加 -Xbackend-threads 之类
 就会在 IR lowering 阶段因缺 aapt 产物而报 BackendException —— 那是本脚本环境

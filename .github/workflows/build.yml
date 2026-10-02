@@ -72,12 +72,11 @@ jobs:
       - name: 伴侣端静态交叉校验
         run: python3 scripts/verify-companion.py
 
-      # X10-73 续：静态校验只看得到资源引用，看不到 Kotlin 类型错误。v0.4.7 连续
-      # 两次发版都因 ShortcutInfo.Builder 签名用错而让 companion-apk 失败、Release
-      # 整体跳过。这一步直接跑 kotlinc 做类型检查（用 Gradle 缓存里的编译器 +
-      # SDK 的 android.jar），把编译期错误拦在 push 阶段。
-      - name: 伴侣端 Kotlin 编译检查
-        run: python3 scripts/check-companion-kotlin.py
+      # 注意：scripts/check-companion-kotlin.py **故意不放进 CI**（2026-10-03 实测
+      # 放进去会让 verify 失败）。它依赖本机的 ~/.gradle 依赖缓存与
+      # ~/Library/Android/sdk —— GitHub runner 上两者都不存在，脚本会 die(2)。
+      # 它的定位是「本地提交前的快速类型检查」；CI 里的等价物是 companion-apk
+      # job 的真实 gradle 构建。详见该脚本头部注释与 AGENTS.md。
 
   package:
     name: 打包 ${{ matrix.label }}

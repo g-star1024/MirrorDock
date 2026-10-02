@@ -31,7 +31,7 @@ Run the narrowest applicable check; the leftmost that exists is the fastest sign
 | Frontend tests | `pnpm vitest run` | Rendering contracts + pure functions. |
 | Rust | `cargo test --manifest-path src-tauri/Cargo.toml` | Then `cargo clippy --manifest-path src-tauri/Cargo.toml`. |
 | Companion (Android) static | `python3 scripts/verify-companion.py` | **Required before every companion change.** Resource references, ids, manifest classes, Kotlin type traps. |
-| Companion (Android) Kotlin | `python3 scripts/check-companion-kotlin.py` | **Required before every companion change.** Runs a real `kotlinc` type check (compiler from the Gradle cache + `android.jar`) without gradle. |
+| Companion (Android) Kotlin | `python3 scripts/check-companion-kotlin.py` | **Required before every companion change, but local-only.** Real `kotlinc` type check. Not in CI — it needs this machine's `~/.gradle` cache and Android SDK, which runners lack. |
 | Companion real build | push a `v*` tag, or run `companion.yml` | Gradle only exists on the CI runner. |
 
 Both companion scripts exist because this workstation has no `gradle` and the sandbox blocks large downloads, so a full Android build is CI-only. `check-companion-kotlin.py` runs the real Kotlin compiler front-end (type checking) using `kotlin-compiler-embeddable` from the Gradle cache and the SDK's `android.jar`; it needs JDK 17 (`/usr/bin/java`) because kotlinc 2.0.20 cannot parse a Java 25 version string. A `BackendException` during IR lowering is expected in that ad-hoc environment (no aapt-generated `R.class`) and is not a code defect — the script reports only front-end `error:` lines, which are the ones that break CI.
