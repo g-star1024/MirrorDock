@@ -1,6 +1,6 @@
 [package]
 name = "mirrordock"
-version = "0.4.4"
+version = "0.4.5"
 description = "Local-first Android desktop mirroring"
 authors = ["MirrorDock"]
 edition = "2021"
