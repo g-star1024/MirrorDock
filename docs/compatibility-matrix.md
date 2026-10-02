@@ -6,10 +6,10 @@
 
 | 平台 | 版本 | 打包 | 安装验证 | 运行验证 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| macOS Intel | macOS 13+（目标下限待真机验证） | ✅ v0.4.1-beta | ❌ 未验证（开发机即打包机） | ✅ 开发机日常使用 | 随包 scrcpy 已证实生效 |
-| macOS Apple Silicon | 同上 | ✅ v0.4.1-beta | ❌ | ❌ | 外部阻塞 |
-| Windows x64 | Windows 10/11 | ✅ v0.4.1-beta | ❌ | ❌ | 录制收尾（SIGTERM）在 Windows 无对应机制，风险已在 Cargo.toml 注明 |
-| Ubuntu x64 | 22.04+ | ✅ v0.4.1-beta | ❌ | ❌ | 无官方 scrcpy 包，运行时回退 PATH（文档需明示） |
+| macOS Intel | macOS 13+（目标下限待真机验证） | ✅ v0.4.2-beta | ❌ 未验证（开发机即打包机） | ✅ 开发机日常使用 | 随包 scrcpy 已证实生效 |
+| macOS Apple Silicon | 同上 | ✅ v0.4.2-beta | ❌ | ❌ | 外部阻塞 |
+| Windows x64 | Windows 10/11 | ✅ v0.4.2-beta | ❌ | ❌ | 录制收尾（SIGTERM）在 Windows 无对应机制，风险已在 Cargo.toml 注明 |
+| Ubuntu x64 | 22.04+ | ✅ v0.4.2-beta | ❌ | ❌ | 无官方 scrcpy 包，运行时回退 PATH（文档需明示） |
 
 ## 设备矩阵（真机）
 
