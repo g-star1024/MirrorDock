@@ -42,6 +42,7 @@ import App, {
   isProEdition,
   lockSummary,
   lockTag,
+  notificationTime,
   readOptions,
   readShortcuts,
   recordingFileName,
@@ -259,6 +260,18 @@ describe("relativeTime", () => {
     expect(relativeTime(now - 3 * 3600)).toBe("3 小时前使用");
     expect(relativeTime(now - 86400)).toBe("昨天使用");
     expect(relativeTime(now - 3 * 86400)).toBe("3 天前使用");
+  });
+});
+
+describe("notificationTime", () => {
+  it("shows_time_only_for_today_and_date_for_other_days", () => {
+    const now = new Date(2026, 9, 2, 15, 0).getTime();
+    // 当天上午的通知：只显示时刻。
+    const morning = new Date(2026, 9, 2, 9, 5).getTime();
+    expect(notificationTime(morning, now)).toBe("09:05");
+    // 昨天的通知：带日期。
+    const yesterday = new Date(2026, 9, 1, 23, 59).getTime();
+    expect(notificationTime(yesterday, now)).toBe("10-01 23:59");
   });
 });
 

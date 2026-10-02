@@ -207,6 +207,18 @@ export function expiryText(expiresAt: number | null) {
 type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
+
+/** X10-66 通知镜像一期：手机转来的通知（内容只在内存，不落盘）。 */
+export type PhoneNotification = { pkg: string; app: string; title: string; text: string; posted: number };
+
+/** 通知时间展示：当天的只显示时刻，跨天带日期。 */
+export function notificationTime(posted: number, now: number = Date.now()): string {
+  const date = new Date(posted);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const sameDay = new Date(now).toDateString() === date.toDateString();
+  return sameDay ? hm : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hm}`;
+}
 // 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
 type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, desktop_app: null, camera_source: false };
@@ -476,6 +488,8 @@ function App() {
   // X10-60：伴侣端报来的崩溃堆栈（仅内存展示，不落盘、不上传；点「知道了」即散）。
   const [companionCrash, setCompanionCrash] = useState<string | null>(null);
   const [companionCrashExpanded, setCompanionCrashExpanded] = useState(false);
+  // X10-66 通知镜像：手机转来的通知（最新在前，最多 50 条，仅内存）。
+  const [phoneNotifications, setPhoneNotifications] = useState<PhoneNotification[]>([]);
   // 版本与授权：读取失败时按「版本未知」呈现，不阻断镜像主流程。
   const [entitlement, setEntitlement] = useState<EntitlementView | null>(null);
   const [licenseInput, setLicenseInput] = useState("");
@@ -1725,6 +1739,28 @@ function App() {
       if (unlisten) unlisten();
     };
   }, []);
+  // X10-66 通知镜像一期：手机新通知实时进面板。只在内存展示（最近 50 条），
+  // 不落盘；转发开关与隐私边界都在手机端（默认关、可随时关）。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<PhoneNotification>("companion-notification", (event) => {
+      const item = event.payload;
+      if (!disposed && item && typeof item.pkg === "string") {
+        setPhoneNotifications((prev) => [item, ...prev].slice(0, 50));
+      }
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
   // 选中设备变化时重新探测能力信息。只读取设备信息，不启动镜像。
   // 探测结果用于设置页「转发手机声音」开关的一致性；能力说明文案在帮助中心。
   useEffect(() => {
@@ -2254,6 +2290,37 @@ function App() {
                 <p className="capability-pending">截图、录像与文件传输需要先在「连接」页连接并授权手机。</p>
               </div>
             )}
+
+            {/* X10-66 通知镜像一期：手机转来的通知（伴侣通道，不依赖 USB/ADB 镜像）。
+                只在内存展示最近 50 条，不落盘；转发开关在手机端（默认关）。 */}
+            <div className="capability-panel notify-panel" aria-live="polite" style={{ marginTop: 16 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong>手机通知</strong>
+                {phoneNotifications.length > 0 && (
+                  <button className="text-button" type="button" onClick={() => setPhoneNotifications([])}>
+                    清空
+                  </button>
+                )}
+              </span>
+              {phoneNotifications.length === 0 ? (
+                <p className="capability-pending">
+                  在手机伴侣 App 打开「通知镜像」并授予读取通知权限后，新通知会实时出现在这里（需要手机与电脑的常驻连接在线）。通知只在本窗口临时展示，不保存、不经过任何云端。
+                </p>
+              ) : (
+                <ul className="transfer-file-list">
+                  {phoneNotifications.map((item, index) => (
+                    <li key={`${item.posted}-${item.pkg}-${index}`}>
+                      <span className="transfer-file-name">
+                        <strong style={{ marginRight: 6 }}>[{item.app || item.pkg}]</strong>
+                        {item.title}
+                        {item.text ? `：${item.text}` : ""}
+                      </span>
+                      <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>{notificationTime(item.posted)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </section>
 
           {/* -- 无线 -------------------------------------------------------- */}

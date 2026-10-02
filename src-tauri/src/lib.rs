@@ -6837,7 +6837,8 @@ pub fn run() {
             if let Ok(path) = input_source_backup_path(app.handle()) {
                 restore_persisted_input_source(app.handle(), &path);
             }
-            // 伴侣端上行事件转发（X10-60）：发送区新文件 / 崩溃堆栈 → 前端。
+            // 伴侣端上行事件转发（X10-60/X10-66）：发送区新文件 / 崩溃堆栈 /
+            // 手机通知 → 前端。通知内容只进前端内存（不落盘、不进日志）。
             let hook_handle = app.handle().clone();
             if let Some(state) = app.try_state::<Arc<companion_pairing::PairingState>>() {
                 state.set_event_hook(Arc::new(move |value: &serde_json::Value| {
@@ -6850,6 +6851,21 @@ pub fn run() {
                             let _ = hook_handle.emit(
                                 "companion-crash-report",
                                 serde_json::json!({ "stack": stack }),
+                            );
+                        }
+                        Some("notification") => {
+                            let str_field = |key: &str| {
+                                value.get(key).and_then(|v| v.as_str()).unwrap_or("").to_owned()
+                            };
+                            let _ = hook_handle.emit(
+                                "companion-notification",
+                                serde_json::json!({
+                                    "pkg": str_field("pkg"),
+                                    "app": str_field("app"),
+                                    "title": str_field("title"),
+                                    "text": str_field("text"),
+                                    "posted": value.get("posted").and_then(|v| v.as_u64()).unwrap_or(0),
+                                }),
                             );
                         }
                         _ => {}

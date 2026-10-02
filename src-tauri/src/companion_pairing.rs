@@ -864,6 +864,12 @@ async fn serve_session(
                                 state.push_event("伴侣端上报了崩溃记录（仅本机界面展示）");
                                 state.forward_event(&value);
                             }
+                            // 手机通知转发（X10-66 一期）：只进前端通知面板。事件流
+                            // 只写「来了一条」——标题/内容不入事件流、不落盘、不进日志。
+                            Some("notification") => {
+                                state.push_event("伴侣端转来一条手机通知");
+                                state.forward_event(&value);
+                            }
                             Some(other) => {
                                 state.push_event(format!("收到未知消息类型 {other}（已忽略）"));
                             }
@@ -1745,6 +1751,111 @@ mod tests {
             }
         };
         assert!(pushed.contains("\"recording\""), "got {pushed}");
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    /// 通知转发（X10-66 一期）端到端：伴侣端发 `notification` 行，事件钩子收到
+    /// 完整 JSON；事件流只出现通用文案——通知标题/内容不得写进事件流（不落盘）。
+    #[tokio::test]
+    async fn notification_from_companion_reaches_the_event_hook() {
+        use pkcs8::EncodePublicKey as _;
+        use tokio::io::AsyncWriteExt;
+
+        let workdir = std::env::temp_dir().join(format!("md-notify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        let state = Arc::new(PairingState::default());
+
+        let signing = test_device_key();
+        let spki = signing.verifying_key().to_public_key_der().unwrap();
+        let store = PairedStore::new(&workdir);
+        store
+            .upsert(PairedCompanion {
+                pairing_id: "NOTIFYTEST0001".into(),
+                model: "Notify-Test".into(),
+                pubkey_hex: hex_lower(spki.as_bytes()),
+                added_at: 1,
+                last_seen: 1,
+            })
+            .unwrap();
+
+        // 钩子接进通道，测试断言收到的通知。
+        let (hook_tx, mut hook_rx) = mpsc::unbounded_channel::<serde_json::Value>();
+        state.set_event_hook(Arc::new(move |value: &serde_json::Value| {
+            let _ = hook_tx.send(value.clone());
+        }));
+
+        let (identity, _) = PairingIdentity::load_or_create(&workdir).unwrap();
+        let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = std_listener.local_addr().unwrap().port();
+        let listener = set_nonblocking_and_convert(std_listener).unwrap();
+        let loop_state = state.clone();
+        let (_tx, rx) = oneshot::channel::<()>();
+        loop_state.inner.lock().unwrap().resident = true;
+        tokio::spawn(async move {
+            run_accept_loop(listener, identity, String::new(), store, loop_state, rx, true).await;
+        });
+
+        // RECONNECT 握手（与 broadcast 测试同构），然后上行一条通知。
+        let tls = tls_connect(port, &fingerprint_of(&workdir)).await;
+        let (read_half, mut write_half) = tokio::io::split(tls);
+        let mut lines = BufReader::new(read_half).lines();
+        write_half
+            .write_all(b"MDP2 RECONNECT NOTIFYTEST0001\n")
+            .await
+            .unwrap();
+        let _welcome = lines.next_line().await.unwrap().unwrap();
+        let challenge: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        use p256::ecdsa::signature::{SignatureEncoding, Signer};
+        let sig: p256::ecdsa::Signature = signing
+            .sign(hex_decode(challenge["nonce"].as_str().unwrap()).unwrap().as_slice());
+        write_half
+            .write_all(
+                format!(
+                    "{{\"type\":\"challenge_response\",\"sig\":\"{}\"}}\n",
+                    hex_lower(sig.to_der().to_vec().as_slice())
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let paired_line = lines.next_line().await.unwrap().unwrap();
+        assert!(paired_line.contains("paired_ok"), "got {paired_line}");
+
+        write_half
+            .write_all(
+                // 行协议以换行分帧：缺尾部 \n 服务端永远等不到行尾（黏包坑实锤）。
+                r#"{"type":"notification","pkg":"com.example.chat","app":"聊天","title":"机密标题","text":"机密内容","posted":1727840000000}"#
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        // 行协议以换行分帧：缺尾部 \n 服务端永远等不到行尾。
+        write_half.write_all(b"\n").await.unwrap();
+        // tokio-rustls 的写可能滞留在会话缓冲，不 flush 数据不落 TCP。
+        write_half.flush().await.unwrap();
+
+        let received = match tokio::time::timeout(std::time::Duration::from_secs(10), hook_rx.recv())
+            .await
+        {
+            Ok(v) => v.expect("钩子通道未关闭"),
+            Err(_) => {
+                eprintln!("服务端事件流：{:#?}", state.status().events);
+                panic!("钩子必须收到通知");
+            }
+        };
+        assert_eq!(received["type"], "notification");
+        assert_eq!(received["title"], "机密标题");
+        assert_eq!(received["pkg"], "com.example.chat");
+
+        // 事件流只允许通用文案，标题/内容不得出现（给用户看的一侧，也是落盘面）。
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let events = state.status().events;
+        assert!(events.iter().any(|e| e.contains("伴侣端转来一条手机通知")));
+        assert!(
+            events.iter().all(|e| !e.contains("机密标题") && !e.contains("机密内容")),
+            "通知内容不得进入事件流：{events:#?}"
+        );
         let _ = std::fs::remove_dir_all(&workdir);
     }
 
