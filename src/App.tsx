@@ -471,6 +471,11 @@ function App() {
   const [diagnosticsMessage, setDiagnosticsMessage] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<string[] | null>(null);
+  // X10-60：伴侣端推送「发送区有新文件」的时间戳（null = 无新事件）。
+  const [filesChangedHint, setFilesChangedHint] = useState<number | null>(null);
+  // X10-60：伴侣端报来的崩溃堆栈（仅内存展示，不落盘、不上传；点「知道了」即散）。
+  const [companionCrash, setCompanionCrash] = useState<string | null>(null);
+  const [companionCrashExpanded, setCompanionCrashExpanded] = useState(false);
   // 版本与授权：读取失败时按「版本未知」呈现，不阻断镜像主流程。
   const [entitlement, setEntitlement] = useState<EntitlementView | null>(null);
   const [licenseInput, setLicenseInput] = useState("");
@@ -1343,8 +1348,26 @@ function App() {
       const receipt = await invoke<TransferReceipt>("fetch_file_from_device", { serial, fileName });
       setLastTransfer(receipt);
       setTransferMessage("已保存到这台电脑的「下载 / MirrorDock」文件夹。");
+      // 文件已安全落在本机，顺带问一下是否清理手机上的原件（X10-60 发送区清理）。
+      setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
     } catch (error) {
       setTransferError(errorMessage(error, "文件没有从手机取回。"));
+    } finally {
+      setTransferBusy(false);
+    }
+  }
+
+  // 删除手机发送区里的一个文件（X10-60）：只删「下载 / MirrorDock」内的这个文件。
+  async function deleteDeviceFile(serial: string, fileName: string) {
+    setTransferBusy(true);
+    setTransferMessage(null);
+    setTransferError(null);
+    try {
+      await invoke("delete_device_file", { serial, fileName });
+      setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
+      setTransferMessage(`已从手机删除：${fileName}`);
+    } catch (error) {
+      setTransferError(errorMessage(error, "文件没有从手机上删除。"));
     } finally {
       setTransferBusy(false);
     }
@@ -1561,25 +1584,96 @@ function App() {
       if (unlisten) unlisten();
     };
   }, []);
-  // 无线断线自动重连进度（X10-45）：断开 → 等待回网 → 成功恢复 / 放弃。
+  // 断线自动重连进度（X10-45 无线 / X10-59 USB）：中断 → 等待 → 成功恢复 / 放弃。
   useEffect(() => {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     if (!hasTauri) return;
     let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen<{ status: "waiting" | "succeeded" | "gave_up"; endpoint: string }>(
+    void listen<{ status: "waiting" | "succeeded" | "gave_up"; endpoint: string; kind?: "wireless" | "usb" }>(
       "wireless-reconnect-status",
       (event) => {
         const status = event.payload?.status;
+        const usb = event.payload?.kind === "usb";
         if (status === "waiting") {
-          setReconnectNotice("无线连接已断开，正在等待手机重新上线，回网后会自动恢复镜像（最多等 15 分钟）。");
+          setReconnectNotice(usb
+            ? "数据线已断开，正在等待重新插入，插回后会自动恢复镜像（最多等 15 分钟）。"
+            : "无线连接已断开，正在等待手机重新上线，回网后会自动恢复镜像（最多等 15 分钟）。");
         } else if (status === "succeeded") {
-          setReconnectNotice("手机已回网，镜像会话已自动恢复。");
+          setReconnectNotice(usb ? "数据线已重新连接，镜像会话已自动恢复。" : "手机已回网，镜像会话已自动恢复。");
         } else {
-          setReconnectNotice("等待手机回网超时，已停止自动重连。需要时请手动重新连接。");
+          setReconnectNotice(usb
+            ? "等待重新插回数据线超时，已停止自动重连。需要时请手动重新连接。"
+            : "等待手机回网超时，已停止自动重连。需要时请手动重新连接。");
         }
       },
     )
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+  // 镜像会话意外中断（X10-59）：镜像窗口是独立进程，掉线时窗口消失但应用还在，
+  // 这里给用户一句明确解释；若自动重连接管，后续 waiting 事件会覆盖本提示。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ serial: string; unexpected: boolean }>("mirror-session-ended", (event) => {
+      if (event.payload?.unexpected) {
+        setReconnectNotice("镜像连接已中断（设备连接断开）。");
+      }
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+  // X10-60：伴侣端发送区有新文件 → 提示 + 已打开的列表自动刷新。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen("companion-files-changed", () => {
+      if (!disposed) setFilesChangedHint(Date.now());
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+  // 收到新文件事件后的实际动作：列表开着就刷新；没开着只留提示，用户打开列表时自然会看到。
+  useEffect(() => {
+    if (filesChangedHint === null) return;
+    setTransferMessage("手机发送区有新文件到达。");
+    if (readyDevice && deviceFiles !== null && !transferBusy) {
+      void refreshDeviceFiles(readyDevice.serial);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesChangedHint]);
+  // X10-60：伴侣端崩溃堆栈上报（本地点对点，仅界面展示）。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ stack: string }>("companion-crash-report", (event) => {
+      if (!disposed && event.payload?.stack) setCompanionCrash(event.payload.stack);
+    })
       .then((dispose) => {
         if (disposed) dispose();
         else unlisten = dispose;
@@ -1796,6 +1890,20 @@ function App() {
                     {reconnectNotice}
                     <button type="button" className="dismiss-button" aria-label="关闭这条通知" title="关闭" onClick={() => setReconnectNotice(null)}>×</button>
                   </p>
+                )}
+                {companionCrash && (
+                  <div className="diagnostic" role="status">
+                    <p>伴侣 App 报来一份崩溃记录（经本机连接点对点送达，未上传云端）：</p>
+                    {companionCrashExpanded && (
+                      <pre style={{ maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap", fontSize: 12 }}>{companionCrash}</pre>
+                    )}
+                    <span>
+                      <button type="button" className="text-button" onClick={() => setCompanionCrashExpanded((v) => !v)}>
+                        {companionCrashExpanded ? "收起详情" : "查看详情"}
+                      </button>
+                      <button type="button" className="dismiss-button" aria-label="关闭崩溃记录" title="知道了" onClick={() => { setCompanionCrash(null); setCompanionCrashExpanded(false); }}>×</button>
+                    </span>
+                  </div>
                 )}
                 {sessionActive && pinPadActive && (
                   <p className="diagnostic" role="status">🔒 此画面受系统安全保护，无法镜像。请在手机上直接输入密码解锁，解锁后画面自动恢复。</p>
@@ -2066,6 +2174,7 @@ function App() {
                         <li key={name}>
                           <span className="transfer-file-name">{name}</span>
                           <button className="text-button" type="button" disabled={transferBusy} onClick={() => void fetchDeviceFile(readyDevice.serial, name)}>取回到电脑</button>
+                          <button className="text-button danger" type="button" disabled={transferBusy} onClick={() => void deleteDeviceFile(readyDevice.serial, name)}>删除</button>
                         </li>
                       ))}
                     </ul>

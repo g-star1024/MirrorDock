@@ -577,6 +577,17 @@
 - [x] **d) 伴侣端 MediaProjection 镜像接入（C4-02 延伸）搁置决策（2026-10-02，用户授权并行处理 abcd 后裁定）**：与 scrcpy 路线能力重叠、工程量大（实时帧传输要走新数据通道）、且「用电脑看手机」主路径（adb/scrcpy）已可用——C4 POC 保持现状（能力探测/统计上行），不进入产品化。若未来出现「无 adb 授权也要看屏」的真实需求再重启评审。
 - [x] **c) RC 演练**：v0.4.2-beta 已发布并全链路核验（2026-10-02 上午）。发版提交 6ad4e15（8 文件含 docs/releases/v0.4.2-beta.md），tag run 36946544681 全绿（约 13 分钟）；Release=1 个、非草稿、prerelease、**30 资产**（四平台安装包+.sig sidecar、APK 首次带版本名 `MirrorDock-companion-0.4.2.apk`（5f8efdc workflow 改动实装验证）、SBOM×8、SHA256SUMS×4、latest.json）；updater 分支 latest.json version=0.4.2 四平台 URL/签名齐全；Release 正文=「本版更新内容」新格式；main 门禁 run 36946531042 绿。
 
+## X10-59/60 客户端体验轮之三（2026-10-02 上午，USB 真机实测驱动）
+
+- [x] **USB 线真机验证（P0-05 收口，2026-10-02，Redmi M2104K10AC）**：①无头首帧实测（沙箱侧）= `scrcpy --no-window --record` USB transport 首次出数据 **2.0s**，12s 录制 603KB MP4 校验有效；②**键鼠真机验证（用户实测）**：USB 镜像窗口点击生效、文字输入（含中文经 UHID）生效 ✓；③**拔线恢复（用户实测）**：拔线后镜像窗口消失（无进程崩溃，DiagnosticReports 无记录——scrcpy 随 transport 断开正常退出）、插回后连接恢复、可重开镜像 ✓，但主窗口无任何提示（感知为「闪退」）→ 缺陷转入 X10-59；④授权撤销恢复仍待用户配合（外部阻塞保留）。
+- [x] **X10-59 拔线恢复 UX 收口（2026-10-02）**：`should_auto_reconnect` 去掉「仅无线」限制（旧测试明文记录的「USB 不重连」决策被真机实测推翻——拔线后无提示无恢复，用户感知为闪退）；无线与 USB 统一「异常退出 → 等待 → 自动恢复」，USB 文案=「数据线已断开，正在等待重新插入」；`classify_reconnect_probe` 对非无线端点跳过 `adb connect`；会话监控对异常退出新发 `mirror-session-ended` 事件，前端显示「镜像连接已中断」提示（自动重连接管时被 waiting 提示覆盖）。证据：cargo **186**（+2：auto_reconnect 全连接类型断言、device_file_delete）+ vitest 43 全绿，clippy 零告警。真机拔插观感待下一版 APK/客户端验收。
+- [x] **X10-60 发送区闭环 + 崩溃上报通道（2026-10-02）**：
+  - **发送区文件管理**：新增 `delete_device_file` 命令（命令面 42→43）+ `AdbRuntime::remove_device_file`（`rm -f -- <path>` 固定 argv 直调）；文件名先过 `validate_transfer_name`（路径逃逸在拼路径前被拒）；工具页每个文件新增「删除」按钮，取回成功后自动刷新列表。
+  - **新文件实时提示**：伴侣端 Outbox 发送成功后经常驻通道推 `files_changed` → 桌面 `PairingState::CompanionEventHook` 转发 → 前端 `companion-files-changed` → 提示 + 已打开列表自动刷新；未连接时伴侣端如实记录「打开工具页刷新可见」。发送桥=`LinkState.lineSender`（onPaired 挂载、onDisconnected/onRejected/停止时清除）。
+  - **崩溃堆栈上报**：伴侣端常驻连接就绪且存在未上报崩溃记录时推 `last_crash`（JSONObject 转义、截断 8000 字符、本会话幂等）→ 桌面 emit `companion-crash-report` → 主窗口卡片展示（默认收起、按需展开、「知道了」关闭）；全程本地点对点、不落盘不上云。
+  - **范围裁定记录**：跨网段远程镜像按用户指示转为 **Pro 候选付费项**（可行性结论见会话纪要：需中继/打洞 + 账号体系 + 威胁模型假设更新，暂缓实施）；macOS 签名公证、Windows 测试、渠道分发三项按用户指示明确排除在本轮外。
+- [ ] **待验收（X10-59/60）**：新 APK（0.2.2）+ 新客户端装真机后：拔线出现提示条并自动恢复、工具页收到实时「新文件」提示、发送区删除生效、崩溃卡展示（可制造一次崩溃验证）。
+
 ## 最终成品退出条件
 
 - [ ] 每个 MVP 功能有用户可见成功与恢复路径、自动化证据及文档。

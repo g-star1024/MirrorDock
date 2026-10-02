@@ -74,6 +74,11 @@ pub struct PairingState {
     inner: Mutex<PairingInner>,
 }
 
+/// 伴侣端上行事件的转发钩子（X10-60）：收到 `files_changed` / `last_crash` 等
+/// 需要到达前端的系统消息时调用。伴侣模块不感知 AppHandle，由调用方（lib.rs
+/// setup 阶段）注入；payload 是已解析的完整 JSON。
+pub type CompanionEventHook = Arc<dyn Fn(&serde_json::Value) + Send + Sync>;
+
 #[derive(Default)]
 struct PairingInner {
     phase: PairingPhase,
@@ -91,6 +96,8 @@ struct PairingInner {
     /// 常驻通道监听端口（None = 未开启）。随 paired_ok 下发给伴侣端持久化，
     /// 是免扫码重连的端口依据。
     resident_port: Option<u16>,
+    /// 伴侣端上行事件转发钩子（X10-60，见 CompanionEventHook）。
+    event_hook: Option<CompanionEventHook>,
 }
 
 /// 设备报到时触发的桥接回调（桌面侧注入）：入参为伴侣端来源 IP，返回要追加进
@@ -102,6 +109,18 @@ impl PairingState {
     /// 注入设备报到桥接回调；应在任何配对开始前完成（run() 启动时设置一次）。
     pub fn set_device_bridge(&self, bridge: DeviceBridge) {
         self.inner.lock().unwrap().device_bridge = Some(bridge);
+    }
+
+    /// 注入伴侣端上行事件转发钩子（setup 阶段设置一次，见 CompanionEventHook）。
+    pub fn set_event_hook(&self, hook: CompanionEventHook) {
+        self.inner.lock().unwrap().event_hook = Some(hook);
+    }
+
+    fn forward_event(&self, value: &serde_json::Value) {
+        let hook = self.inner.lock().unwrap().event_hook.clone();
+        if let Some(hook) = hook {
+            hook(value);
+        }
     }
 
     fn take_device_bridge(&self) -> Option<DeviceBridge> {
@@ -835,6 +854,16 @@ async fn serve_session(
                                     "捕获统计：{frames} 帧，音频捕获支持={audio}，JPEG 样本 {sample} 字节（不落盘）"
                                 ));
                             }
+                            // 发送区有新文件（X10-60）：转发给前端刷新工具页列表。
+                            Some("files_changed") => {
+                                state.push_event("伴侣端发送区有文件更新");
+                                state.forward_event(&value);
+                            }
+                            // 崩溃堆栈上报（X10-60）：本地点对点展示，不落盘、不上云。
+                            Some("last_crash") => {
+                                state.push_event("伴侣端上报了崩溃记录（仅本机界面展示）");
+                                state.forward_event(&value);
+                            }
                             Some(other) => {
                                 state.push_event(format!("收到未知消息类型 {other}（已忽略）"));
                             }
@@ -1115,6 +1144,27 @@ mod tests {
         assert_ne!(a, b);
         // base32 字母表（RFC 4648 无填充）：A-Z 与 2-7。
         assert!(a.chars().all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c)));
+    }
+
+    #[test]
+    fn event_hook_receives_forwarded_companion_events() {
+        // X10-60：伴侣端上行事件经钩子转发；未设置钩子时静默忽略不 panic。
+        let state = PairingState::default();
+        state.forward_event(&serde_json::json!({"type": "files_changed"}));
+
+        let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = std::sync::Arc::clone(&received);
+        state.set_event_hook(Arc::new(move |value: &serde_json::Value| {
+            sink.lock().unwrap().push(
+                value.get("type").and_then(|t| t.as_str()).unwrap_or("").to_owned(),
+            );
+        }));
+        state.forward_event(&serde_json::json!({"type": "files_changed"}));
+        state.forward_event(&serde_json::json!({"type": "last_crash", "stack": "boom"}));
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec!["files_changed".to_owned(), "last_crash".to_owned()]
+        );
     }
 
     #[test]

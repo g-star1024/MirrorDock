@@ -359,6 +359,8 @@ trait AdbRuntime: Send + Sync {
         remote_path: &str,
         local: &Path,
     ) -> Result<String, std::io::Error>;
+    /// 删除设备上的一个文件（用于清理发送区）。路径经调用方校验。
+    fn remove_device_file(&self, serial: &str, remote_path: &str) -> Result<(), std::io::Error>;
     /// 在设备上安装一个 APK。返回 adb 的原始输出（stdout+stderr 合并）。
     ///
     /// 与其它方法不同，这里**业务失败也返回 Ok(原始输出)**：`adb install` 在失败时
@@ -939,6 +941,12 @@ impl AdbRuntime for SystemAdbRuntime {
         }
     }
 
+    fn remove_device_file(&self, serial: &str, remote_path: &str) -> Result<(), std::io::Error> {
+        // 固定参数直调：路径作为单个 argv 传给 adb，不做 shell 拼接（工程铁律）。
+        // `rm -f`：文件已不存在视为清理成功，避免并发刷新时的竞态误报。
+        Self::run(&["-s", serial, "shell", "rm", "-f", "--", remote_path])
+    }
+
     fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
         // 固定参数直接调用：APK 路径作为单个 argv 传入，不做 shell 拼接或插值，
         // 路径含空格、中文也安全。
@@ -1485,6 +1493,17 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                     notify_companion_recording(app, false);
                 }
             }
+            // 异常退出（掉线/拔线）时明确告知前端（X10-59）：镜像窗口是独立进程，
+            // 随之消失不等于应用崩溃，但旧版主窗口毫无表示，用户感知为「闪退」。
+            // 若自动重连接管，紧随的 waiting 事件会覆盖这条提示。
+            if !exit_success {
+                if let Some(app) = TRAY_APP.get() {
+                    let _ = app.emit(
+                        "mirror-session-ended",
+                        serde_json::json!({ "serial": serial, "unexpected": true }),
+                    );
+                }
+            }
             // 会话意外退出后同步菜单文案（连接/断开、录制开关、置灰项）。
             // 测试环境没有 TRAY_APP，自动跳过。
             if let Some(app) = TRAY_APP.get() {
@@ -1537,10 +1556,12 @@ const RECONNECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_s
 const RECONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// 是否值得自动重连：仅**异常退出**（进程非 0 退出，对应手机/网络掉线）+
-/// 无线端点 + 用户没有关闭该功能。用户主动关闭镜像窗口是正常退出（0），
-/// 不重连——那是「我不看了」，不是「断了」。
-fn should_auto_reconnect(process_success: bool, endpoint: &str, enabled: bool) -> bool {
-    !process_success && enabled && is_wireless_endpoint(endpoint)
+/// 用户没有关闭该功能。无线与 USB 一视同仁（X10-59，USB 真机实测教训）：
+/// 拔线后 scrcpy 窗口随进程消失，旧版既不提示也不重连，用户感知为「闪退」；
+/// 现在无线等手机回网、USB 等重新插线，恢复动作在等待期内自动完成。
+/// 用户主动关闭镜像窗口是正常退出（0），不重连——那是「我不看了」，不是「断了」。
+fn should_auto_reconnect(process_success: bool, _endpoint: &str, enabled: bool) -> bool {
+    !process_success && enabled
 }
 
 /// 单次重连探测的结果。
@@ -1555,8 +1576,11 @@ enum ReconnectProbe {
 }
 
 fn classify_reconnect_probe(adb: &dyn AdbRuntime, endpoint: &str) -> ReconnectProbe {
-    // connect 失败不致命：transport 可能半死但设备表里仍有条目。
-    let _ = adb.connect(endpoint);
+    // 无线端点先补一次 connect（transport 可能半死但设备表里仍有条目）；
+    // USB 串口没有 connect 语义（插回线设备表自然回归），跳过以免无意义报错。
+    if is_wireless_endpoint(endpoint) {
+        let _ = adb.connect(endpoint);
+    }
     match adb.list_devices() {
         Err(_) => ReconnectProbe::Unavailable,
         Ok(devices) => match devices.into_iter().find(|device| device.serial == endpoint) {
@@ -1579,20 +1603,37 @@ fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64,
     let endpoint = endpoint.to_owned();
     std::thread::spawn(move || {
         let started = std::time::Instant::now();
+        // USB 与无线共用同一套等待语义，文案按通道区分（X10-59）。
+        let usb = !is_wireless_endpoint(&endpoint);
+        let (waiting_title, waiting_recovery) = if usb {
+            (
+                "数据线连接已断开，正在等待重新插入。",
+                "重新插回数据线后会自动恢复镜像（最多等 15 分钟）；也可以手动重新连接。",
+            )
+        } else {
+            (
+                "无线连接已断开，正在等待手机重新上线。",
+                "手机点亮并回到同一 Wi-Fi 后会自动恢复镜像（最多等 15 分钟）；也可以手动重新连接。",
+            )
+        };
         // 会话状态里的错误改写为「正在等待」，前端轮询即可见，无需新状态——
         // phase 保持 Failed（连接确实断了），恢复动作变成「等我们自动重连」。
         if let Ok(mut map) = sessions.0.lock() {
             if let Some(state) = map.get_mut(&endpoint) {
                 state.session.error = Some(AppError::new(
                     "wireless_reconnect_waiting",
-                    "无线连接已断开，正在等待手机重新上线。",
-                    "手机点亮并回到同一 Wi-Fi 后会自动恢复镜像（最多等 15 分钟）；也可以手动重新连接。",
+                    waiting_title,
+                    waiting_recovery,
                 ));
             }
         }
         let _ = app.emit(
             "wireless-reconnect-status",
-            serde_json::json!({ "status": "waiting", "endpoint": endpoint }),
+            serde_json::json!({
+                "status": "waiting",
+                "endpoint": endpoint,
+                "kind": if usb { "usb" } else { "wireless" },
+            }),
         );
         loop {
             std::thread::sleep(RECONNECT_POLL_INTERVAL);
@@ -3655,6 +3696,34 @@ fn fetch_file_from_device_into(
         path: local.to_string_lossy().into_owned(),
         bytes,
     })
+}
+
+/// 删除设备传输目录里的一个文件（发送区清理，X10-60）。
+///
+/// 只允许删 `DEVICE_TRANSFER_DIR` 内经 `validate_transfer_name` 校验的文件名；
+/// 名单外的一切（路径分隔符、`..`、超长名）在拼路径前就被拒绝。
+fn delete_device_file_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    file_name: String,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let file_name = validate_transfer_name(&file_name)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    runtimes
+        .adb
+        .remove_device_file(&serial, &device_transfer_path(&file_name))
+        .map_err(|_| {
+            AppError::new(
+                "transfer_delete_failed",
+                "文件没有从手机上删除。",
+                "请确认连接仍然有效，然后重试。",
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -6075,6 +6144,19 @@ fn fetch_file_from_device(
     result
 }
 
+/// 删除手机发送区（下载 / MirrorDock）里的一个文件（X10-60 发送区清理）。
+#[tauri::command]
+fn delete_device_file(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    file_name: String,
+) -> Result<(), AppError> {
+    let result = delete_device_file_with(&runtimes, serial.clone(), file_name.clone());
+    log.record_outcome("file_delete", result.as_ref().err(), &[&serial, &file_name]);
+    result
+}
+
 /// 组装诊断预览。adb 的可用性不单独作为字段——它已经体现在 device_check 事件里。
 fn diagnostics_preview_with(
     app: &AppHandle,
@@ -6755,6 +6837,25 @@ pub fn run() {
             if let Ok(path) = input_source_backup_path(app.handle()) {
                 restore_persisted_input_source(app.handle(), &path);
             }
+            // 伴侣端上行事件转发（X10-60）：发送区新文件 / 崩溃堆栈 → 前端。
+            let hook_handle = app.handle().clone();
+            if let Some(state) = app.try_state::<Arc<companion_pairing::PairingState>>() {
+                state.set_event_hook(Arc::new(move |value: &serde_json::Value| {
+                    match value.get("type").and_then(|t| t.as_str()) {
+                        Some("files_changed") => {
+                            let _ = hook_handle.emit("companion-files-changed", ());
+                        }
+                        Some("last_crash") => {
+                            let stack = value.get("stack").and_then(|s| s.as_str()).unwrap_or("");
+                            let _ = hook_handle.emit(
+                                "companion-crash-report",
+                                serde_json::json!({ "stack": stack }),
+                            );
+                        }
+                        _ => {}
+                    }
+                }));
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -6791,6 +6892,7 @@ pub fn run() {
             list_device_files,
             list_device_apps,
             fetch_file_from_device,
+            delete_device_file,
             install_apk_to_device,
             current_recording,
             delete_recording,
@@ -7222,6 +7324,18 @@ mod tests {
             };
             fs::write(local, contents).map_err(|_| std::io::Error::other("cannot write pulled file"))?;
             Ok("1 file pulled".to_owned())
+        }
+
+        fn remove_device_file(&self, serial: &str, remote_path: &str) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("rm {serial} {remote_path}"));
+            if self.transfer_fails {
+                Err(std::io::Error::other("rm failed"))
+            } else {
+                Ok(())
+            }
         }
 
         fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
@@ -7714,6 +7828,7 @@ mod tests {
             fn list_directory(&self, _serial: &str, _remote_dir: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
             fn push_file(&self, _serial: &str, _local: &Path, _remote_dir: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
             fn pull_file(&self, _serial: &str, _remote_path: &str, _local: &Path) -> Result<String, std::io::Error> { Ok(String::new()) }
+            fn remove_device_file(&self, _serial: &str, _remote_path: &str) -> Result<(), std::io::Error> { Ok(()) }
             fn install_apk(&self, _serial: &str, _apk: &Path) -> Result<String, std::io::Error> { Ok(String::new()) }
             fn pair(&self, _endpoint: &str, _pairing_code: &str) -> Result<(), std::io::Error> { Ok(()) }
             fn connect(&self, _endpoint: &str) -> Result<(), std::io::Error> { Ok(()) }
@@ -10131,15 +10246,17 @@ mod tests {
     }
 
     #[test]
-    fn auto_reconnect_only_for_abnormal_wireless_exits() {
-        // 异常退出 + 无线端点 + 开关开 → 重连。
+    fn auto_reconnect_only_for_abnormal_exits_and_all_connection_kinds() {
+        // 异常退出 + 开关开 → 重连；无线与 USB 一视同仁（X10-59：拔线实测
+        // 旧版「不提示也不重连」被感知为闪退，现在 USB 等重新插线自动恢复）。
         assert!(should_auto_reconnect(false, "192.168.2.224:46289", true));
+        assert!(should_auto_reconnect(false, "ABC123456", true));
         // 用户主动关闭镜像窗口（正常退出）→ 不打扰。
         assert!(!should_auto_reconnect(true, "192.168.2.224:46289", true));
-        // USB 端点不重连（拔线是有意动作，插回授权还在）。
-        assert!(!should_auto_reconnect(false, "ABC123456", true));
+        assert!(!should_auto_reconnect(true, "ABC123456", true));
         // 用户关闭了自动重连。
         assert!(!should_auto_reconnect(false, "192.168.2.224:46289", false));
+        assert!(!should_auto_reconnect(false, "ABC123456", false));
     }
 
     #[test]
@@ -10935,6 +11052,55 @@ mod tests {
             "拉取必须指向传输目录内的同名文件，实际调用：{calls:?}");
 
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_device_file_can_be_deleted_only_inside_the_transfer_directory() {
+        // 就绪设备 + 合法文件名 → 发出 rm 调用且目标锁定在传输目录内（X10-60）。
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        delete_device_file_with(&runtimes, "phone".into(), "发送的 报表.csv".into()).unwrap();
+
+        let calls = calls.lock().unwrap().clone();
+        assert!(calls.contains(&format!(
+            "rm phone {DEVICE_TRANSFER_DIR}/发送的 报表.csv"
+        )), "删除必须指向传输目录内的同名文件，实际调用：{calls:?}");
+
+        // 名单外的一律拒绝：逃逸路径在拼路径之前就被拦下。
+        for hostile in ["../escape.txt", "sub/dir.txt", ".hidden", ""] {
+            let adb = FakeAdb {
+                devices: vec![device("phone", DeviceState::Ready)],
+                ..FakeAdb::default()
+            };
+            let calls = Arc::clone(&adb.calls);
+            let runtimes = screenshot_runtimes(adb);
+            assert!(
+                delete_device_file_with(&runtimes, "phone".into(), hostile.to_owned()).is_err(),
+                "“{hostile}”必须被拒绝"
+            );
+            assert!(
+                calls.lock().unwrap().iter().all(|call| !call.starts_with("rm")),
+                "非法文件名不得发起任何 rm 调用"
+            );
+        }
+
+        // 未授权设备：不发起删除。
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Unauthorized)],
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        assert!(delete_device_file_with(&runtimes, "phone".into(), "a.txt".into()).is_err());
+        assert!(
+            calls.lock().unwrap().iter().all(|call| !call.starts_with("rm")),
+            "未授权设备不得发起删除"
+        );
     }
 
     #[test]

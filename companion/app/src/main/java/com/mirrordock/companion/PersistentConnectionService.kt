@@ -22,6 +22,13 @@ object LinkState {
     @Volatile var phase: LinkPhase = LinkPhase.IDLE
     @Volatile var detail: String = ""
 
+    /**
+     * 当前活跃会话的下行发送桥（X10-60）：UI 层（如发送区有新文件、崩溃上报）
+     * 经它把一行 JSON 推给电脑；无连接时为 null，调用方静默忽略即可——
+     * 伴侣通道是附加信息通道，不构成错误。
+     */
+    @Volatile var lineSender: ((String) -> Boolean)? = null
+
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
 
     fun update(newPhase: LinkPhase, newDetail: String) {
@@ -83,6 +90,7 @@ class PersistentConnectionService : Service() {
                 // 2026-10-02 真机实锤：服务未运行时点「解除这台电脑」必崩）。
                 startInForeground()
                 running = false
+                LinkState.lineSender = null
                 LinkState.update(LinkPhase.IDLE, "已断开")
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -152,6 +160,8 @@ class PersistentConnectionService : Service() {
                 override fun onPaired(pid: String, newResidentPort: Int?) {
                     sessionAlive.set(true)
                     attempt = 0
+                    // 下行发送桥：UI 层经 LinkState.lineSender 推 JSON 给电脑。
+                    LinkState.lineSender = { line -> client.sendLine(line) }
                     // 桌面端常驻端口可能变化（回退随机端口后重开）：学到即更新。
                     if (newResidentPort != null && newResidentPort != residentPort) {
                         prefs.edit().putInt("resident_port", newResidentPort).apply()
@@ -177,6 +187,7 @@ class PersistentConnectionService : Service() {
 
                 override fun onRejected() {
                     // 台账里被移除/身份不符：如实告知，不再退避重试（重试也不会过）。
+                    LinkState.lineSender = null
                     notifyEvent(getString(R.string.link_event_rejected), true)
                     LinkState.update(LinkPhase.IDLE, "电脑拒绝了这次连接（可能已解除互信）")
                 }
@@ -187,6 +198,7 @@ class PersistentConnectionService : Service() {
 
                 override fun onDisconnected() {
                     sessionAlive.set(false)
+                    LinkState.lineSender = null
                     if (running) {
                         notifyEvent(getString(R.string.link_event_disconnected), true)
                         LinkState.update(LinkPhase.RETRYING, "会话断开，稍后自动重连")
@@ -213,6 +225,7 @@ class PersistentConnectionService : Service() {
             })
 
             heartbeat?.interrupt()
+            LinkState.lineSender = null
             client.close()
             if (!running) return
             if (LinkState.phase == LinkPhase.IDLE) {

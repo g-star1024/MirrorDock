@@ -56,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var buttonLinkStart: Button
     private lateinit var buttonLinkStop: Button
     private var linkListener: (() -> Unit)? = null
+    /** 本会话内已上报过崩溃堆栈（避免每次界面刷新重复推送）。 */
+    @Volatile private var crashReported = false
     // 通知权限的后续动作：屏幕捕获与常驻连接都会请求 POST_NOTIFICATIONS，
     // 授权后按请求时的意图继续，而不是固定走某一条路。
     private var notificationFollowUp: (() -> Unit)? = null
@@ -70,8 +72,21 @@ class MainActivity : AppCompatActivity() {
             val result = Outbox.send(this, uris)
             log(result.message)
             Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
+            if (result.sent > 0) {
+                // X10-60：通知电脑「发送区有新文件」，桌面端工具页实时提示。
+                // 常驻连接未建立时跳过——文件已就位，电脑端手动刷新同样可见。
+                if (!pushLinkLine("{\"type\":\"files_changed\"}")) {
+                    log("常驻连接未建立，电脑端打开「工具」页刷新列表即可取回。")
+                }
+            }
             refreshFiles()
         }
+
+    /** 经常驻连接推一行 JSON 给电脑；无连接或写出失败返回 false。 */
+    private fun pushLinkLine(line: String): Boolean {
+        val sender = LinkState.lineSender ?: return false
+        return runCatching { sender(line) }.getOrDefault(false)
+    }
 
     private fun openSendPicker() {
         runCatching {
@@ -244,6 +259,25 @@ class MainActivity : AppCompatActivity() {
         val running = LinkState.phase != LinkPhase.IDLE
         buttonLinkStart.visibility = if (running) View.GONE else View.VISIBLE
         buttonLinkStop.visibility = if (running) View.VISIBLE else View.GONE
+        maybeReportLastCrash()
+    }
+
+    /**
+     * 崩溃堆栈经本地点对点通道报给电脑（X10-60）：常驻连接就绪且有未上报的
+     * 崩溃记录时推一次。堆栈只落手机本机与电脑界面，不经任何云端；用户点
+     * 「清除」后不再上报。截断到 8000 字符以内，避免超出协议单行上限。
+     */
+    private fun maybeReportLastCrash() {
+        if (crashReported || LinkState.phase != LinkPhase.CONNECTED) return
+        val stack = CrashGuard.lastCrash(applicationContext) ?: return
+        crashReported = true
+        val payload = org.json.JSONObject().apply {
+            put("type", "last_crash")
+            put("stack", stack.take(8000))
+        }
+        if (pushLinkLine(payload.toString())) {
+            log("已把上次的崩溃记录报给电脑（可在电脑端查看）。")
+        }
     }
 
     /** 免扫码直连入口：Android 13+ 先请求通知权限（前台服务通知必须可见）。 */
