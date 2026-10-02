@@ -1,23 +1,23 @@
 {
-  "version": "0.4.2",
-  "notes": "- **新增：伴侣 App（Android 侧）**。手机装上伴侣 App 后，电脑与手机建立长期互信，此后不再需要每次扫码：\n  - **免扫码一键直连**：桌面端开启「常驻通道」后，手机伴侣 App 打开即可自动连上这台电脑（通过心跳保活、断线自动重连）；首次配对仍需扫码确认。\n  - **状态通知**：手机通知栏实时显示与电脑的连接状态，电脑端开始/停止录制也会同步提醒，避免「屏幕正在被录制」不知情。\n  - **双向解除互信**：手机端可一键解除与某台电脑的互信（同时停止常驻连接服务）；电脑端同样可在「已配对设备」中删除手机。\n  - 伴侣 App 下载见 Release 资产中的 APK（`MirrorDock-Companion-<版本号>.apk`）。\n- **新增：手机向电脑传文件（发送区）**。在伴侣 App 中点「发送文件到电脑」，经系统选择器选中文件（支持多选）后进入手机「下载/MirrorDock」发送区；电脑端打开「工具」页刷新列表即可一键取回，全程走本地连接、不经云端。\n- **修复：伴侣 App 解除互信时可能闪退**（前台服务未按系统要求先进入前台即停止，触发 Android 5 秒超时强杀）。\n- **安全加固**：配对握手消息增加长度上限与显式拒绝，防止异常输入拖垮连接。",
-  "pub_date": "2026-10-02T00:46:15Z",
+  "version": "0.4.3",
+  "notes": "- **新增：手机通知镜像到电脑（一期）**。手机伴侣 App 打开「通知镜像」（默认关，需在系统设置授予「读取通知」权限）后，手机收到的新通知会实时显示在电脑客户端「工具」页。只转发给你已配对的那台电脑（加密直连，不经云端），内容不落盘、不进日志；电脑端只在内存里保留最近 50 条，可一键清空、可随时在手机端关闭。快捷回复将在后续版本提供。\n- **新增：拖拽传文件**。把文件拖进 MirrorDock 窗口即可：`.apk` 直接安装到手机，其他文件进入手机的「下载 / MirrorDock」发送区，每个文件的结果单独汇报。\n- **新增：拔线与断线的明确提示、自动恢复**。镜像中数据线被拔掉或无线掉线时，连接页出现清晰的等待提示；插回线或手机回到同一 Wi-Fi 后自动恢复镜像（最多等待 15 分钟，可在设置关闭）。\n- **新增：伴侣 App 发送区实时提示与崩溃上报**。手机向电脑发送文件后，电脑端「工具」页实时提示并自动刷新列表；伴侣 App 若发生崩溃，重启后会把崩溃堆栈经加密连接报给电脑（仅本机界面展示，可清除）。\n- **修复：文件「手机提示发送成功、电脑看不到」**。根因是两个长期隐藏的问题：伴侣常驻会话建立后一秒内被自己断开（被自动重连掩盖）；推送消息在 Android 主线程做网络写入被系统拒绝且被静默吞掉。修复后在真机端到端验证通过。\n- **改进：免扫码一键重连真正可靠**。伴侣 App 没有学到常驻端口时，自动回退默认端口 47017 直连——「在电脑端开启常驻通道后即可免扫码重连」由文案承诺变成真实能力；仅当电脑固定端口被占用、回退到随机端口时才需要重新扫一次码。\n- **伴侣 App 升级到 0.2.4**（Release 资产 `MirrorDock-companion-0.4.3.apk`，覆盖安装保留配对数据）。\n- **说明**：仍在 0.4.0 或更早版本的用户，应用内「检查更新」可能提示拉取失败（历史版本的更新源不含测试版）；请从官网或发布页手动安装一次 0.4.3，之后即可正常自动更新。",
+  "pub_date": "2026-10-02T08:43:20Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTV3dFcvKzl3bzU2R1NCTWliV2JOa2s2NEJyU1FSNHJQbVdJanRLYXNROHVJcUpGaFJiMUhZSFBxMWRIMGpTc1FCVjRsSHJ0Z05xdzlHUXBQcVRsZ3dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTAxODA2CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjIKU01vU1lVUStqaU83V0xkaXJRaFBvZlhGcU8vQ2hPQmQxZklZRFZUNEJ4bE1LNFRkZmxoOElzbFFLZ3NNcmdhS0Y4Y2ZlMno1cUg1eURTVXc5eUI0Q0E9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTNUUmgvaVpmL2xVUjhqZ0tPeXVMSHRIM2lHYmJlenE0cVEydWU1Q056ZWEza2NDTWozZVVGODA0L0x0ZTZ1Mk0wQ21CZ3NISFBkZDRzVDNnZUFKQ1E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTI5ODc5CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjMKZjkzZ0dUQXlDdU5ZQS9Ba1prbElGamRqV3pnWnBhODhPbEI0VnEzd0lnQS9PaDVCRzI1RGNuVXJzZG5OektkWWFLdWxUUXNrays2K0I1cTlGYlJ3QXc9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTBqT2x1TnNPL1dqU09TNVZCWlJmV1ptWkdnMnlhMmZVcVFvSFdZSSt1MDdIU2hsVCtOaFVrVTdhQ1R5dmpwL0VhVC9zUkJrRVplb0daSW50Q1ZSSndVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTAxNzQwCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjIKc3VHdEpWeXExc1IzNzllaXJKaUJxZzVtZjJEV0RuUm1wbjBsTlJKaitaKzlzeVlDb3dmUmRKa3pVK3BJdFNCOE0zdkxhZTVOYjRUOGlZaWloemRkQnc9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTVrVWlrRmJneU81NTZxcE5HUnRvamJ5ak11SFBVMFhVOG9yeDdJbTVqSFE1WEtMNTBBaE05R0h2VC9NRjM5WjUrY2VHS1JzelhQVlFXQnBrTnN2b2c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTMwNDI1CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjMKQWpZT05nOHR1cXZsYkNabjhneDdWTTNTZGdpcitrYzhWbGlKamk2VGNWc09VNEdUMzFrY25Ld2ZKRXpia3NDZHlmMG9Cd3hpd080akN4M1k4ajZ2RHc9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTBSVEkwUEhsWEY0MkxrUFNpbEd1MTBCMGhnbWIwWU4vZzZnNGtwaU1tRXJqK2xJU1pOSVZudnk3Z1k4S2dsUkIzbUJKMEw1VjE2UXE1U3h3bUZIR0EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTAxOTE5CWZpbGU6TWlycm9yRG9ja18wLjQuMl9hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuNC4yCnJrMmtpNXNnOFQzTEZBQ2NNdStRaTlLN1ZFR3g1SmVKTGJMdlI0YVRVejZqTUFoN01rMm5pWEV1NGwwN0hvb2o2bi9UdGJrdW0veXVvVXQyMmlxdERBPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaThMWHJORjd2TFp4TUlZQktlUjdrNnVZNkhudGF1ZnczZXlDdFdSaUx2b3ZHaTFrenZpV2J6SXdUVmdER3VodE9WMkNJblZNMncvdndHK2JhaXY2ZVFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTMwMDg3CWZpbGU6TWlycm9yRG9ja18wLjQuM19hbWQ2NC5BcHBJbWFnZQl2ZXJzaW9uOjAuNC4zCnN0SDlaREpMMU9HZkk1bGlhdzBXREliSVFHcWZid044REppdk8rRmwyQWZJMElsWnpucWtBcDdKSUV4Mm0wRkNEL1dZNXM5WnpZcUh4NXRrYTIwakN3PT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTVURVlNdUlZVUZEblQrRGYyRWVkM2EzZEdoTU1iZlBnQmRvV1N3RHVqN0t2TThQODJjcGFjdWd6L1draGluZThZL3gzRVdnWnMzZHQ4MmNQNXE5OXdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTAxODgwCWZpbGU6TWlycm9yRG9ja18wLjQuMl94NjQtc2V0dXAuZXhlCXZlcnNpb246MC40LjIKQUhjZ1FzQ3V1cjFBN1dzQ2thS29kUjBPS2NVbmJuR3NXM0FuTGRNSCt2SDB3SjNvdEhBZkliTUtUMlpKeUM2ZEdudEplR0tLTXY4TXMvcEwvMzNNQVE9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTVRZEZ0bHNIdHZkT2Q5ajlVUy9jaldjNEhia04zQWlHWWtWdkllOVpid0dFNDRlZGhzNHNlTkZTNCtzYkFuTzBydk9ndjAvQXZKTDFiNzQybGxKbWdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTMwMDIzCWZpbGU6TWlycm9yRG9ja18wLjQuM194NjQtc2V0dXAuZXhlCXZlcnNpb246MC40LjMKeWljK0loL214d3lRb3BFYVEybGYySCtzRy9sVHRLWDExZ08wUjlONkwvS0dyY0tXMHpBY3I0UjkyQU9DdG9DNVBnR0toMFNkOC8vUzgyRU5iVk44Q2c9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_x64-setup.exe"
     }
   }
 }
