@@ -2593,17 +2593,6 @@ fn spawn_keep_awake_guard(store: SessionStore, epoch: u64, serial: String) {
     });
 }
 
-/// 菜单里需要随会话状态改文案/可用性的项。
-///
-/// 文案只是提示，**动作以点击时的真实会话状态为准**：即使菜单文案与状态短暂
-/// 不一致（状态跃迁与菜单刷新之间有窗口期），也不会执行错误方向的动作。
-struct TrayMenuHandles {
-    connect: tauri::menu::MenuItem<tauri::Wry>,
-    wake: tauri::menu::MenuItem<tauri::Wry>,
-    shot: tauri::menu::MenuItem<tauri::Wry>,
-    record: tauri::menu::MenuItem<tauri::Wry>,
-}
-
 /// 菜单栏模板图标（icons/tray.png，44x44 单色 + alpha）。
 /// 与应用图标同一设计语言：环形 + 缺口切片 + 中心圆点。
 const TRAY_ICON_PNG: &[u8] = include_bytes!("../icons/tray.png");
@@ -2617,30 +2606,12 @@ static TRAY_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 static MONITOR_ADB: std::sync::OnceLock<Box<dyn AdbRuntime>> = std::sync::OnceLock::new();
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
     use tauri::tray::TrayIconBuilder;
 
-    let open = MenuItemBuilder::with_id("tray-open", "打开 MirrorDock").build(app)?;
-    let connect = MenuItemBuilder::with_id("tray-connect", "连接设备").build(app)?;
-    let record = MenuItemBuilder::with_id("tray-record", "开始屏幕录制").build(app)?;
-    let wake = MenuItemBuilder::with_id("tray-wake", "屏幕唤醒").build(app)?;
-    let shot = MenuItemBuilder::with_id("tray-screenshot", "手机截图").build(app)?;
-    let quit = MenuItemBuilder::with_id("tray-quit", "退出 MirrorDock").build(app)?;
-
-    let menu = MenuBuilder::new(app)
-        .item(&open)
-        .item(&PredefinedMenuItem::separator(app)?)
-        .item(&connect)
-        .item(&record)
-        .item(&PredefinedMenuItem::separator(app)?)
-        .item(&wake)
-        .item(&shot)
-        .item(&PredefinedMenuItem::separator(app)?)
-        .item(&quit)
-        .build()?;
+    let handle = app.handle().clone();
+    let menu = build_tray_menu(&handle)?;
 
     let _ = TRAY_APP.set(app.handle().clone());
-    app.manage(TrayMenuHandles { connect, wake, shot, record });
 
     // 菜单栏图标：单色模板图（黑色形状 + alpha），macOS 按菜单栏深浅自动反色
     // （深色菜单栏渲染为白色，与系统自带图标一致）。非 macOS 平台仍用彩色应用图标。
@@ -2664,26 +2635,101 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 把菜单项的文案与可用性同步到会话状态（X10-27：按任意设备进行中判断）。
+/// 按当前会话状态重建整条托盘菜单（X10-27 里程碑 2：托盘逐会话细化）。
+///
+/// 动态项：每个真正运行中的镜像会话各占一条「结束 <设备名> 的镜像」，
+/// 设备名优先取最近使用记录里的友好名称，查不到时如实显示序列号。
+/// 其余项沿用全局语义：连接/断开、录制开关作用于主会话，唤醒/截图作用于主会话。
+/// 文案只是提示，**动作以点击时的真实会话状态为准**：即使菜单文案与状态短暂
+/// 不一致（状态跃迁与菜单刷新之间有窗口期），也不会执行错误方向的动作。
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+
+    let sessions: State<SessionStore> = app.state();
+    let (active, recording, running) = match sessions.lock() {
+        Ok(map) => {
+            let active = any_session_active(&map);
+            let recording = map
+                .values()
+                .any(|state| state.process.is_some() && state.options.record);
+            // 逐会话条目：只列真正持有镜像进程的设备（历史账本条目不算）。
+            let running: Vec<String> = map
+                .iter()
+                .filter(|(_, state)| state.process.is_some())
+                .map(|(serial, _)| serial.clone())
+                .collect();
+            (active, recording, running)
+        }
+        // 锁不可用时按「无会话」渲染：动作侧有状态校验兜底，不会误动作。
+        Err(_) => (false, false, Vec::new()),
+    };
+
+    // 设备友好名称：最近使用记录按序列号查；查不到用序列号本身，不猜。
+    let labels = load_recent_devices(
+        &recent_devices_path(app).unwrap_or_else(|_| std::path::PathBuf::from("/dev/null")),
+    )
+    .unwrap_or_default();
+
+    let open = MenuItemBuilder::with_id("tray-open", "打开 MirrorDock").build(app)?;
+    let connect = MenuItemBuilder::with_id(
+        "tray-connect",
+        if active { "断开连接" } else { "连接设备" },
+    )
+    .build(app)?;
+    let record = MenuItemBuilder::with_id(
+        "tray-record",
+        if recording {
+            "结束屏幕录制"
+        } else {
+            "开始屏幕录制"
+        },
+    )
+    .build(app)?;
+
+    let mut builder = MenuBuilder::new(app).item(&open).item(&PredefinedMenuItem::separator(app)?).item(&connect);
+    if !running.is_empty() {
+        // 每个运行中的会话一条「结束镜像」，多设备时逐台可控（X10-27 里程碑 2）。
+        for serial in &running {
+            let label = labels
+                .iter()
+                .find(|device| &device.serial == serial)
+                .map(|device| device.label.clone())
+                .unwrap_or_else(|| serial.clone());
+            let item = MenuItemBuilder::with_id(format!("tray-stop-{serial}"), format!("结束 {label} 的镜像"))
+                .build(app)?;
+            builder = builder.item(&item);
+        }
+    }
+    let mut builder = builder
+        .item(&record)
+        .item(&PredefinedMenuItem::separator(app)?);
+    let wake = MenuItemBuilder::with_id("tray-wake", "屏幕唤醒")
+        .enabled(active)
+        .build(app)?;
+    let shot = MenuItemBuilder::with_id("tray-screenshot", "手机截图")
+        .enabled(active)
+        .build(app)?;
+    let quit = MenuItemBuilder::with_id("tray-quit", "退出 MirrorDock").build(app)?;
+    builder = builder
+        .item(&wake)
+        .item(&shot)
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&quit);
+    builder.build()
+}
+
+/// 把菜单文案与可用性同步到会话状态（X10-27 里程碑 2：整条菜单动态重建）。
 ///
 /// 所有会话状态跃迁点（启动、停止、重启、监视线程发现进程退出）之后都应调用。
 /// 刷新失败静默忽略：菜单文案只是提示，真正的动作以点击时的状态校验为准。
 fn refresh_tray_menu(app: &AppHandle) {
-    let Some(handles) = app.try_state::<TrayMenuHandles>() else {
+    let Some(tray) = app.tray_by_id("mirrordock-tray") else {
         return;
     };
-    let sessions: State<SessionStore> = app.state();
-    let Ok(map) = sessions.lock() else {
-        return;
-    };
-    let active = any_session_active(&map);
-    let recording = map
-        .values()
-        .any(|state| state.process.is_some() && state.options.record);
-    let _ = handles.connect.set_text(if active { "断开连接" } else { "连接设备" });
-    let _ = handles.record.set_text(if recording { "结束屏幕录制" } else { "开始屏幕录制" });
-    let _ = handles.wake.set_enabled(active);
-    let _ = handles.shot.set_enabled(active);
+    // 菜单构建失败保持旧菜单可用，动作侧有状态校验兜底。
+    if let Ok(menu) = build_tray_menu(app) {
+        let _ = tray.set_menu(Some(menu));
+    }
 }
 
 fn handle_tray_event(app: &AppHandle, id: &str) {
@@ -2698,7 +2744,53 @@ fn handle_tray_event(app: &AppHandle, id: &str) {
         "tray-screenshot" => tray_screenshot(app),
         "tray-connect" => tray_connect_toggle(app),
         "tray-record" => tray_record_toggle(app),
-        _ => {}
+        other => {
+            if let Some(serial) = other.strip_prefix("tray-stop-") {
+                tray_stop_device(app, serial);
+            }
+        }
+    }
+}
+
+/// 菜单里的「结束 <设备> 的镜像」（X10-27 里程碑 2：多会话逐台可控）。
+///
+/// 逻辑与 `stop_mirroring` 命令的单设备路径一致：录制中的会话先快照，
+/// 停止成功后给伴侣端补「录制结束」、还原无线亮屏补偿并清理账本条目。
+fn tray_stop_device(app: &AppHandle, serial: &str) {
+    let sessions: State<SessionStore> = app.state();
+    let runtimes: State<AppRuntimes> = app.state();
+    let log: State<DiagnosticsLog> = app.state();
+    let serial = serial.to_owned();
+    // 提示用最近使用记录里的友好名称；查不到如实显示序列号。
+    let label = recent_devices_path(app)
+        .ok()
+        .and_then(|path| load_recent_devices(&path).ok())
+        .and_then(|labels| {
+            labels
+                .into_iter()
+                .find(|device| device.serial == serial)
+                .map(|device| device.label)
+        })
+        .unwrap_or_else(|| serial.clone());
+    let was_recording = any_session_recording(&sessions);
+    let result = stop_mirroring_with(&sessions, Some(serial.clone()));
+    log.record_outcome("mirror_stop", result.as_ref().err(), &[&serial]);
+    match result {
+        Ok(()) => {
+            if was_recording {
+                notify_companion_recording(app, false);
+            }
+            disable_wireless_keep_awake(runtimes.adb.as_ref(), &sessions, &serial);
+            prune_idle_entry(&sessions, &serial);
+            let running = sessions
+                .lock()
+                .map(|map| count_running_processes(&map))
+                .unwrap_or(usize::MAX);
+            maybe_restore_host_input_source(app, running);
+            refresh_tray_menu(app);
+            tray_notify_info(app, &format!("已结束 {label} 的镜像会话。"));
+        }
+        Err(error) => tray_notify_error(app, &error.message),
     }
 }
 
@@ -6737,6 +6829,62 @@ fn companion_end_resident(state: State<'_, Arc<companion_pairing::PairingState>>
     companion_pairing::end_pairing(&state);
 }
 
+/// 快捷回复内容校验（X10-69）：key 非空白且无控制字符（≤256 字节），text 非空、
+/// 无控制字符、≤500 字符。通过后返回 trim 过的 (key, text)。
+fn validate_notification_reply(key: &str, text: &str) -> Result<(String, String), AppError> {
+    let key = key.trim();
+    if key.is_empty() || key.len() > 256 || key.chars().any(|c| c.is_control()) {
+        return Err(AppError::new(
+            "endpoint_invalid",
+            "通知标识无效，无法发送回复。",
+            "请等待新的通知到达后再试。",
+        ));
+    }
+    // 回复是一行输入：拒绝换行与控制字符；长度收紧到 500 字符（远低于行上限，
+    // 也符合「快捷回复」的使用直觉）。
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AppError::new(
+            "endpoint_invalid",
+            "回复内容为空。",
+            "输入内容后再发送。",
+        ));
+    }
+    if text.chars().count() > 500 || text.chars().any(|c| c.is_control()) {
+        return Err(AppError::new(
+            "endpoint_invalid",
+            "回复内容过长或包含不允许的字符。",
+            "请缩短内容（500 字以内）并去掉换行后重试。",
+        ));
+    }
+    Ok((key.to_owned(), text.to_owned()))
+}
+
+/// 快捷回复（X10-69）：把用户输入的回复文本下发给手机伴侣端，由伴侣端填进
+/// 对应通知的 RemoteInput 动作。只在本机点对点通道传输，不经过任何云端。
+///
+/// 返回 `sent=false` 表示当前没有在线的伴侣会话（手机不在线/常驻连接未建立），
+/// 不是错误——前端据此提示用户稍后再试。
+#[tauri::command]
+fn companion_notification_reply(
+    state: State<'_, Arc<companion_pairing::PairingState>>,
+    log: State<DiagnosticsLog>,
+    key: String,
+    text: String,
+) -> Result<bool, AppError> {
+    let (key, text) = validate_notification_reply(&key, &text)?;
+    // serde_json 负责转义，保证文本里的引号等不会破坏行协议。
+    let line = serde_json::json!({ "type": "notification_reply", "key": key, "text": text });
+    let sent = state.broadcast_line(line.to_string());
+    log.record(
+        "companion_notification_reply",
+        if sent { "ok" } else { "no_active_session" },
+        "回复已下发到伴侣端",
+        &[],
+    );
+    Ok(sent)
+}
+
 /// 把录制状态变化推给当前活跃的伴侣会话（M4-3）。
 /// 无活跃会话时静默忽略——伴侣通道是附加信息通道，不构成错误。
 fn notify_companion_recording(app: &AppHandle, active: bool) {
@@ -6865,6 +7013,10 @@ pub fn run() {
                                     "title": str_field("title"),
                                     "text": str_field("text"),
                                     "posted": value.get("posted").and_then(|v| v.as_u64()).unwrap_or(0),
+                                    // X10-69 快捷回复：key 用于定位手机上的原通知；
+                                    // replyable=false（旧版伴侣端没有这两个字段）时前端不显示回复框。
+                                    "key": str_field("key"),
+                                    "replyable": value.get("replyable").and_then(|v| v.as_bool()).unwrap_or(false),
                                 }),
                             );
                         }
@@ -6930,6 +7082,7 @@ pub fn run() {
             companion_end_pairing,
             companion_begin_resident,
             companion_end_resident,
+            companion_notification_reply,
             companion_paired_devices,
             companion_unpair_device,
             get_app_settings,
@@ -7623,6 +7776,32 @@ mod tests {
     }
 
     // -- 设备解析 --
+
+    #[test]
+    fn notification_reply_validation_accepts_normal_input() {
+        let (key, text) =
+            validate_notification_reply(" 0|com.example.chat|0|1234567|null|1234 ", " 你好，稍后回复 ").unwrap();
+        assert_eq!(key, "0|com.example.chat|0|1234567|null|1234");
+        assert_eq!(text, "你好，稍后回复");
+    }
+
+    #[test]
+    fn notification_reply_validation_rejects_bad_key_and_text() {
+        // key：空、超长、控制字符。
+        assert!(validate_notification_reply("", "hi").is_err());
+        assert!(validate_notification_reply(&"k".repeat(257), "hi").is_err());
+        assert!(validate_notification_reply("bad\nkey", "hi").is_err());
+        // text：空、超长（按字符数算，中文同样受限）、控制字符。
+        assert!(validate_notification_reply("ok-key", "   ").is_err());
+        assert!(validate_notification_reply("ok-key", &"长".repeat(501)).is_err());
+        assert!(validate_notification_reply("ok-key", "line1\nline2").is_err());
+    }
+
+    #[test]
+    fn notification_reply_validation_allows_500_chars() {
+        let text = "字".repeat(500);
+        assert!(validate_notification_reply("ok-key", &text).is_ok());
+    }
 
     #[test]
     fn parses_ready_and_unauthorized_devices() {

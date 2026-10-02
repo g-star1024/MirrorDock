@@ -208,8 +208,18 @@ type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
 
-/** X10-66 通知镜像一期：手机转来的通知（内容只在内存，不落盘）。 */
-export type PhoneNotification = { pkg: string; app: string; title: string; text: string; posted: number };
+/** X10-66 通知镜像一期：手机转来的通知（内容只在内存，不落盘）。
+ * `key`/`replyable` 由 0.2.5+ 伴侣端提供：只有 replyable=true（通知自带
+ * RemoteInput 回复动作）时才显示快捷回复框（X10-69）。 */
+export type PhoneNotification = {
+  pkg: string;
+  app: string;
+  title: string;
+  text: string;
+  posted: number;
+  key?: string;
+  replyable?: boolean;
+};
 
 /** 通知时间展示：当天的只显示时刻，跨天带日期。 */
 export function notificationTime(posted: number, now: number = Date.now()): string {
@@ -490,6 +500,35 @@ function App() {
   const [companionCrashExpanded, setCompanionCrashExpanded] = useState(false);
   // X10-66 通知镜像：手机转来的通知（最新在前，最多 50 条，仅内存）。
   const [phoneNotifications, setPhoneNotifications] = useState<PhoneNotification[]>([]);
+  // X10-69 快捷回复：每条通知的草稿与发送状态（按通知 key 索引，仅内存）。
+  const [notifReplyDrafts, setNotifReplyDrafts] = useState<Record<string, string>>({});
+  const [notifReplyBusy, setNotifReplyBusy] = useState<string | null>(null);
+  const [notifReplyNotice, setNotifReplyNotice] = useState<{ key: string; text: string; error: boolean } | null>(null);
+
+  // 发送快捷回复：经后端命令下发到手机伴侣端（常驻通道），由它填进原通知。
+  async function sendNotificationReply(item: PhoneNotification & { key: string }) {
+    const text = (notifReplyDrafts[item.key] ?? "").trim();
+    if (!text || notifReplyBusy) return;
+    setNotifReplyBusy(item.key);
+    setNotifReplyNotice(null);
+    try {
+      const sent = await invoke<boolean>("companion_notification_reply", { key: item.key, text });
+      if (sent) {
+        setNotifReplyDrafts((prev) => {
+          const next = { ...prev };
+          delete next[item.key];
+          return next;
+        });
+        setNotifReplyNotice({ key: item.key, text: "回复已发送到手机。", error: false });
+      } else {
+        setNotifReplyNotice({ key: item.key, text: "手机端连接不在线（需要手机伴侣 App 的常驻连接保持连接），稍后再试。", error: true });
+      }
+    } catch (error) {
+      setNotifReplyNotice({ key: item.key, text: errorMessage(error, "回复发送失败，请稍后再试。"), error: true });
+    } finally {
+      setNotifReplyBusy(null);
+    }
+  }
   // 版本与授权：读取失败时按「版本未知」呈现，不阻断镜像主流程。
   const [entitlement, setEntitlement] = useState<EntitlementView | null>(null);
   const [licenseInput, setLicenseInput] = useState("");
@@ -517,6 +556,17 @@ function App() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [applyingOptions, setApplyingOptions] = useState(false);
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
+  // X10-27 里程碑 2：多会话时设置可选择应用到哪台设备；null = 主会话（单会话默认）。
+  const [settingsTargetSerial, setSettingsTargetSerial] = useState<string | null>(null);
+  // X10-68 设备收藏：置顶显示，持久化到本机（与最近记录同生命周期，本机存储）。
+  const [favoriteDevices, setFavoriteDevices] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem("mirrordock.favoriteDevices") ?? "[]");
+      return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
   // 按设备结束镜像（X10-27 复测反馈）：记录正在结束的会话归属，
   // 让每台设备自己的「结束」按钮显示各自的进行中状态，而不是全局一把抓。
   const [stoppingSerial, setStoppingSerial] = useState<string | null>(null);
@@ -735,25 +785,51 @@ function App() {
     catch { setSettingsNotice("本机设置无法保存，本次会话仍可使用这些选项。"); }
   }
 
+  // X10-68：收藏/取消收藏设备。只影响本机显示排序，不动连接与授权。
+  function toggleFavoriteDevice(serial: string) {
+    setFavoriteDevices((prev) => {
+      const next = prev.includes(serial) ? prev.filter((item) => item !== serial) : [...prev, serial];
+      try { localStorage.setItem("mirrordock.favoriteDevices", JSON.stringify(next)); }
+      catch { /* 保存失败只影响下次启动时的置顶，本次会话内仍然生效。 */ }
+      return next;
+    });
+  }
+
+  // 目标设备的会话结束后，设置目标回退到主会话，避免打到已结束的设备上。
+  useEffect(() => {
+    if (settingsTargetSerial && !activeSessionList.some((item) => item.serial === settingsTargetSerial)) {
+      setSettingsTargetSerial(null);
+    }
+  }, [activeSessionList, settingsTargetSerial]);
+
   // 会话进行中应用新设置：镜像窗口会按新参数重新打开，画面会短暂中断。
   async function applyOptionsUpdate(next: SessionOptions) {
     updateOptions(next);
     setApplyingOptions(true);
     setApplyNotice(null);
+    const targetSerial = settingsTargetSerial ?? session?.serial ?? null;
     try {
       const result = await invoke<SessionUpdate>("update_session_options", {
         options: next,
         // 只有开启录制时才生成文件名；后端在未开启录制时会忽略它。
         recordFileName: next.record ? recordingFileName(new Date()) : null,
-        // X10-27：设置作用于主会话（真正持有镜像进程的设备优先）；后端兼容不传。
-        serial: session?.serial ?? null,
+        // X10-27：多会话时作用于选中的设备；未选择时作用于主会话（真正持有镜像进程的设备优先）。
+        serial: targetSerial,
       });
       setSessions((prev) => {
         if (result.session.serial == null) return prev;
         const next2 = prev.filter((item) => item.serial !== result.session.serial);
         return [...next2, result.session].sort((a, b) => (a.serial ?? "").localeCompare(b.serial ?? ""));
       });
-      setApplyNotice(result.applied ? "新设置已生效：镜像窗口已按新设置重新打开。" : result.note ?? "设置与当前会话一致，未重启镜像窗口。");
+      const targetLabel = targetSerial
+        ? check?.devices.find((device) => device.serial === targetSerial)?.label ?? targetSerial
+        : null;
+      const prefix = targetLabel ? `「${targetLabel}」` : "";
+      setApplyNotice(
+        result.applied
+          ? `${prefix}新设置已生效：镜像窗口已按新设置重新打开。`
+          : result.note ?? "设置与当前会话一致，未重启镜像窗口。",
+      );
     } catch (error) {
       setApplyNotice(errorMessage(error, "无法应用新设置。"));
     } finally {
@@ -2006,11 +2082,13 @@ function App() {
                     const lockStamp = device.state === "ready" ? lockReports[device.serial] : undefined;
                     const own = sessionFor(device.serial);
                     const owned = own?.phase === "connecting" || own?.phase === "streaming";
+                    const favorite = favoriteDevices.includes(device.serial);
                     return (
                       <div className={`device-card ${owned ? "device-card-active" : ""}`} key={device.serial}>
                         <span className={`status-dot ${owned ? "ready" : device.state}`} aria-hidden="true" />
                         <div>
                           <strong>
+                            {favorite && <span className="fav-star" aria-hidden="true">★ </span>}
                             {displayLabels[device.serial] ?? device.label}
                             {badge && <span className="conn-badge inline">{badge}</span>}
                             {lockStamp && <span className="conn-badge inline lock-badge">{lockTag(lockStamp)}</span>}
@@ -2024,6 +2102,16 @@ function App() {
                           </p>
                         </div>
                         <span className="device-card-actions">
+                          {/* X10-68：收藏置顶开关（只影响最近设备列表排序）。 */}
+                          <button
+                            className="text-button fav-toggle"
+                            type="button"
+                            aria-label={favorite ? `取消收藏 ${displayLabels[device.serial] ?? device.label}` : `收藏 ${displayLabels[device.serial] ?? device.label}`}
+                            title={favorite ? "取消收藏" : "收藏（最近列表置顶）"}
+                            onClick={() => toggleFavoriteDevice(device.serial)}
+                          >
+                            {favorite ? "★" : "☆"}
+                          </button>
                           {device.state === "ready" && (
                             <>
                               <button
@@ -2150,17 +2238,30 @@ function App() {
                       </button>
                     </div>
                   )}
-                  {recentDevices.map((device) => {
+                  {/* X10-68：收藏的设备置顶显示，其余按最近使用顺序。 */}
+                  {[...recentDevices]
+                    .sort((a, b) => Number(favoriteDevices.includes(a.serial)) - Number(favoriteDevices.includes(b.serial)))
+                    .map((device) => {
                     const connected = findConnectedDevice(check?.devices, device.serial);
+                    const favorite = favoriteDevices.includes(device.serial);
                     return (
-                      <div className="recent-device" key={device.serial}>
+                      <div className={`recent-device${favorite ? " favorite" : ""}`} key={device.serial}>
                         <div className="recent-device-info">
-                          <strong>{device.label}</strong>
+                          <strong>{favorite ? "★ " : ""}{device.label}</strong>
                           <p>
                             {relativeTime(device.last_used_at)} · {connected ? stateCopy[connected.state].label : "当前未连接"}
                           </p>
                         </div>
                         <span>
+                          <button
+                            className="text-button"
+                            type="button"
+                            aria-label={favorite ? `取消收藏 ${device.label}` : `收藏 ${device.label}`}
+                            title={favorite ? "取消收藏" : "收藏（置顶显示）"}
+                            onClick={() => toggleFavoriteDevice(device.serial)}
+                          >
+                            {favorite ? "★ 已收藏" : "☆ 收藏"}
+                          </button>
                           {connected ? (
                             // 已连接的设备在上面的设备卡片里有唯一操作入口，
                             // 这里只呈现状态与「移除记录」，不再重复放开始/结束按钮。
@@ -2309,13 +2410,43 @@ function App() {
               ) : (
                 <ul className="transfer-file-list">
                   {phoneNotifications.map((item, index) => (
-                    <li key={`${item.posted}-${item.pkg}-${index}`}>
+                    <li key={`${item.posted}-${item.pkg}-${index}`} className="notif-item">
                       <span className="transfer-file-name">
                         <strong style={{ marginRight: 6 }}>[{item.app || item.pkg}]</strong>
                         {item.title}
                         {item.text ? `：${item.text}` : ""}
                       </span>
                       <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>{notificationTime(item.posted)}</span>
+                      {/* X10-69 快捷回复：仅通知自带 RemoteInput 回复动作时展示。 */}
+                      {item.replyable && item.key && (
+                        <div className="notif-reply">
+                          <input
+                            value={notifReplyDrafts[item.key] ?? ""}
+                            placeholder={`回复 ${item.app || item.pkg}…`}
+                            maxLength={500}
+                            disabled={notifReplyBusy === item.key}
+                            onChange={e => setNotifReplyDrafts(prev => ({ ...prev, [item.key as string]: e.target.value }))}
+                            onKeyDown={e => {
+                              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                                void sendNotificationReply({ ...item, key: item.key as string });
+                              }
+                            }}
+                          />
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled={notifReplyBusy === item.key || !(notifReplyDrafts[item.key] ?? "").trim()}
+                            onClick={() => void sendNotificationReply({ ...item, key: item.key as string })}
+                          >
+                            {notifReplyBusy === item.key ? "发送中…" : "发送"}
+                          </button>
+                        </div>
+                      )}
+                      {notifReplyNotice && notifReplyNotice.key === item.key && (
+                        <p className={notifReplyNotice.error ? "capability-pending" : "apply-notice"} role="status">
+                          {notifReplyNotice.text}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -2537,6 +2668,26 @@ function App() {
                 </div>
               </header>
               <div className="settings-rows">
+                {sessionActive && activeSessionList.length > 1 && (
+                  <div className="setting-row">
+                    <div className="setting-info">
+                      <span className="setting-name">应用到哪台设备</span>
+                      <span className="setting-desc">多台设备镜像中：改动只作用于这里选中的一台，其他设备不受影响。</span>
+                    </div>
+                    <select
+                      className="setting-control"
+                      aria-label="设置应用目标设备"
+                      value={settingsTargetSerial ?? session?.serial ?? ""}
+                      onChange={e => setSettingsTargetSerial(e.target.value)}
+                    >
+                      {activeSessionList.map((item) => (
+                        <option key={item.serial} value={item.serial}>
+                          {check?.devices.find((device) => device.serial === item.serial)?.label ?? item.serial}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">画质</span>
