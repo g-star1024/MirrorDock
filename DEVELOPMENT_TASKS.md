@@ -678,7 +678,7 @@
   - **资源治理**：删除已无引用的 `bg_hero`/`bg_pill_white`/`bg_ghost_button`；移除 6 条死字符串。
   - **验证**：伴侣 0.2.5 → **0.3.0**（versionCode 16→17）。本地无 gradle 且沙箱拦大文件下载（curl 拉 gradle 发行版 exit 56），故新增 `scripts/verify-companion.py` 静态交叉校验（XML 合法性 / `@string` `@color` `@style` `@drawable` 引用完整性 / `findViewById` 的 id 是否声明 / Manifest 类是否存在 / Kotlin 括号平衡 / 死资源检测）并接入 `AGENTS.md` 强制闸门——**全部通过**；Rust 侧 `reconnect_client_with_ping` 断言"不带 t 不回显 t、带 t 原样带回"，**cargo test companion_pairing 13 passed / 全量 192 passed，clippy 0 warning**；`pnpm build` + **vitest 66 passed**。commit `9259184` / `ec73c73` / `e0aa9a4` / `7a2bcd9`。
   - **未验证面（如实标记）**：APK 真编译与真机行为由 CI（`companion.yml` / `build.yml` 的 `companion-apk` job）+ 用户真机承担；本地无 gradle 无法预编译，静态校验只能覆盖资源引用与语法结构类错误，**不能替代编译**。
-- [ ] **v0.4.7-beta 发版（2026-10-03 夜间；含 X10-72 + X10-73）**：版本 0.4.6→0.4.7（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处；伴侣 App 0.2.5→0.3.0）；新增 `docs/releases/v0.4.7-beta.md`。tag `v0.4.7-beta` → CI 四平台打包 + updater 签名 + 伴侣 APK（0.3.0 代码）+ latest.json + Release。
+- [x] ✅ **v0.4.7-beta 发版（2026-10-03 夜间；含 X10-72 + X10-73）**：版本 0.4.6→0.4.7（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处；伴侣 App 0.2.5→0.3.0）；新增 `docs/releases/v0.4.7-beta.md`。tag `v0.4.7-beta` → CI 四平台打包 + updater 签名 + 伴侣 APK（0.3.0 代码）+ latest.json + Release。
   - **⚠ 首次发版失败（run 37034993379，2026-10-03 00:35 → 01:05）**：`verify` ✅（Rust 192 + 前端 66 + build）、四个平台 `package` ✅ 全过，但**`companion-apk` ❌ 失败在第 5 步「构建 debug APK」**（Kotlin 编译错误）→ `release` job 被跳过，**没有产生任何 Release 资产**。根因三处（均在我本次新增代码里，**静态校验当时没覆盖到**）：
     ① `MainActivity.buildDeviceRow` 对 `Button` 赋 `minWidth`/`minHeight` —— `View` **没有**这两个可写属性（只有 `minimumWidth`/`minimumHeight`；`TextView` 另有 `setMinWidth`），编译失败。已改为用 `TextView` + `minWidth = dp(28)`，并去掉与系统默认内边距的搏斗。
     ② `PersistentConnectionService` 的 `if (rtt in 0..10_000)` —— `rtt` 是 `Long`，`0..10_000` 是 `IntRange`，**类型不匹配编译失败**。已改为 `0L..10_000L`。
@@ -695,7 +695,12 @@
   - **门禁再次补强**：新增 `scripts/check-companion-kotlin.py` —— 用 Gradle 缓存里的 kotlinc + `android.jar` + 全部 AndroidX aar **真实做类型检查**（并按 `res/` 生成 R 存根）。**已反向验证**：注入第 4 处错误 → 脚本抓到并报出精确行号 `LinkShortcutManager.kt:63:34`；恢复后 0 error。接入 `build.yml` 的 `verify` job。
     - 脚本只统计**前端 `error:` 行**；后端 `BackendException`（IR lowering）在本环境必然出现（缺 aapt 产物），已用**发版前未改动的原始代码验证过同样报错**，确认与代码无关。
   - **元教训（比 bug 本身更重要）**：**猜 bug 是错的做法**。第一次靠猜修对了两处、但漏了更深的一处，代价是四平台包白跑两轮。正确顺序是：先把「拿到编译器原文」的能力建起来（本地 kotlinc / CI 日志 artifact），再修 bug。在此之前不要改代码 —— 改了也无法验证是否修全。
-  - **重新发版**：修复后需重打 tag 触发 CI（`git tag -f v0.4.7-beta`）。
+  - **✅ 已成功发版（run `37043118757`，2026-10-03 02:02 完成）**：tag `v0.4.7-beta` → `4a6d3da`，**7 个 job 全绿**（verify ✅ / 伴侣 App APK ✅ / macos-x64 ✅ / macos-arm64 ✅ / linux-x64 ✅ / windows-x64 ✅ / 发布 Release ✅）。**Release 已发布**（id `402040641`，draft=false / prerelease=true，published 2026-10-02T17:59:56Z）。
+    - **资产 30 个全齐**：`MirrorDock_0.4.7_x64.dmg` / `_aarch64.dmg` / `_x64-setup.exe` / `_x64_en-US.msi` / `_amd64.AppImage` / `_amd64.deb` / `MirrorDock-0.4.7-1.x86_64.rpm`、updater 归档 4 份 + `.sig` 4 份、**伴侣 APK `MirrorDock-companion-0.4.7.apk`（4.29 MB / 4,500,264 字节）**、4 份 `SHA256SUMS-<平台>.txt`、8 份 SBOM、`latest.json`。
+    - **updater 端点已核验**：`latest.json` → `version=0.4.7`、`pub_date=2026-10-02T18:00:04Z`、`platforms=4` 且**四平台签名全部非空**（darwin-aarch64 / darwin-x86_64 / linux-x86_64 / windows-x86_64）。
+    - **Mac**：本地构建的 0.4.7 已在 `/Applications/MirrorDock.app`（x86_64 匹配本机 Intel i9），**需重启客户端生效**。
+    - **手机端已覆盖安装并验证**（真机 adb `79j7kn9tkjt8rwss`）：伴侣 **0.2.5 → 0.3.0**（versionCode 16 → 17），`install -r` 成功；启动无 FATAL 崩溃（进程存活）；**台账迁移已在真机上确证** —— `shared_prefs/paired_computers.xml` 里旧平铺键（`pairing_id=281a8740009b6916` / `desktop_fingerprint=b992d58…` / `last_host=192.168.0.177`）**全部保留**，同时新增 `computers_v2` 列表 + `active_pairing_id` + `legacy_migrated=true`，**旧凭据零丢失**。
+  - **重新发版**：无需重打，第四次已成功。
 
 ## 最终成品退出条件
 
