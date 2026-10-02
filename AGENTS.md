@@ -21,6 +21,20 @@
 - Capability-gate input, audio, wireless pairing, screen-off behavior, and codecs. Test USB and Wi-Fi independently; verify changes to transport/input/permission paths automatically and on a physical device when available.
 - Before release: inspect SBOM, notices, licenses, vulnerability results, artifact signatures, channel requirements (mainland China, Google Play, enterprise sideload), and rollback behavior. A safety, policy, or license block cannot be waived by product metrics.
 
+### Local verification commands
+
+Run the narrowest applicable check; the leftmost that exists is the fastest signal.
+
+| Area | Command | Notes |
+| --- | --- | --- |
+| Frontend types + build | `pnpm build` | Runs `tsc` then `vite build`. Fails on any type error. |
+| Frontend tests | `pnpm vitest run` | Rendering contracts + pure functions. |
+| Rust | `cargo test --manifest-path src-tauri/Cargo.toml` | Then `cargo clippy --manifest-path src-tauri/Cargo.toml`. |
+| Companion (Android) static | `python3 scripts/verify-companion.py` | **Required before every companion change.** |
+| Companion real build | push a `v*` tag, or run `companion.yml` | Gradle only exists on the CI runner. |
+
+`scripts/verify-companion.py` exists because this workstation has no `gradle` and the sandbox blocks large downloads, so Kotlin compilation is CI-only. The script catches locally — before CI — the errors that would otherwise wait for CI: malformed XML, dangling `@string`/`@color`/`@style`/`@drawable` references, `findViewById(R.id.x)` where `x` is declared in no layout, `AndroidManifest` classes with no source file, unbalanced Kotlin delimiters, and dead string resources. Treat a red run as a build break.
+
 ## Team and skills
 
 - Use `$mirrordock-development` for MirrorDock work. Load the narrowest relevant Skill named in its instructions and use the role boundaries in `agents/TEAM_AGENTS.md` for cross-specialty work.
