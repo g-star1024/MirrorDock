@@ -57,3 +57,34 @@
 ## 6. 门禁不可被指标覆盖
 
 安全性、政策合规或许可证问题一旦成立，**不得**以产品指标（完成率、性能、进度）为由放行。
+
+## 7. 发版完成度：tag 是唯一开关（2026-10-02 血泪教训）
+
+**事故**：v0.4.5-beta 的桌面模式按设备设置 + 应用名下拉（X10-71）代码早已落地、测试全绿、`DEVELOPMENT_TASKS.md` 也标了「已发版」，但 `build.yml` **只在 `tags: v*` 时才打包**——而这个 tag 从未推送。结果用户手上的版本不含该特性，而台账声称已交付。**特性从未到达用户，误报持续了数轮。**
+
+### 规则
+
+1. **代码落地 ≠ 发版完成。** 标 ✅ 发版前必须同时满足：
+   - `git ls-remote --tags origin` 能查到该 tag；
+   - GitHub 上存在对应 Release（`draft=false`）且**资产齐全**；
+   - `latest.json` 的 `version` 等于该版本号。
+2. **"发版证据待 CI 完成后补记"这类占位句等于没发版。** 若 CI 未跑完，行末必须保持未勾选，并显式写「tag 已推 / CI 进行中 / Release 未核验」三段状态。
+3. **版本号一处都不能少改。** 桌面版本号共 8 处口径，必须全量同步：
+   `src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`README.md`、`site/index.html`、`site/compatibility.html`、`docs/compatibility-matrix.md`。改完用 grep 反查旧版本号，确认只剩 `DEVELOPMENT_TASKS.md` 的历史记录。
+4. **误标的发布说明要删。** 若 `docs/releases/vX.md` 描述了一个从未发版的版本，删除该文件，不要留着误导后续会话。
+
+### 本地打包与签名（已实测）
+
+| 目的 | 做法 | 注意 |
+| --- | --- | --- |
+| 只出 Mac `.app` | `pnpm tauri build --bundles app`（约 6 分钟） | **不要**带 `TAURI_SIGNING_PRIVATE_KEY`：macOS `codesign` 会去解锁登录钥匙串，后台无 TTY 时永久卡在 `Password:` 提示（实测挂起 8m44s 后手动终止） |
+| updater 签名归档 | 交给 CI（GitHub secret `TAURI_SIGNING_PRIVATE_KEY`） | 私钥在 `MirrorDock-内部文档/mirrordock-updater.key`（minisign 私钥、**无密码**），公钥 `.pub` 与 `tauri.conf.json` 的 `pubkey` 配对一致 |
+| 伴侣 APK | 推 tag 走 CI：`companion.yml` / `build.yml` 的 `companion-apk` job | gradle 在 runner 上跑，签名取 `COMPANION_KEYSTORE_BASE64` / `COMPANION_STORE_PASSWORD` secret。**本地没有 gradle 也出得了 APK，不要据"本地无 gradle"断言 APK 打不出来** |
+
+### 发版后核验清单
+
+- Release：唯一非草稿、`prerelease` 标志正确、**资产数量与文件名齐全**（四平台安装包 + updater 归档 + `.sig` + `SHA256SUMS` + SBOM + `latest.json` + 伴侣 APK）。
+- updater 端点：解析 `latest.json`，确认 `version` 正确、`platforms` 覆盖四个平台且**每个平台都有非空 `signature`**。
+- 沙箱网络：`curl` 直连 `github.com/.../releases/download/...` 常被拦；改用 GitHub API（`api.github.com/repos/:owner/:repo/releases`、assets API）核验。`gh` CLI 通常不在非交互 shell 的 PATH 中，用 `git ls-remote` 或 GitHub MCP 工具替代。
+- 版本考古：报告"某特性没生效"之前，先查**远端 tag 与 Release 资产**，再查代码——顺序反了会误判成漏写代码。
+

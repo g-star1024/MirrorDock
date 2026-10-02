@@ -58,7 +58,23 @@ description: MirrorDock（Android 桌面镜像工具）全部工程工作的入�
 4. 同一次改动内更新 `DEVELOPMENT_TASKS.md`；仅**有证据**的条目可标 `✅`，未完成或外部阻塞的条目保持未勾选并写明缺失证据。
 5. 报告内容：执行命令、未验证面、兼容性、政策/许可证影响、回滚行为。
 
+## 发版与打包（最高频误判区，先读这里）
+
+**签名密钥不是问题**：updater 私钥 `MirrorDock-内部文档/mirrordock-updater.key`（minisign，**无密码**）与公钥 `.pub` 均已配置，`tauri.conf.json` 的 `pubkey` 与之配对一致；伴侣 APK keystore 在 `mirrordock-companion.keystore`。**不要**再因"找不到密钥"而判定无法签名。
+
+**APK 不是打不出来**：伴侣 APK 走 CI（`.github/workflows/companion.yml`、`build.yml` 的 `companion-apk` job），gradle 在 runner 上运行，签名取仓库 secret。**本地没装 gradle 不构成阻塞。**
+
+**代码落地 ≠ 发版完成**：`build.yml` 仅在 `tags: v*` 触发。标「已发版」前必须核验三件事——远端 tag 存在、Release 非草稿且资产齐全、`latest.json` 的 `version` 对得上。v0.4.5-beta 曾因漏推 tag 而让特性从未到达用户，台账却误标已发版（详见 `references/verification-evidence.md` 第 7 节）。
+
+**报告"某特性没生效"时的排查顺序**：先查远端 tag 与 Release 资产 → 再查版本号是否八处同步 → 最后才查代码。顺序反了会把"漏发版"误判成"漏写代码"。
+
+**本地只出 Mac `.app` 时不要设 `TAURI_SIGNING_PRIVATE_KEY`**：会触发 macOS `codesign` 解锁登录钥匙串，后台无 TTY 时永久卡在 `Password:`。updater 签名交给 CI。
+
+**沙箱网络**：`curl` 直连 `github.com/.../releases/download/...` 常被拦，改用 GitHub API 或 GitHub MCP 工具；`gh` CLI 通常不在非交互 shell 的 PATH。
+
+**升级到新版本时的版本号口径（共 8 处）**：`src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`README.md`、`site/index.html`、`site/compatibility.html`、`docs/compatibility-matrix.md`。
+
 ## 参考
 
 - `references/mirrordock-context.md` — 仓库结构、构建命令、阶段验收表、当前阻塞项速查
-- `references/verification-evidence.md` — 证据要求与不可替代验收项清单
+- `references/verification-evidence.md` — 证据要求、不可替代验收项清单、发版完成度核验（tag/Release/latest.json）
