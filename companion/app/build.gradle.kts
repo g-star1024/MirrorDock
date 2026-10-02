@@ -11,9 +11,9 @@ android {
         applicationId = "com.mirrordock.companion"
         minSdk = 26
         targetSdk = 34
-        // M4-5：伴侣端版本独立维护；0.2.0 = M4 常驻通道/状态通知/解除互信。
-        versionCode = 12
-        versionName = "0.2.1"
+        // 0.2.2 = X10-60 发送区推送/崩溃上报；0.2.1 = FGS 崩溃修复。
+        versionCode = 13
+        versionName = "0.2.2"
     }
 
     // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本
