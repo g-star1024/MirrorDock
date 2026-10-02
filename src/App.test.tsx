@@ -30,6 +30,7 @@ vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
 }));
 
 import App, {
+  buildDesktopPrefDevices,
   capabilitySummary,
   composeOptionsWithDesktop,
   defaultShortcuts,
@@ -403,7 +404,117 @@ describe("composeOptionsWithDesktop", () => {
   });
 });
 
+describe("buildDesktopPrefDevices", () => {
+  const adbDevice = (serial: string, physical: string | null, state: string, label = serial) => ({
+    serial,
+    label,
+    state,
+    physical_serial: physical,
+    connections: [],
+  });
+
+  it("lists_single_ready_device_so_per_device_module_is_always_visible", () => {
+    // X10-72 回归：旧实现单设备时不渲染设备选择器，用户以为桌面模式是全局开关。
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [adbDevice("usb-1", "PHYS1", "ready", "Pixel 8")],
+      labels: { "usb-1": "Pixel 8" },
+    });
+    expect(devices).toHaveLength(1);
+    expect(devices[0]).toMatchObject({ serial: "usb-1", label: "Pixel 8", state: "ready", configured: false, streaming: false });
+  });
+
+  it("merges_usb_and_wireless_endpoints_of_same_physical_device", () => {
+    // 同一台手机的 USB 与无线端点应合并成一行，且优先保留 ready 的那条。
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [
+        adbDevice("192.168.1.9:44093", "PHYS1", "offline", "Pixel 8"),
+        adbDevice("usb-1", "PHYS1", "ready", "Pixel 8"),
+      ],
+    });
+    expect(devices).toHaveLength(1);
+    expect(devices[0].serial).toBe("usb-1");
+    expect(devices[0].state).toBe("ready");
+  });
+
+  it("keeps_offline_and_unauthorized_devices_so_user_can_preconfigure_them", () => {
+    // 未插线/未授权的设备也要能提前配置桌面模式，否则「按设备设置」名不副实。
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [
+        adbDevice("usb-1", "PHYS1", "ready", "Pixel 8"),
+        adbDevice("usb-2", "PHYS2", "unauthorized", "Galaxy"),
+        adbDevice("usb-3", "PHYS3", "offline", "旧手机"),
+      ],
+    });
+    expect(devices.map((d) => d.serial)).toEqual(["usb-1", "usb-2", "usb-3"]);
+    expect(devices[1].state).toBe("unauthorized");
+    expect(devices[2].state).toBe("offline");
+  });
+
+  it("includes_session_devices_and_devices_with_stored_prefs_even_when_absent_from_adb", () => {
+    // 配置持久化在本地；设备长期没插也必须能找回入口，否则用户无法调整或清理。
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [],
+      sessionSerials: ["session-serial"],
+      prefs: { "old-wireless:1234": { desktop_mode: true, desktop_app: "com.android.browser" } },
+    });
+    const serials = devices.map((d) => d.serial).sort();
+    expect(serials).toEqual(["old-wireless:1234", "session-serial"]);
+    expect(devices.find((d) => d.serial === "session-serial")?.streaming).toBe(true);
+    expect(devices.find((d) => d.serial === "old-wireless:1234")?.configured).toBe(true);
+  });
+
+  it("marks_configured_and_streaming_flags_independently", () => {
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [adbDevice("usb-1", "PHYS1", "ready", "Pixel 8")],
+      sessionSerials: ["usb-1"],
+      prefs: { "usb-1": { desktop_mode: true, desktop_app: null } },
+    });
+    expect(devices[0]).toMatchObject({ streaming: true, configured: true });
+  });
+
+  it("returns_empty_when_no_device_is_known", () => {
+    // 空列表是"回落全局默认"的唯一合法条件，UI 依赖它决定是否显示设备清单。
+    expect(buildDesktopPrefDevices({ adbDevices: [] })).toEqual([]);
+  });
+});
+
 describe("App rendering", () => {
+  // X10-72 回归：用户报告"多设备各自设置桌面模式看起来还是全局设置，找不到按设备
+  // 设置的模块"。根因是设备选择器只在 sessionActive && 多会话时渲染。这里锁定：
+  // **只有一台设备、且没有会话时**，按设备模块也必须可见，且必须写明归属设备。
+  it("shows_the_per_device_desktop_module_even_with_a_single_device_and_no_session", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("usb-only", "Xiaomi M2104K10AC", "ready")] }));
+      }
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+
+    // 模块本身存在（不是藏在多会话条件下）。
+    expect(await screen.findByText("按设备设置 · 桌面模式")).toBeInTheDocument();
+    // 设备清单里出现这台设备，说明"选哪台设备"这一步对用户可见。
+    expect(await screen.findByRole("list", { name: "各设备桌面模式状态" })).toBeInTheDocument();
+    // 明确告知下面两项属于哪台设备——这是旧实现缺失、用户报"看不出是全局"的关键。
+    expect(await screen.findByText(/下面两项正在编辑/)).toBeInTheDocument();
+    expect(await screen.findByText(/仅对「Xiaomi M2104K10AC」这台设备生效/)).toBeInTheDocument();
+    // 不允许出现"当前保存为全局默认"这种回落文案（有一台设备时不成立）。
+    expect(screen.queryByText(/当前保存为全局默认/)).not.toBeInTheDocument();
+  });
+
+  it("falls_back_to_global_default_copy_when_no_device_is_known", async () => {
+    // 没有任何设备时，如实说明保存为全局默认，而不是静默把用户设置写到不可见的地方。
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") return Promise.resolve(adbCheck({ devices: [] }));
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+
+    expect(await screen.findByText("按设备设置 · 桌面模式")).toBeInTheDocument();
+    expect(await screen.findByText(/会作为/)).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "各设备桌面模式状态" })).not.toBeInTheDocument();
+  });
+
   it("diagnostics_panel_previews_before_export_and_never_lists_secrets", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "diagnostics_preview") {

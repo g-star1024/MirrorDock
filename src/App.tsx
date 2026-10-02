@@ -280,6 +280,82 @@ export function composeOptionsWithDesktop(options: SessionOptions, pref: Desktop
   };
 }
 
+// X10-71 + X10-72：桌面模式是设备级能力。旧的实现只在「两台以上设备正在镜像」
+// 时才渲染设备选择器，单设备 / 未镜像时读写落到全局 options —— 功能存在但用户
+// 看不见、也无法在未镜像时按设备预配。这里把候选设备的构建提成纯函数：
+//
+// 候选来源（去重、按 adb 顺序稳定输出）：
+//   1. 当前 adb 设备列表（ready / unauthorized / offline 全部列出，让用户能提前配置）
+//   2. 正在镜像或连接的会话设备（可能已从 adb 列表消失）
+//   3. 已有桌面模式偏好的设备（历史配置，不能因为设备不在列表里就丢掉入口）
+//
+// 无线端点（192.168.x.x:port）重连后会变，调用方需按 physical_serial 归并，
+// 归并后取当前活跃端点作为 key。
+export type DesktopPrefDevice = {
+  serial: string;
+  label: string;
+  state: DeviceState;
+  /** 该设备是否正在镜像/连接 */
+  streaming: boolean;
+  /** 该设备是否已有独立的桌面模式配置（用于列表上的"已配置"标记） */
+  configured: boolean;
+};
+
+export function buildDesktopPrefDevices(input: {
+  adbDevices: Device[];
+  labels?: Record<string, string>;
+  sessionSerials?: string[];
+  prefs?: Record<string, DesktopPref>;
+}): DesktopPrefDevice[] {
+  const { adbDevices, labels = {}, sessionSerials = [], prefs = {} } = input;
+  // 物理序列号 → 当前端点：同一台手机的 USB/无线端点归并，避免出现两行。
+  const byPhysical = new Map<string, Device>();
+  const bySerial = new Map<string, Device>();
+  for (const device of adbDevices) {
+    bySerial.set(device.serial, device);
+    const key = device.physical_serial ?? device.serial;
+    const existing = byPhysical.get(key);
+    // 已存在的通道不覆盖：ready 优先于其它状态，保证列表首行是能连的那条。
+    if (!existing || (existing.state !== "ready" && device.state === "ready")) {
+      byPhysical.set(key, device);
+    }
+  }
+  // 会话设备但已不在 adb 列表（设备断开、序列号变更）也要给入口，否则用户无法
+  // 找到并清理它的桌面模式设置。
+  for (const serial of sessionSerials) {
+    if (bySerial.has(serial)) continue;
+    const key = prefs[serial] ? serial : serial;
+    if (byPhysical.has(key)) continue;
+    byPhysical.set(key, {
+      serial,
+      label: labels[serial] ?? serial,
+      state: "offline",
+      physical_serial: null,
+      connections: [],
+    });
+  }
+  // 已有偏好的设备若不在 adb 列表也补进来（配置持久化在本地，设备可能长期未插）。
+  for (const serial of Object.keys(prefs)) {
+    if (bySerial.has(serial)) continue;
+    if (byPhysical.has(serial)) continue;
+    byPhysical.set(serial, {
+      serial,
+      label: labels[serial] ?? serial,
+      state: "offline",
+      physical_serial: null,
+      connections: [],
+    });
+  }
+  const sessionSet = new Set(sessionSerials);
+  return [...byPhysical.values()].map((device) => ({
+    serial: device.serial,
+    label: labels[device.serial] ?? device.label,
+    state: device.state,
+    streaming: sessionSet.has(device.serial),
+    configured: Boolean(prefs[device.serial]),
+  }));
+}
+
 export function readDesktopPrefs(): Record<string, DesktopPref> {
   try {
     const value = JSON.parse(localStorage.getItem("mirrordock.desktopPrefs") ?? "{}");
@@ -823,6 +899,9 @@ function App() {
 
   // X10-71：按设备保存桌面模式偏好；只影响这台设备，其他设备与全局默认不动。
   const [desktopPrefs, setDesktopPrefs] = useState<Record<string, DesktopPref>>(readDesktopPrefs);
+  // X10-72：桌面模式模块的编辑目标独立于「镜像窗口」那张卡的目标，理由见
+  // settingsTargetSerial 的重置 effect 注释——未插线的设备也要能提前配好。
+  const [desktopTargetSerial, setDesktopTargetSerial] = useState<string | null>(null);
   function updateDesktopPref(serial: string, patch: Partial<DesktopPref>) {
     setDesktopPrefs((prev) => {
       const base = prev[serial] ?? { desktop_mode: options.desktop_mode, desktop_app: options.desktop_app };
@@ -862,6 +941,9 @@ function App() {
   }
 
   // 目标设备的会话结束后，设置目标回退到主会话，避免打到已结束的设备上。
+  // 注意：只回退「镜像窗口」那张卡的目标（settingsTargetSerial）。桌面模式按设备
+  // 的选择走独立的 desktopTargetSerial —— 用户要能在设备没插上时提前配好它，
+  // 若跟着会话结束一起被清掉，这个模块就又变成"只能边连边配"。
   useEffect(() => {
     if (settingsTargetSerial && !activeSessionList.some((item) => item.serial === settingsTargetSerial)) {
       setSettingsTargetSerial(null);
@@ -1679,13 +1761,26 @@ function App() {
   // 快捷键处理器读取的最新 serial。
   shortcutsRef.current.readySerial = readySerial;
 
-  // X10-71：桌面模式设置的归属设备 = 选择器目标 ?? 主会话设备；没有会话时编辑
-  // 的是全局默认（下一次启动哪台设备就随哪台）。桌面模式相关行出现时，顺手把
-  // 该设备的应用列表拉下来（带应用名，供下拉联想）。
-  const settingsDesktopTarget = settingsTargetSerial ?? sessionSerial ?? null;
+  // X10-72（修 X10-71 的可见性缺陷）：桌面模式设置的归属设备现在**始终**是一个
+  // 真实设备 —— 显式选择 > 会话设备 > 当前就绪设备 > 唯一已配对设备。旧逻辑在
+  // 「单设备 / 未镜像」时把它留空，于是读写落到全局 options，用户看到的就像全局
+  // 开关。现在模块内明确显示归属设备，无设备时才回落全局默认并如实说明。
+  const desktopPrefDevices = buildDesktopPrefDevices({
+    adbDevices: check?.devices ?? [],
+    labels: displayLabels,
+    sessionSerials: sessions.map((item) => item.serial).filter((s): s is string => Boolean(s)),
+    prefs: desktopPrefs,
+  });
+  const settingsDesktopTarget = desktopTargetSerial ?? sessionSerial ?? readySerial ?? null;
   const targetDesktopPref = settingsDesktopTarget ? desktopPrefs[settingsDesktopTarget] ?? null : null;
+  // 有设备归属时，缺省值取全局 options（首次进入该设备的编辑态），此后一律以
+  // 该设备自己的 pref 为准 —— 打开这台设备的桌面模式不会连带改到别的设备。
   const shownDesktopMode = targetDesktopPref ? targetDesktopPref.desktop_mode : options.desktop_mode;
   const shownDesktopApp = targetDesktopPref ? targetDesktopPref.desktop_app : options.desktop_app;
+  // 当前编辑归属设备的展示名：让「这几项属于哪台设备」在界面上直接可读。
+  const settingsDesktopTargetLabel = settingsDesktopTarget
+    ? displayLabels[settingsDesktopTarget] ?? settingsDesktopTarget
+    : null;
   useEffect(() => {
     if (shownDesktopMode) void ensureDeviceApps(settingsDesktopTarget ?? readySerial);
   }, [shownDesktopMode, settingsDesktopTarget, readySerial]);
@@ -2798,50 +2893,6 @@ function App() {
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
-                    <span className="setting-name">桌面模式（独立虚拟屏幕）</span>
-                    <span className="setting-desc">不再镜像手机现有屏幕，而是在手机上创建一块独立虚拟屏幕：电脑上全屏看视频、写笔记，手机上回微信也不打断画面。需要 Android 10+，手机端会弹出「显示在其他应用上层」的确认。与摄像头画面互斥，更改后重启会话生效。多台设备时按「应用到哪台设备」所选的设备单独保存，各设备互不影响。</span>
-                  </div>
-                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={shownDesktopMode} onChange={e => {
-                    const checked = e.target.checked;
-                    if (settingsDesktopTarget) {
-                      // X10-71：这台设备自己的桌面模式偏好，不影响其他设备与全局默认。
-                      updateDesktopPref(settingsDesktopTarget, { desktop_mode: checked });
-                      if (checked && options.camera_source) updateOptions({ ...options, camera_source: false });
-                    } else {
-                      updateOptions({ ...options, desktop_mode: checked, camera_source: checked ? false : options.camera_source });
-                    }
-                  }} /></label>
-                </div>
-                {shownDesktopMode && (
-                  <div className="setting-row">
-                    <div className="setting-info">
-                      <span className="setting-name">虚拟屏启动的应用（可选）</span>
-                      <span className="setting-desc">实测部分机型（如小米/MIUI）的桌面不在虚拟屏上显示（会得到白屏/黑屏）；下拉按应用名称选择（例如「浏览器」），也可以直接填包名如 com.android.browser。留空则显示系统桌面。{currentDesktopAppName && `当前已选：${currentDesktopAppName}。`}</span>
-                    </div>
-                    <input
-                      className="setting-control"
-                      aria-label="虚拟屏启动的应用"
-                      list="device-app-packages"
-                      placeholder="com.android.browser"
-                      value={shownDesktopApp ?? ""}
-                      onChange={e => {
-                        const pkg = e.target.value.trim();
-                        const next = pkg ? pkg : null;
-                        if (settingsDesktopTarget) updateDesktopPref(settingsDesktopTarget, { desktop_mode: true, desktop_app: next });
-                        else updateOptions({ ...options, desktop_app: next });
-                      }}
-                    />
-                  </div>
-                )}
-                {shownDesktopMode && (
-                  <datalist id="device-app-packages">
-                    {(deviceApps[settingsDesktopTarget ?? readySerial ?? ""] ?? []).slice(0, 500).map(app => (
-                      <option key={app.package} value={app.package}>{app.name === app.package ? undefined : app.name}</option>
-                    ))}
-                  </datalist>
-                )}
-                <div className="setting-row">
-                  <div className="setting-info">
                     <span className="setting-name">使用手机后置摄像头画面</span>
                     <span className="setting-desc">把手机摄像头当作电脑上的摄像头画面（网课、会议场景）。仅在你显式开启时使用摄像头，且不采集任何麦克风声音；与桌面模式互斥，更改后重启会话生效。</span>
                   </div>
@@ -2944,6 +2995,128 @@ function App() {
                 <p className="setting-note">受保护内容（支付、密码页）系统会屏蔽为黑屏；会话进行中的全局快捷键（无需切回本窗口）可在下方「全局快捷键」中自定义。</p>
                 {sessionActive && <p className="setting-note">镜像窗口形态在启动时确定，运行中修改需重启窗口，画面会短暂中断。</p>}
                 {applyNotice && <p className="setting-note apply-notice" role="status">{applyNotice}</p>}
+              </div>
+            </section>
+
+            {/* X10-72：桌面模式是设备级能力，独立成卡。旧实现把它塞在「镜像窗口」
+                全局设置里，只在多会话时给一个设备下拉，单设备场景下读写落到全局 —
+                用户看到的就是一个"全局开关"，找不到按设备设置的地方。现在：
+                ① 顶部设备选择器列出**所有**已知设备（含未镜像、未就绪、已有历史配置的）
+                ② 明确显示"下面两项属于哪台设备"
+                ③ 设备列表每行直接显示该设备当前的桌面模式状态，点行即切换编辑对象
+                ④ 只有在一台设备都没有时，才回落全局默认并如实写明。 */}
+            <section className="settings-card">
+              <header className="settings-card-head">
+                <div>
+                  <h2>按设备设置 · 桌面模式</h2>
+                  <p>桌面模式与虚拟屏启动的应用按设备单独保存，各设备互不影响。</p>
+                </div>
+              </header>
+              <div className="settings-rows">
+                {desktopPrefDevices.length > 0 ? (
+                  <>
+                    <div className="setting-row">
+                      <div className="setting-info">
+                        <span className="setting-name">设置哪台设备</span>
+                        <span className="setting-desc">
+                          下面两项只作用于这里选中的设备。已连接的手机会排在前面；没有插上的、但以前设置过的设备也会列出，方便随时调整。
+                        </span>
+                      </div>
+                      <select
+                        className="setting-control"
+                        aria-label="桌面模式设置目标设备"
+                        value={settingsDesktopTarget ?? ""}
+                        onChange={e => setDesktopTargetSerial(e.target.value || null)}
+                      >
+                        {desktopPrefDevices.map((device) => (
+                          <option key={device.serial} value={device.serial}>
+                            {device.label}（{device.state === "ready" ? "已就绪" : device.state === "unauthorized" ? "未授权" : device.state === "offline" ? "离线" : "未知"}{device.streaming ? " · 镜像中" : ""}{device.configured ? " · 已设置桌面模式" : ""}）
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="device-pref-list" role="list" aria-label="各设备桌面模式状态">
+                      {desktopPrefDevices.map((device) => {
+                        const pref = desktopPrefs[device.serial];
+                        const on = pref ? pref.desktop_mode : options.desktop_mode;
+                        return (
+                          <button
+                            type="button"
+                            role="listitem"
+                            key={device.serial}
+                            className={`device-pref-item${device.serial === settingsDesktopTarget ? " active" : ""}`}
+                            onClick={() => setDesktopTargetSerial(device.serial)}
+                          >
+                            <span className="device-pref-name">
+                              {device.label}
+                              {device.streaming && <em className="device-pref-badge live">镜像中</em>}
+                              {!device.configured && <em className="device-pref-badge">未单独设置</em>}
+                            </span>
+                            <span className={`device-pref-state${on ? " on" : ""}`}>{on ? "桌面模式 开" : "桌面模式 关"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="setting-note" role="status">
+                      下面两项正在编辑：<strong>{settingsDesktopTargetLabel ?? "（未选择设备）"}</strong>
+                    </p>
+                  </>
+                ) : (
+                  <p className="setting-note">
+                    当前没有检测到任何设备。下面两项会作为<strong>全局默认</strong>保存 —— 新接入的设备在没有单独设置之前都按它启动。插上手机并完成调试授权后，这里会变成按设备单独保存。
+                  </p>
+                )}
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">桌面模式（独立虚拟屏幕）</span>
+                    <span className="setting-desc">
+                      不再镜像手机现有屏幕，而是在手机上创建一块独立虚拟屏幕：电脑上全屏看视频、写笔记，手机上回微信也不打断画面。需要 Android 10+，手机端会弹出「显示在其他应用上层」的确认。与摄像头画面互斥，更改后重启会话生效。
+                      {settingsDesktopTarget ? `仅对「${settingsDesktopTargetLabel}」这台设备生效。` : "当前保存为全局默认。"}
+                    </span>
+                  </div>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={shownDesktopMode} onChange={e => {
+                    const checked = e.target.checked;
+                    if (settingsDesktopTarget) {
+                      // 这台设备自己的桌面模式偏好，不影响其他设备与全局默认。
+                      updateDesktopPref(settingsDesktopTarget, { desktop_mode: checked });
+                      if (checked && options.camera_source) updateOptions({ ...options, camera_source: false });
+                    } else {
+                      updateOptions({ ...options, desktop_mode: checked, camera_source: checked ? false : options.camera_source });
+                    }
+                  }} /></label>
+                </div>
+                {shownDesktopMode && (
+                  <div className="setting-row">
+                    <div className="setting-info">
+                      <span className="setting-name">虚拟屏启动的应用（可选）</span>
+                      <span className="setting-desc">
+                        实测部分机型（如小米/MIUI）的桌面不在虚拟屏上显示（会得到白屏/黑屏）；下拉按应用名称选择（例如「浏览器」），也可以直接填包名如 com.android.browser。留空则显示系统桌面。
+                        {currentDesktopAppName && `当前已选：${currentDesktopAppName}。`}
+                        {settingsDesktopTarget ? `仅对「${settingsDesktopTargetLabel}」这台设备生效。` : "当前保存为全局默认。"}
+                      </span>
+                    </div>
+                    <input
+                      className="setting-control"
+                      aria-label="虚拟屏启动的应用"
+                      list="device-app-packages"
+                      placeholder="com.android.browser"
+                      value={shownDesktopApp ?? ""}
+                      onChange={e => {
+                        const pkg = e.target.value.trim();
+                        const next = pkg ? pkg : null;
+                        if (settingsDesktopTarget) updateDesktopPref(settingsDesktopTarget, { desktop_mode: true, desktop_app: next });
+                        else updateOptions({ ...options, desktop_app: next });
+                      }}
+                    />
+                  </div>
+                )}
+                {shownDesktopMode && (
+                  <datalist id="device-app-packages">
+                    {desktopAppsForTarget.slice(0, 500).map(app => (
+                      <option key={app.package} value={app.package}>{app.name === app.package ? undefined : app.name}</option>
+                    ))}
+                  </datalist>
+                )}
               </div>
             </section>
 

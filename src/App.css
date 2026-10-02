@@ -194,6 +194,27 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 /* 「应用/保存」类结果反馈：与普通说明文字区分开，失败信息不能被当成背景文字忽略。 */
 .setting-note.apply-notice { padding: 10px 12px; border-left: 3px solid #2e6be6; border-radius: 8px; color: #1f4fc4; background: #f0f5fd; }
 
+/* 按设备设置（X10-72）：逐台设备一行的桌面模式状态，点行即切换编辑对象。
+   这是"这功能到底在哪"的答案——用户不必猜下拉框，直接看到每台设备各自的状态。 */
+.device-pref-list { display: grid; gap: 8px; margin: 4px 0 2px; }
+.device-pref-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 10px 12px; text-align: left; cursor: pointer;
+  font: inherit; font-size: 13.5px; color: #2b3648;
+  background: #f7f9fc; border: 1px solid #e4e9f1; border-radius: 10px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.device-pref-item:hover { border-color: #c3d2ee; background: #f2f6fc; }
+.device-pref-item.active { border-color: #2e6be6; background: #f0f5fd; color: #1f4fc4; }
+.device-pref-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.device-pref-badge {
+  flex: 0 0 auto; padding: 2px 7px; font-size: 11px; font-style: normal; line-height: 1.5;
+  color: #6b7686; background: #eceff4; border-radius: 999px;
+}
+.device-pref-badge.live { color: #0f6b45; background: #dff3e8; }
+.device-pref-state { flex: 0 0 auto; font-size: 12.5px; color: #6b7686; }
+.device-pref-state.on { color: #1f4fc4; font-weight: 650; }
+
 .shortcut-grid { display: grid; gap: 10px; margin-top: 12px; }
 .shortcut-row { display: flex; align-items: center; gap: 14px; }
 .shortcut-row > span { flex: 0 0 72px; color: #2b3648; font-size: 14px; font-weight: 650; }
