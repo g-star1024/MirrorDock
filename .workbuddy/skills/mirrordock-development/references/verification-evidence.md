@@ -81,6 +81,22 @@
 | updater 签名归档 | 交给 CI（GitHub secret `TAURI_SIGNING_PRIVATE_KEY`） | 私钥在 `MirrorDock-内部文档/mirrordock-updater.key`（minisign 私钥、**无密码**），公钥 `.pub` 与 `tauri.conf.json` 的 `pubkey` 配对一致 |
 | 伴侣 APK | 推 tag 走 CI：`companion.yml` / `build.yml` 的 `companion-apk` job | gradle 在 runner 上跑，签名取 `COMPANION_KEYSTORE_BASE64` / `COMPANION_STORE_PASSWORD` secret。**本地没有 gradle 也出得了 APK，不要据"本地无 gradle"断言 APK 打不出来** |
 
+### 伴侣 APK 的编译期陷阱（2026-10-03 实测踩坑）
+
+`build.yml` 的 `release` job `needs: [package, companion-apk]` —— **伴侣 APK 编译失败会让整个 Release 跳过，四平台包全部白跑**。以下是实际让 v0.4.7 首次发版失败的三处，都是本地静态校验漏掉的：
+
+| 陷阱 | 症状 | 正确写法 |
+| --- | --- | --- |
+| `View` 没有可写的 `minWidth` / `minHeight` | Kotlin 编译失败 | `View` 只有 `minimumWidth`/`minimumHeight`（且 Android 12 起 setter 已移除）。`TextView` 另有 `setMinWidth`。想收紧按钮尺寸优先换 `TextView`，别跟系统默认内边距搏斗 |
+| `Long` 与 `IntRange` 混用 | 类型不匹配编译失败 | `if (rtt in 0..10_000)` 中 `rtt` 是 `Long` → 必须写 `0L..10_000L` |
+| API 30+ 属性未判版本 | 运行期 `NoSuchMethodError`（**编译能过，更隐蔽**） | 例：`ShortcutManager.RequestPinShortcutResult.isLongLived` 是 API 30+，而 `minSdk = 26`。先判 `SDK_INT >= R`，外层再包 `runCatching` 兜底 |
+
+**方法论教训**：本地无 gradle 时，静态校验是唯一防线，但**校验器自身也有盲区**。所以：
+
+1. 静态校验脚本必须**反向验证** —— 注入已知 bug，确认脚本能抓到并报对行号。只看它跑绿不算验证。
+2. 静态校验必须**接进 CI 的 `verify` job**（`companion-apk` / `release` 都 `needs: verify`），成为发版硬门禁。否则只是本地自查，拦不住发版。
+3. 定位 CI 失败不必依赖日志下载（`/logs` 端点需 admin，403）。用 `actions/runs` + `actions/runs/{id}/jobs` 拿 **step 级结论**即可定位到失败步骤。
+
 ### 发版后核验清单
 
 - Release：唯一非草稿、`prerelease` 标志正确、**资产数量与文件名齐全**（四平台安装包 + updater 归档 + `.sig` + `SHA256SUMS` + SBOM + `latest.json` + 伴侣 APK）。
