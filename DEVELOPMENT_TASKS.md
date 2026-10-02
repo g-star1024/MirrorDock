@@ -93,7 +93,7 @@
   - **签发工具**：`examples/license_sign`（env 种子）与 `examples/license_keygen`（/dev/urandom + 签名自检）。
   - **证据**：Rust 89 → 99（base32 往返、验签往返/篡改拒绝/过期/产品不符、损坏回退、门控矩阵、密钥不回显、**真实种子端到端**（无种子环境自动跳过））；前端 23 → 27（免费/专业两态渲染、激活调用契约、失败不回显密钥）；clippy 零告警；`pnpm build` 通过。
   - **未验证面**：GUI 下真实激活/撤销的端到端体验、过期许可在到期后门禁的运行时行为（逻辑有测试、无真机轮次）。
-- [ ] R3-02 国内、Google Play、企业侧载各自的隐私、权限、签名、更新与支持材料。**底稿完成（docs/channel/）；法务复核与渠道审核为外部流程。**
+- [ ] R3-02 国内、Google Play、企业侧载各自的隐私、权限、签名、更新与支持材料。**底稿完成（docs/channel/）；法务复核与渠道审核为外部流程。2026-10-02 用户裁定：渠道发布涉及收费，暂时搁置，不计入当前推进顺序（阶段 3 优先 mac 签名与 win 测试矩阵）。**
   - `docs/channel/`：README（三渠道材料矩阵与门禁）、privacy-policy-draft（每条承诺对应实现证据）、permissions-data（桌面端与设备端权限逐项表）、channels（国内/Play/企业差异、更新与支持分流）。
   - 渠道状态如实标记：签名 ❌（外部阻塞）；SBOM/NOTICE ✅（A1-08 产物）。
 - [ ] R3-03 安全审计：威胁模型、依赖漏洞、许可证、SBOM、签名、更新和数据流。**首版完成；四项假设已于 2026-09-29 由产品负责人回签成立（私钥永不进 CI / 不承诺公共 WiFi / v1 无自动更新 / scrcpy 固定哈希 fail-closed），结论转为在假设成立时有效。**
@@ -649,7 +649,13 @@
   - **证据（2026-10-02 18:5x，HEAD=f45f2b5 + 本改动，开场 `git status` 干净、local==remote）**：`pnpm build`（tsc + vite）通过（288ms）；vitest **53 passed / 0 failed**（基线 51 + 新增 2：`notifications_article_covers_quick_reply_and_offline_notice`、`multi_device_article_covers_favorites_per_session_target_and_tray_stop`）；既有「README 声明篇数 == 实际篇数」不变量继续生效并已随之更新至 11。纯前端内容层、无 Rust 改动 ⇒ Rust 基线以 f45f2b5 的 CI 为准（build/pages 均 success），未重跑本地 cargo。
   - **顺带核验（只读，无改动）——v0.4.4-beta 发版链复核通过**：Release 唯一、非草稿、prerelease、**30 资产**（伴侣 APK `MirrorDock-companion-0.4.4.apk` 带版本名）；`site/index.html` 9 条下载链接与实际资产名逐一对齐、无死链；版本口径七处一致（`tauri.conf.json` / `package.json` / `Cargo.toml` / `Cargo.lock` / `README.md` / `site/index.html` / `site/compatibility.html` / `docs/compatibility-matrix.md` 均为 0.4.4）；`updater` 分支 `latest.json` version=0.4.4、四平台（darwin-aarch64 / darwin-x86_64 / linux-x86_64 / windows-x86_64）齐全。
   - **未验证面（外部阻塞）**：帮助文案在新版界面里的可读性属用户验收范围；快捷回复端到端仍需真实聊天应用通知（X10-69 待验收项不变）。
-- [ ] **待验收（X10-59/60/61/62/63/64/68/69）**：v0.4.4-beta 两端包装真机后：**托盘逐会话条目与逐台结束（X10-68，双设备场景）**、**多会话设置「应用到哪台设备」选择器（X10-68）**、**设备收藏置顶（X10-68）**、**快捷回复端到端（X10-69：带回复动作的真实聊天通知 → 桌面回复框发送 → 手机上消息发出）**；以及 v0.4.3-beta 已交付但属观感验收的：拖拽手势、拔线提示条+自动恢复、发送区删除/新文件提示、工具页通知面板样式。
+- [x] **X10-71 桌面模式按设备单独设置 + 应用名下拉（2026-10-02 用户反馈两问题）**：
+  - **问题**：①多设备时不是所有设备都开桌面模式，「桌面模式开关 + 虚拟屏启动的应用」却跟随全局一份设置，无法按已开启的设备单独保存；②应用候选下拉只显示包名（如 `com.netease.uuremote`），小白用户看不懂。
+  - **按设备保存（前端 `src/App.tsx`）**：桌面模式开关与虚拟屏应用整体下沉为设备级偏好（`localStorage: mirrordock.desktopPrefs`，按序列号键控）：有会话目标（「应用到哪台设备」选择器 ?? 主会话设备）时读写该设备自己的偏好，无会话时编辑全局默认（随下次启动哪台就带哪台）；`composeOptionsWithDesktop` 在启动镜像（`start_mirroring`）与会话中应用（`update_session_options`）时按目标设备叠加偏好并维持摄像头源互斥；「恢复默认设置」连各设备偏好一并清空。其余设置仍为全局一份（范围按用户反馈只动桌面模式相关）。
+  - **应用名下拉（后端 `src-tauri/src/lib.rs` + 前端）**：`list_device_apps` 升级为返回 `{package, name}`：首选 `scrcpy --list-apps`（只列**可启动**的应用且带应用名，与「虚拟屏启动应用」场景一致；15s 超时兜底强杀，失败或解析为空回退 `pm list packages -3`、名字退化为包名）；解析器剔除 server 日志行与控制字符、包名白名单校验、按应用名排序按包名去重。前端 datalist 改为 `<option value=包名>应用名</option>`，已填包名匹配到候选时说明文字追加「当前已选：<应用名>」。
+  - 帮助中心：「同时镜像多台设备」篇补一段（桌面模式按设备记忆 + 下拉按应用名称选择），篇数不变（11），README 篇数口径无需变更。
+  - 证据：`cargo test` **192 passed / 0 failed**（新增 `scrcpy_app_list_parses_names_and_ignores_noise`、`named_apps_prefer_scrcpy_output_and_fall_back_to_pm_list`，既有 pm list 测试改断言新结构）；clippy --lib 零告警；`pnpm build` + vitest **58 passed / 0 failed**（新增 readDesktopPrefs 两项、composeOptionsWithDesktop 三项）。**`scrcpy --list-apps` 真机实测**（Redmi M2104K10AC / Android 13，经随包 4.1 二进制）：输出 ` * 应用名<空白>包名` 与解析器假设一致，21 个可启动应用（vs `pm -3` 41 个包，可启动过滤正是本场景想要的）。**未验证面（外部阻塞）**：设置页新交互（按设备切换/编辑、应用名下拉选择、恢复默认清偏好）需下个版本 GUI 人工验收；scrcpy `--list-apps` 与镜像会话并发运行理论无害（server jar 覆盖写不影响已加载进程），待多设备轮次顺带复核。
+- [ ] **待验收（X10-59/60/61/62/63/64/68/69/71）**：v0.4.4-beta 两端包装真机后：**托盘逐会话条目与逐台结束（X10-68，双设备场景）**、**多会话设置「应用到哪台设备」选择器（X10-68）**、**设备收藏置顶（X10-68）**、**快捷回复端到端（X10-69：带回复动作的真实聊天通知 → 桌面回复框发送 → 手机上消息发出）**、**桌面模式按设备设置与应用名下拉（X10-71，随下个版本交付）**；以及 v0.4.3-beta 已交付但属观感验收的：拖拽手势、拔线提示条+自动恢复、发送区删除/新文件提示、工具页通知面板样式。
   - **已由真机验证覆盖（2026-10-02，用户无需重复验收）**：X10-64B 端口回退实连、X10-66 通知转发端到端、0.2.5 转发链路（sent=true）、两端升级本身。
   - **伴侣 APK 0.2.2 来源**：`companion.yml`（workflow「Companion App」）随 4bbfe0b 的 push 已成功产出 artifact `mirrordock-companion-debug`（约 3.8 MB，run 36953624864），可直接下载安装验收。
 

@@ -31,6 +31,7 @@ vi.mock("@tauri-apps/plugin-global-shortcut", () => ({
 
 import App, {
   capabilitySummary,
+  composeOptionsWithDesktop,
   defaultShortcuts,
   isMacPlatform,
   isValidShortcut,
@@ -43,6 +44,7 @@ import App, {
   lockSummary,
   lockTag,
   notificationTime,
+  readDesktopPrefs,
   readOptions,
   readShortcuts,
   recordingFileName,
@@ -327,6 +329,77 @@ describe("readOptions", () => {
     expect(readOptions().quality).toBe("balanced");
     localStorage.setItem("mirrordock.sessionOptions", "{not json");
     expect(readOptions().quality).toBe("balanced");
+  });
+});
+
+describe("readDesktopPrefs", () => {
+  it("keeps_valid_per_device_entries_and_drops_broken_ones", () => {
+    localStorage.setItem(
+      "mirrordock.desktopPrefs",
+      JSON.stringify({
+        phoneA: { desktop_mode: true, desktop_app: "com.android.browser" },
+        phoneB: { desktop_mode: false, desktop_app: "  " },
+        phoneC: { desktop_app: "com.x" }, // 缺 desktop_mode → 整条丢弃
+        phoneD: "garbage",
+      }),
+    );
+    expect(readDesktopPrefs()).toEqual({
+      phoneA: { desktop_mode: true, desktop_app: "com.android.browser" },
+      phoneB: { desktop_mode: false, desktop_app: null },
+    });
+  });
+
+  it("returns_empty_prefs_for_missing_or_corrupt_storage", () => {
+    expect(readDesktopPrefs()).toEqual({});
+    localStorage.setItem("mirrordock.desktopPrefs", "{not json");
+    expect(readDesktopPrefs()).toEqual({});
+    localStorage.setItem("mirrordock.desktopPrefs", JSON.stringify([1, 2]));
+    expect(readDesktopPrefs()).toEqual({});
+  });
+});
+
+describe("composeOptionsWithDesktop", () => {
+  const global = {
+    quality: "balanced" as const,
+    rotation: 0,
+    fullscreen: false,
+    always_on_top: false,
+    keep_awake: true,
+    record: false,
+    clipboard_autosync: true,
+    audio: true,
+    shortcut_mod: null,
+    show_touches: false,
+    keyboard_uhid: true,
+    read_only: false,
+    max_fps: null,
+    desktop_mode: false,
+    desktop_app: null,
+    camera_source: true,
+  };
+
+  it("returns_global_options_untouched_when_device_has_no_pref", () => {
+    expect(composeOptionsWithDesktop(global, null)).toBe(global);
+  });
+
+  it("applies_device_desktop_pref_and_enforces_camera_exclusion", () => {
+    const effective = composeOptionsWithDesktop(global, { desktop_mode: true, desktop_app: "com.android.browser" });
+    expect(effective.desktop_mode).toBe(true);
+    expect(effective.desktop_app).toBe("com.android.browser");
+    // 桌面模式与摄像头画面互斥：设备开了桌面模式，全局的摄像头源不再下发。
+    expect(effective.camera_source).toBe(false);
+    // 全局对象不被修改。
+    expect(global.camera_source).toBe(true);
+    expect(global.desktop_mode).toBe(false);
+  });
+
+  it("hides_desktop_app_while_device_desktop_mode_is_off", () => {
+    const pref = { desktop_mode: false, desktop_app: "com.android.browser" };
+    const effective = composeOptionsWithDesktop({ ...global, desktop_mode: true }, pref);
+    expect(effective.desktop_mode).toBe(false);
+    expect(effective.desktop_app).toBeNull();
+    // 摄像头源不被误伤。
+    expect(effective.camera_source).toBe(true);
   });
 });
 

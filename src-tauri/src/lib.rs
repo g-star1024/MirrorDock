@@ -17,6 +17,10 @@ const PROCESS_GRACEFUL_TIMEOUT: Duration = Duration::from_millis(3000);
 /// 兜底强杀之后等待进程真正退出的上限。SIGKILL 之后的等待只为回收，通常毫秒级。
 const PROCESS_REAP_TIMEOUT: Duration = Duration::from_millis(1000);
 
+/// `scrcpy --list-apps` 的最长等待时间。低端机解析全部应用可能需要数秒；
+/// 超时按失败处理，回退到 `pm list packages`（X10-71）。
+const LIST_APPS_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// MVP 只承诺 Android 8.0（API 26）及以上的画面与控制。
 const MIN_SDK_FOR_MIRRORING: u32 = 26;
 
@@ -6161,21 +6165,43 @@ fn send_file_to_device(
     result
 }
 
-/// 列出手机上已安装的第三方应用包名（X10-53）。
+/// 列出手机上适合在虚拟屏启动的应用（X10-53；X10-71 升级为「应用名 + 包名」）。
 ///
-/// 桌面模式的「虚拟屏启动的应用」候选列表；只读操作，结果按包名排序去重。
+/// 首选 `scrcpy --list-apps`：只列**可启动**的应用（有启动入口，与「虚拟屏启动
+/// 应用」的场景一致），且带应用名——小白用户看得懂「浏览器」而看不懂
+/// `com.android.browser`。scrcpy 不可用或失败时回退 `pm list packages -3`
+/// （应用名退化为包名）。读操作，不改变设备状态。
 #[tauri::command]
 fn list_device_apps(
     runtimes: State<AppRuntimes>,
     serial: String,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Vec<DeviceApp>, AppError> {
     list_device_apps_with(&runtimes, serial)
 }
 
-fn list_device_apps_with(runtimes: &AppRuntimes, serial: String) -> Result<Vec<String>, AppError> {
+fn list_device_apps_with(runtimes: &AppRuntimes, serial: String) -> Result<Vec<DeviceApp>, AppError> {
+    list_device_apps_scoped(runtimes, serial, run_scrcpy_list_apps)
+}
+
+/// `scrcpy_apps` 是注入点：单测传 `|_| None`（跳过 scrcpy 路径）或样例输出，
+/// 避免测试真正拉起 scrcpy 进程。
+fn list_device_apps_scoped<F>(
+    runtimes: &AppRuntimes,
+    serial: String,
+    scrcpy_apps: F,
+) -> Result<Vec<DeviceApp>, AppError>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
     let serial = validate_serial(&serial)?;
     if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
         return Err(error);
+    }
+    if let Some(output) = scrcpy_apps(&serial) {
+        let apps = parse_scrcpy_app_list(&output);
+        if !apps.is_empty() {
+            return Ok(apps);
+        }
     }
     let raw = runtimes.adb.list_device_apps(&serial).map_err(|_| {
         AppError::new(
@@ -6184,16 +6210,120 @@ fn list_device_apps_with(runtimes: &AppRuntimes, serial: String) -> Result<Vec<S
             "请确认连接仍然有效，然后重试。",
         )
     })?;
-    let mut apps: Vec<String> = raw
+    let mut apps: Vec<DeviceApp> = raw
         .lines()
         .filter_map(|line| line.strip_prefix("package:"))
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(str::to_string)
+        .map(|package| DeviceApp {
+            package: package.to_string(),
+            name: package.to_string(),
+        })
         .collect();
-    apps.sort();
-    apps.dedup();
+    apps.sort_by(|a, b| a.package.cmp(&b.package));
+    apps.dedup_by(|a, b| a.package == b.package);
     Ok(apps)
+}
+
+/// 「虚拟屏启动的应用」候选条目（X10-71）：下拉里展示应用名，提交包名。
+#[derive(Serialize, Clone, PartialEq, Eq, Debug)]
+struct DeviceApp {
+    package: String,
+    name: String,
+}
+
+/// 运行 `scrcpy --list-apps -s <serial>`，返回 stdout；失败或超时返回 None。
+///
+/// 固定参数直接调用（序列号已过 `validate_serial` 白名单校验），不做任何 shell
+/// 拼接。scrcpy 把 server 日志与应用列表写到 stdout、推送进度写到 stderr，
+/// 这里只取 stdout。stdout 读取会阻塞到进程退出，因此放到线程里，主线程轮询
+/// 等待并在超时后强杀，避免设备假死把命令挂住。
+fn run_scrcpy_list_apps(serial: &str) -> Option<String> {
+    let mut child = quiet_command(scrcpy_binary())
+        .args(["--list-apps", "-s", serial])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        match std::io::Read::read_to_string(&mut stdout, &mut text) {
+            Ok(_) => text,
+            Err(_) => String::new(),
+        }
+    });
+    let deadline = std::time::Instant::now() + LIST_APPS_TIMEOUT;
+    let exited = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break true,
+            Ok(None) if std::time::Instant::now() >= deadline => break false,
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(_) => break false,
+        }
+    };
+    if !exited {
+        // 超时：强杀后不必等读取线程返回（进程退出即 EOF），直接按失败处理。
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+    let text = reader.join().unwrap_or_default();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// 解析 `scrcpy --list-apps` 输出里的应用条目（X10-71）。
+///
+/// 应用行形如 ` * 应用名<空白>包名`：应用名可以包含空格，包名恒为行内最后一个
+/// 空白分隔的字段。server 日志行（以 `[` 开头）与无法识别的杂行一律忽略；包名
+/// 必须匹配 Android 包名字符集且至少含一个点。设备返回的内容属于不可信输入，
+/// 应用名里的控制字符会被剔除。结果按应用名排序、按包名去重。
+fn parse_scrcpy_app_list(output: &str) -> Vec<DeviceApp> {
+    let mut apps: Vec<DeviceApp> = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('[') {
+            continue;
+        }
+        // 行首的 `*` 是 scrcpy 的标记位，不是名字的一部分。
+        let line = line.strip_prefix('*').map(str::trim).unwrap_or(line);
+        let Some((name, package)) = line.rsplit_once(char::is_whitespace) else {
+            continue;
+        };
+        let package = package.trim();
+        if !is_package_like(package) {
+            continue;
+        }
+        let name: String = name.chars().filter(|c| !c.is_control()).collect();
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        apps.push(DeviceApp {
+            package: package.to_string(),
+            name: name.to_string(),
+        });
+    }
+    apps.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.package.cmp(&b.package))
+    });
+    apps.dedup_by(|a, b| a.package == b.package);
+    apps
+}
+
+/// Android 包名的宽松白名单：字母、数字、点、下划线，至少一个点，长度受限。
+/// 与 `SessionOptions::arguments` 里 `--start-app` 的校验口径一致。
+fn is_package_like(token: &str) -> bool {
+    !token.is_empty()
+        && token.len() <= 120
+        && token.contains('.')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
 }
 
 /// 列出手机传输目录里的文件名，供用户挑选要取回的文件。
@@ -10613,17 +10743,117 @@ mod tests {
         let calls = Arc::clone(&adb.calls);
         let runtimes = screenshot_runtimes(adb);
 
-        let apps = list_device_apps_with(&runtimes, "phone".into()).unwrap();
-        assert_eq!(apps, vec!["com.android.browser", "com.miui.home", "org.mozilla.firefox"]);
+        let apps = list_device_apps_scoped(&runtimes, "phone".into(), |_| None).unwrap();
+        assert_eq!(
+            apps,
+            vec![
+                DeviceApp {
+                    package: "com.android.browser".into(),
+                    name: "com.android.browser".into(),
+                },
+                DeviceApp {
+                    package: "com.miui.home".into(),
+                    name: "com.miui.home".into(),
+                },
+                DeviceApp {
+                    package: "org.mozilla.firefox".into(),
+                    name: "org.mozilla.firefox".into(),
+                },
+            ]
+        );
         assert!(calls.lock().unwrap().iter().any(|c| c.contains("list_device_apps")));
 
         // 未就绪设备拒绝（与文件传输同一套就绪门槛）。
         let offline = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
         let runtimes = screenshot_runtimes(offline);
         assert_eq!(
-            list_device_apps_with(&runtimes, "phone".into()).unwrap_err().code,
+            list_device_apps_scoped(&runtimes, "phone".into(), |_| None)
+                .unwrap_err()
+                .code,
             "device_unauthorized"
         );
+    }
+
+    #[test]
+    fn scrcpy_app_list_parses_names_and_ignores_noise() {
+        let sample = "[server] INFO: Device: [Xiaomi] Redmi M2104K10AC (Android 13)\n\
+                      [server] INFO: List of apps:\n\
+                      * 浏览器                            com.android.browser\n\
+                      * MirrorDock Mirror                 com.gstar.mirrordock\n\
+                      * 相册                              com.miui.gallery\n\
+                      * 下载管理                          com.android.providers.downloads.ui\n\
+                      * 下载管理                          com.android.providers.downloads.ui\n\
+                      garbage line without package\n";
+        let apps = parse_scrcpy_app_list(sample);
+        // 按应用名排序（大小写不敏感）、按包名去重。
+        assert_eq!(
+            apps,
+            vec![
+                DeviceApp {
+                    package: "com.gstar.mirrordock".into(),
+                    name: "MirrorDock Mirror".into(),
+                },
+                DeviceApp {
+                    package: "com.android.providers.downloads.ui".into(),
+                    name: "下载管理".into(),
+                },
+                DeviceApp {
+                    package: "com.android.browser".into(),
+                    name: "浏览器".into(),
+                },
+                DeviceApp {
+                    package: "com.miui.gallery".into(),
+                    name: "相册".into(),
+                },
+            ]
+        );
+
+        // 控制字符被剔除（设备输出属于不可信输入）。
+        let hostile = parse_scrcpy_app_list("* 名\u{7}字\tcom.example.app\n");
+        assert_eq!(hostile.len(), 1);
+        assert_eq!(hostile[0].name, "名字");
+        assert_eq!(hostile[0].package, "com.example.app");
+    }
+
+    #[test]
+    fn named_apps_prefer_scrcpy_output_and_fall_back_to_pm_list() {
+        let make = || FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            apps_output: Some("package:com.fallback.app\n".to_owned()),
+            ..FakeAdb::default()
+        };
+
+        // scrcpy 路径成功：直接采用，不读 pm list。
+        let adb = make();
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let apps = list_device_apps_scoped(&runtimes, "phone".into(), |_| {
+            Some("* 浏览器 com.android.browser\n".to_owned())
+        })
+        .unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "浏览器");
+        assert!(!calls.lock().unwrap().iter().any(|c| c.contains("list_device_apps")));
+
+        // scrcpy 失败：回退 pm list，应用名退化为包名。
+        let runtimes = screenshot_runtimes(make());
+        let apps = list_device_apps_scoped(&runtimes, "phone".into(), |_| None).unwrap();
+        assert_eq!(
+            apps,
+            vec![DeviceApp {
+                package: "com.fallback.app".into(),
+                name: "com.fallback.app".into(),
+            }]
+        );
+
+        // scrcpy 输出只有日志、解析不出应用：同样回退。
+        let runtimes = screenshot_runtimes(make());
+        let apps = list_device_apps_scoped(&runtimes, "phone".into(), |_| {
+            Some("[server] INFO: nothing\n".to_owned())
+        })
+        .unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].package, "com.fallback.app");
     }
 
     #[test]

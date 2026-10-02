@@ -261,6 +261,45 @@ export function readOptions(): SessionOptions {
   return defaultOptions;
 }
 
+// X10-71：桌面模式是设备级能力——多台设备不会都开桌面模式，「桌面模式开关 +
+// 虚拟屏启动的应用」按设备单独保存（localStorage），其余设置仍是全局一份。
+// 手机序列号（无线端点）在重连后可能变化，此时按新端点重新设置即可。
+export type DeviceApp = { package: string; name: string };
+export type DesktopPref = { desktop_mode: boolean; desktop_app: string | null };
+
+// 把某台设备的桌面模式偏好叠加到全局设置上：仅覆盖桌面模式相关字段，并维持
+// 与「后置摄像头画面」的互斥（开桌面模式时摄像头源强制关闭）。
+export function composeOptionsWithDesktop(options: SessionOptions, pref: DesktopPref | null): SessionOptions {
+  if (!pref) return options;
+  return {
+    ...options,
+    desktop_mode: pref.desktop_mode,
+    // 桌面模式关闭时不下发 desktop_app，避免遗留包名触发后端白名单校验失败。
+    desktop_app: pref.desktop_mode ? pref.desktop_app : null,
+    camera_source: pref.desktop_mode ? false : options.camera_source,
+  };
+}
+
+export function readDesktopPrefs(): Record<string, DesktopPref> {
+  try {
+    const value = JSON.parse(localStorage.getItem("mirrordock.desktopPrefs") ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const prefs: Record<string, DesktopPref> = {};
+    for (const [serial, pref] of Object.entries(value as Record<string, unknown>)) {
+      if (!pref || typeof pref !== "object") continue;
+      const candidate = pref as Record<string, unknown>;
+      if (typeof candidate.desktop_mode !== "boolean") continue;
+      prefs[serial] = {
+        desktop_mode: candidate.desktop_mode,
+        desktop_app: typeof candidate.desktop_app === "string" && candidate.desktop_app.trim() ? candidate.desktop_app.trim() : null,
+      };
+    }
+    return prefs;
+  } catch {
+    return {};
+  }
+}
+
 // 会话进行中可用的系统级快捷键（B-快捷键）。镜像窗口聚焦时只有全局快捷键能
 // 收到按键；CommandOrControl 在 Windows/Linux 是 Ctrl、macOS 是 ⌘。
 // 组合可由用户在设置页自定义，默认值与 ToDesk 类工具的习惯一致。
@@ -765,16 +804,43 @@ function App() {
     }
   }
 
-  // 桌面模式「虚拟屏启动的应用」候选（X10-53）：首次勾选时拉取一次第三方应用
-  // 包名，供输入框联想。拉取失败不阻塞——用户仍可手动填写包名。
-  const [deviceApps, setDeviceApps] = useState<string[] | null>(null);
-  async function loadDeviceApps(serial: string) {
+  // 桌面模式「虚拟屏启动的应用」候选（X10-53；X10-71 起带应用名并按设备缓存）：
+  // 桌面模式相关设置出现在界面上时拉取一次。拉取失败不阻塞——用户仍可手动填包名。
+  const [deviceApps, setDeviceApps] = useState<Record<string, DeviceApp[]>>({});
+  const deviceAppsInflight = useRef<Set<string>>(new Set());
+  async function ensureDeviceApps(serial?: string | null) {
+    if (!serial || deviceApps[serial] || deviceAppsInflight.current.has(serial)) return;
+    deviceAppsInflight.current.add(serial);
     try {
-      const apps = await invoke<string[]>("list_device_apps", { serial });
-      setDeviceApps(apps);
+      const apps = await invoke<DeviceApp[]>("list_device_apps", { serial });
+      setDeviceApps((prev) => ({ ...prev, [serial]: apps }));
     } catch {
-      setDeviceApps([]);
+      setDeviceApps((prev) => ({ ...prev, [serial]: [] }));
+    } finally {
+      deviceAppsInflight.current.delete(serial);
     }
+  }
+
+  // X10-71：按设备保存桌面模式偏好；只影响这台设备，其他设备与全局默认不动。
+  const [desktopPrefs, setDesktopPrefs] = useState<Record<string, DesktopPref>>(readDesktopPrefs);
+  function updateDesktopPref(serial: string, patch: Partial<DesktopPref>) {
+    setDesktopPrefs((prev) => {
+      const base = prev[serial] ?? { desktop_mode: options.desktop_mode, desktop_app: options.desktop_app };
+      const next = { ...base, ...patch };
+      const nextPrefs = { ...prev, [serial]: next };
+      try { localStorage.setItem("mirrordock.desktopPrefs", JSON.stringify(nextPrefs)); }
+      catch { /* 保存失败只影响下次启动，本次会话仍然生效。 */ }
+      return nextPrefs;
+    });
+  }
+
+  // 恢复默认设置时，各设备的桌面模式偏好一并清空——「默认」应意味着全部回到出厂值。
+  function resetAllOptions() {
+    updateOptions(defaultOptions);
+    setDesktopPrefs(() => {
+      try { localStorage.removeItem("mirrordock.desktopPrefs"); } catch { /* 忽略：存储不可用时仅本次会话生效。 */ }
+      return {};
+    });
   }
 
   function updateOptions(next: SessionOptions) {
@@ -808,11 +874,14 @@ function App() {
     setApplyingOptions(true);
     setApplyNotice(null);
     const targetSerial = settingsTargetSerial ?? session?.serial ?? null;
+    // X10-71：桌面模式开关与虚拟屏应用按设备叠加——改其他设置时不会把这台
+    // 设备的桌面模式偏好冲掉，反之亦然。
+    const effective = composeOptionsWithDesktop(next, targetSerial ? desktopPrefs[targetSerial] ?? null : null);
     try {
       const result = await invoke<SessionUpdate>("update_session_options", {
-        options: next,
+        options: effective,
         // 只有开启录制时才生成文件名；后端在未开启录制时会忽略它。
-        recordFileName: next.record ? recordingFileName(new Date()) : null,
+        recordFileName: effective.record ? recordingFileName(new Date()) : null,
         // X10-27：多会话时作用于选中的设备；未选择时作用于主会话（真正持有镜像进程的设备优先）。
         serial: targetSerial,
       });
@@ -1059,11 +1128,13 @@ function App() {
     setLaunchError(null);
     setApplyNotice(null);
     try {
+      // X10-71：这台设备自己的桌面模式偏好（若有）叠加在全局设置之上。
+      const effective = composeOptionsWithDesktop(options, desktopPrefs[serial] ?? null);
       await invoke("start_mirroring", {
         serial,
-        options,
+        options: effective,
         // 只有开启录制时才生成文件名；后端在未开启录制时会忽略它。
-        recordFileName: options.record ? recordingFileName(new Date()) : null,
+        recordFileName: effective.record ? recordingFileName(new Date()) : null,
       });
       try { localStorage.setItem("mirrordock.lastDeviceSerial", serial); } catch { setSettingsNotice("无法保存最近设备，本次连接不受影响。"); }
       // 启动成功后端才记入最近设备，这里同步刷新以反映新的排序。
@@ -1607,6 +1678,22 @@ function App() {
   const readySerial = readyDevice?.serial ?? null;
   // 快捷键处理器读取的最新 serial。
   shortcutsRef.current.readySerial = readySerial;
+
+  // X10-71：桌面模式设置的归属设备 = 选择器目标 ?? 主会话设备；没有会话时编辑
+  // 的是全局默认（下一次启动哪台设备就随哪台）。桌面模式相关行出现时，顺手把
+  // 该设备的应用列表拉下来（带应用名，供下拉联想）。
+  const settingsDesktopTarget = settingsTargetSerial ?? sessionSerial ?? null;
+  const targetDesktopPref = settingsDesktopTarget ? desktopPrefs[settingsDesktopTarget] ?? null : null;
+  const shownDesktopMode = targetDesktopPref ? targetDesktopPref.desktop_mode : options.desktop_mode;
+  const shownDesktopApp = targetDesktopPref ? targetDesktopPref.desktop_app : options.desktop_app;
+  useEffect(() => {
+    if (shownDesktopMode) void ensureDeviceApps(settingsDesktopTarget ?? readySerial);
+  }, [shownDesktopMode, settingsDesktopTarget, readySerial]);
+  // 已填包名能对上候选列表时，把应用名展示在说明文字里（小白用户看得懂名字）。
+  const desktopAppsForTarget = deviceApps[settingsDesktopTarget ?? readySerial ?? ""] ?? [];
+  const currentDesktopAppName = shownDesktopApp
+    ? desktopAppsForTarget.find((app) => app.package === shownDesktopApp)?.name ?? null
+    : null;
   // 拖拽安装的目标设备：拖放回调是长生命周期闭包，读 ref 拿最新就绪设备，
   // 避免注册后设备插拔导致指向过期。
   const dragTargetRef = useRef<{ serial: string; label: string } | null>(null);
@@ -2664,7 +2751,7 @@ function App() {
                       {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
                     </button>
                   )}
-                  <button type="button" className="secondary-button" onClick={() => updateOptions(defaultOptions)}>恢复默认设置</button>
+                  <button type="button" className="secondary-button" onClick={resetAllOptions}>恢复默认设置</button>
                 </div>
               </header>
               <div className="settings-rows">
@@ -2712,29 +2799,45 @@ function App() {
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">桌面模式（独立虚拟屏幕）</span>
-                    <span className="setting-desc">不再镜像手机现有屏幕，而是在手机上创建一块独立虚拟屏幕：电脑上全屏看视频、写笔记，手机上回微信也不打断画面。需要 Android 10+，手机端会弹出「显示在其他应用上层」的确认。与摄像头画面互斥，更改后重启会话生效。</span>
+                    <span className="setting-desc">不再镜像手机现有屏幕，而是在手机上创建一块独立虚拟屏幕：电脑上全屏看视频、写笔记，手机上回微信也不打断画面。需要 Android 10+，手机端会弹出「显示在其他应用上层」的确认。与摄像头画面互斥，更改后重启会话生效。多台设备时按「应用到哪台设备」所选的设备单独保存，各设备互不影响。</span>
                   </div>
-                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={options.desktop_mode} onChange={e => { updateOptions({ ...options, desktop_mode: e.target.checked, camera_source: e.target.checked ? false : options.camera_source }); if (e.target.checked && readySerial && deviceApps === null) void loadDeviceApps(readySerial); }} /></label>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="桌面模式（独立虚拟屏幕）" checked={shownDesktopMode} onChange={e => {
+                    const checked = e.target.checked;
+                    if (settingsDesktopTarget) {
+                      // X10-71：这台设备自己的桌面模式偏好，不影响其他设备与全局默认。
+                      updateDesktopPref(settingsDesktopTarget, { desktop_mode: checked });
+                      if (checked && options.camera_source) updateOptions({ ...options, camera_source: false });
+                    } else {
+                      updateOptions({ ...options, desktop_mode: checked, camera_source: checked ? false : options.camera_source });
+                    }
+                  }} /></label>
                 </div>
-                {options.desktop_mode && (
+                {shownDesktopMode && (
                   <div className="setting-row">
                     <div className="setting-info">
                       <span className="setting-name">虚拟屏启动的应用（可选）</span>
-                      <span className="setting-desc">实测部分机型（如小米/MIUI）的桌面不在虚拟屏上显示（会得到白屏/黑屏）；填入应用包名后，虚拟屏会直接打开该应用，例如系统浏览器 com.android.browser。留空则显示系统桌面。</span>
+                      <span className="setting-desc">实测部分机型（如小米/MIUI）的桌面不在虚拟屏上显示（会得到白屏/黑屏）；下拉按应用名称选择（例如「浏览器」），也可以直接填包名如 com.android.browser。留空则显示系统桌面。{currentDesktopAppName && `当前已选：${currentDesktopAppName}。`}</span>
                     </div>
                     <input
                       className="setting-control"
-                      aria-label="虚拟屏启动的应用包名"
+                      aria-label="虚拟屏启动的应用"
                       list="device-app-packages"
                       placeholder="com.android.browser"
-                      value={options.desktop_app ?? ""}
-                      onChange={e => { const pkg = e.target.value.trim(); updateOptions({ ...options, desktop_app: pkg ? pkg : null }); }}
+                      value={shownDesktopApp ?? ""}
+                      onChange={e => {
+                        const pkg = e.target.value.trim();
+                        const next = pkg ? pkg : null;
+                        if (settingsDesktopTarget) updateDesktopPref(settingsDesktopTarget, { desktop_mode: true, desktop_app: next });
+                        else updateOptions({ ...options, desktop_app: next });
+                      }}
                     />
                   </div>
                 )}
-                {options.desktop_mode && deviceApps !== null && (
+                {shownDesktopMode && (
                   <datalist id="device-app-packages">
-                    {deviceApps.slice(0, 500).map(pkg => <option key={pkg} value={pkg} />)}
+                    {(deviceApps[settingsDesktopTarget ?? readySerial ?? ""] ?? []).slice(0, 500).map(app => (
+                      <option key={app.package} value={app.package}>{app.name === app.package ? undefined : app.name}</option>
+                    ))}
                   </datalist>
                 )}
                 <div className="setting-row">
