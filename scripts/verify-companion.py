@@ -112,6 +112,69 @@ for dp, _, fs in os.walk(JAVA):
             if stripped.count(open_c) != stripped.count(close_c):
                 errors.append(f"{f}: {open_c}{close_c} 不平衡 ({stripped.count(open_c)} vs {stripped.count(close_c)})")
 
+# 7.5) Kotlin 常见编译期陷阱（X10-73 教训：这些坑静态校验最初没覆盖，
+#      结果 CI 的「构建 debug APK」步骤失败、Release 被跳过）
+#      a) View 没有可写的 minWidth/minHeight（只有 minimumWidth/Height，且
+#         TextView 另有 setMinWidth）——对 View/Button 用 minWidth 会编译失败。
+#      b) Long 与 IntRange 混用（`if (longValue in 0..100)`）——类型不匹配编译失败。
+#      c) API 30+ 的属性/方法未做版本判断（minSdk 26）——运行期 NoSuchMethodError。
+#      这里做文本级启发式检查，宁可误报也不漏报。
+TRAPS = [
+    (
+        "min_width_on_view",
+        re.compile(r"\bminWidth\s*=|\bminHeight\s*="),
+        None,  # 只在 View/Button 上下文里报，见下方细化
+    ),
+]
+
+for dp, _, fs in os.walk(JAVA):
+    for f in sorted(fs):
+        if not f.endswith(".kt"):
+            continue
+        path = os.path.join(dp, f)
+        src = open(path, encoding="utf-8").read()
+        # a) minWidth/minHeight 赋值：TextView 有 setMinWidth，View/Button 没有。
+        #    粗判：所在 apply 块若构造的是 View/Button/ImageView 则可疑。
+        for match in re.finditer(r"\b(minWidth|minHeight)\s*=", src):
+            line_no = src[: match.start()].count("\n") + 1
+            window = src[max(0, match.start() - 400): match.start()]
+            # 向上找最近的构造器调用
+            ctor = None
+            for c in re.finditer(r"\b([A-Z][A-Za-z0-9_]*)\s*\(", window):
+                ctor = c.group(1)
+            if ctor in ("View", "Button", "ImageView", "EditText", "TextView"):
+                # TextView/EditText 有 setMinWidth；View/Button/ImageView 没有。
+                if ctor in ("View", "Button", "ImageView"):
+                    errors.append(
+                        f"{f}:{line_no} {ctor} 没有可写的 {match.group(1)} 属性"
+                        f"（编译失败；View 只有 minimumWidth/Height）"
+                    )
+        # b) Long 值 in IntRange
+        for match in re.finditer(
+            r"\b(\w+)\s+in\s+([\d_]+)L?\.\.([\d_]+)L?\b", src
+        ):
+            var, lo, hi = match.group(1), match.group(2), match.group(3)
+            line_no = src[: match.start()].count("\n") + 1
+            # 两端都带 L 才是 LongRange；只在一端带或都不带 = IntRange。
+            if re.search(r"(rtt|elapsed|duration|ms|nanos|diff|took|since|at)", var, re.I):
+                text = match.group(0)
+                lo_long = text.split("..")[0].rstrip().endswith("L")
+                hi_long = text.rstrip().rstrip("L").split("..")[-1].isupper() or text.endswith("L")
+                if not (lo_long and hi_long):
+                    errors.append(
+                        f"{f}:{line_no} 疑似 Long 与 IntRange 混用：{text.strip()}"
+                        f"（两端都应带 L：{lo}L..{hi}L）"
+                    )
+        # c) API 30+ (isLongLived / setLongLived) 未见版本判断
+        for match in re.finditer(r"\.(isLongLived|setLongLived)\b", src):
+            line_no = src[: match.start()].count("\n") + 1
+            window = src[max(0, match.start() - 600): match.start() + 200]
+            if "SDK_INT" not in window:
+                errors.append(
+                    f"{f}:{line_no} {match.group(1)} 是 API 30+，"
+                    f"minSdk 26 需先判 SDK_INT（否则运行期 NoSuchMethodError）"
+                )
+
 # 8) 未被引用的 string（提示级）
 used_strings = set()
 for c in layouts.values():

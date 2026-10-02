@@ -369,14 +369,17 @@ class MainActivity : AppCompatActivity() {
                 setTypeface(typeface, Typeface.BOLD)
             })
         }
-        right.addView(Button(this).apply {
+        // 「⋯」更多操作用 TextView 而非 Button：Button 自带最小宽高与内边距，
+        // 为了塞进设备行右侧得反过来跟系统默认样式搏斗；TextView 干净可控。
+        right.addView(TextView(this).apply {
             text = "⋯"
             setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
             textSize = 18f
-            background = null
-            setPadding(dp(10), 0, dp(4), 0)
-            minWidth = 0
-            minHeight = 0
+            gravity = Gravity.CENTER
+            setPadding(dp(10), 0, dp(6), 0)
+            isClickable = true
+            isFocusable = true
+            minWidth = dp(28)
             setOnClickListener { showDeviceMenu(computer) }
         })
         row.addView(right)

@@ -65,6 +65,13 @@ jobs:
       - name: 前端生产构建
         run: pnpm build
 
+      # X10-73：伴侣端静态交叉校验。放在这里是为了让它成为**发版门禁**——
+      # 2026-10-03 那次 v0.4.7 发版，伴侣 APK 的 Kotlin 编译失败导致
+      # 「发布 GitHub Release」被跳过，四平台包全部白跑。本地没有 gradle 时
+      # 这道检查是唯一能在 push 阶段拦住资源引用/类型错误的手段。
+      - name: 伴侣端静态交叉校验
+        run: python3 scripts/verify-companion.py
+
   package:
     name: 打包 ${{ matrix.label }}
     needs: verify

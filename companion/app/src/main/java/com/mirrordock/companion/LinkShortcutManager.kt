@@ -57,11 +57,17 @@ object LinkShortcutManager {
 
         val result = runCatching { manager.requestPinShortcut(shortcut, null) }.getOrNull()
             ?: return "系统拒绝了固定请求。"
-        return when {
-            result.isSuccess -> "已创建桌面快捷方式：点一下就连上 ${computer.displayName()}"
-            result.isLongLived -> "桌面快捷方式已固定。"
-            else -> "已取消。"
+        if (result.isSuccess) {
+            return "已创建桌面快捷方式：点一下就连上 ${computer.displayName()}"
         }
+        // isLongLived 是 API 30 才有的属性，minSdk 26 —— 直接读会在 Android 8/9
+        // 上抛 NoSuchMethodError。按版本取，不让低版本用户崩在这行。
+        val longLived = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { result.isLongLived }.getOrDefault(false)
+        } else {
+            false
+        }
+        return if (longLived) "桌面快捷方式已固定。" else "已取消。"
     }
 
     /** 供快捷方式目标 Activity 查询目标电脑（避免与 UI 层重复读 prefs）。 */

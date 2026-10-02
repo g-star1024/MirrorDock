@@ -679,7 +679,13 @@
   - **验证**：伴侣 0.2.5 → **0.3.0**（versionCode 16→17）。本地无 gradle 且沙箱拦大文件下载（curl 拉 gradle 发行版 exit 56），故新增 `scripts/verify-companion.py` 静态交叉校验（XML 合法性 / `@string` `@color` `@style` `@drawable` 引用完整性 / `findViewById` 的 id 是否声明 / Manifest 类是否存在 / Kotlin 括号平衡 / 死资源检测）并接入 `AGENTS.md` 强制闸门——**全部通过**；Rust 侧 `reconnect_client_with_ping` 断言"不带 t 不回显 t、带 t 原样带回"，**cargo test companion_pairing 13 passed / 全量 192 passed，clippy 0 warning**；`pnpm build` + **vitest 66 passed**。commit `9259184` / `ec73c73` / `e0aa9a4` / `7a2bcd9`。
   - **未验证面（如实标记）**：APK 真编译与真机行为由 CI（`companion.yml` / `build.yml` 的 `companion-apk` job）+ 用户真机承担；本地无 gradle 无法预编译，静态校验只能覆盖资源引用与语法结构类错误，**不能替代编译**。
 - [ ] **v0.4.7-beta 发版（2026-10-03 夜间；含 X10-72 + X10-73）**：版本 0.4.6→0.4.7（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处；伴侣 App 0.2.5→0.3.0）；新增 `docs/releases/v0.4.7-beta.md`。tag `v0.4.7-beta` → CI 四平台打包 + updater 签名 + 伴侣 APK（0.3.0 代码）+ latest.json + Release。
-  - **发版证据（tag 推送 + Release 核验后回填，此行不预填）**：
+  - **⚠ 首次发版失败（run 37034993379，2026-10-03 00:35 → 01:05）**：`verify` ✅（Rust 192 + 前端 66 + build）、四个平台 `package` ✅ 全过，但**`companion-apk` ❌ 失败在第 5 步「构建 debug APK」**（Kotlin 编译错误）→ `release` job 被跳过，**没有产生任何 Release 资产**。根因三处（均在我本次新增代码里，**静态校验当时没覆盖到**）：
+    ① `MainActivity.buildDeviceRow` 对 `Button` 赋 `minWidth`/`minHeight` —— `View` **没有**这两个可写属性（只有 `minimumWidth`/`minimumHeight`；`TextView` 另有 `setMinWidth`），编译失败。已改为用 `TextView` + `minWidth = dp(28)`，并去掉与系统默认内边距的搏斗。
+    ② `PersistentConnectionService` 的 `if (rtt in 0..10_000)` —— `rtt` 是 `Long`，`0..10_000` 是 `IntRange`，**类型不匹配编译失败**。已改为 `0L..10_000L`。
+    ③ `LinkShortcutManager` 直接读 `result.isLongLived` —— 该属性是 **API 30+**，而 `minSdk = 26`，会在 Android 8/9 上抛 `NoSuchMethodError`。已加 `SDK_INT >= R` 版本判断（外层再包 `runCatching` 兜底）。
+  - **门禁补强（不让同类问题再拖垮发版）**：`scripts/verify-companion.py` 新增第 7.5 类检查（Kotlin 编译期陷阱：`View` 上的 `minWidth`/`minHeight`、Long 与 IntRange 混用、API 30+ 未判 `SDK_INT`），并已**反向验证**（注入 3 类错误 → 脚本全部抓到；恢复后全绿）。同时把该脚本接入 `build.yml` 的 `verify` job（`companion-apk` 与 `release` 都 `needs: verify`），**成为发版硬门禁** —— 下次同类错误在 push 阶段就会被拦下，而不是等 30 分钟后发现 Release 没产出。
+  - **教训**：本地无 gradle 时，静态校验是唯一防线，**但校验器本身也会有盲区**。这次的代价是四平台包白跑一轮（tag 已推、代码已冻结，只改了 3 行 Kotlin）。发版记录必须以「Release 资产实际存在」为准，不能以「tag 已推」为准。
+  - **重新发版**：修复后需重打 tag 触发 CI（`git tag -f v0.4.7-beta`）。
 
 ## 最终成品退出条件
 

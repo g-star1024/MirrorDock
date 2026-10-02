@@ -287,7 +287,9 @@ class PersistentConnectionService : Service() {
                         "pong" -> json.optLong("t", 0L).takeIf { it > 0 }?.let { sentAt ->
                             val rtt = (System.nanoTime() - sentAt) / 1_000_000
                             // 只采信合理区间：负数=时钟异常，>10s=对端卡住而非网络延迟。
-                            if (rtt in 0..10_000) {
+                            // rtt 是 Long，比较界必须也是 Long —— 写成 0..10_000（IntRange）
+                            // 编译不过。
+                            if (rtt in 0L..10_000L) {
                                 LinkQuality.rttMs = rtt.toInt()
                                 LinkState.update(LinkPhase.CONNECTED, "已连接 ${target.displayName()}（$endpoint）")
                             }
