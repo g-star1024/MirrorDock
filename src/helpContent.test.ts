@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { helpArticles } from "./helpContent";
@@ -55,5 +58,42 @@ describe("helpContent", () => {
     expect(text).toContain("数据线");
     expect(text).toContain("无线");
     expect(text).toContain("设置 → 通用");
+  });
+
+  it("tools_article_covers_drag_routing_and_send_zone_management", () => {
+    const article = helpArticles.find((entry) => entry.id === "tools");
+    expect(article).toBeDefined();
+    const text = article?.paragraphs.join("\n") ?? "";
+    // X10-63 / X10-60：拖拽会把 .apk 送去安装、其他文件送去手机发送区；发送区可
+    // 查看、取回、逐条删除。这两条是新功能里最容易被问到的路径，必须写清。
+    expect(text).toContain("拖到");
+    expect(text).toContain("发送区");
+    expect(text).toContain("取回到电脑");
+    expect(text).toContain("删除");
+    // 反向通道（伴侣 App 发送文件到电脑）也要说清，否则手机侧入口在帮助里无迹可寻。
+    expect(text).toContain("发送文件到电脑");
+  });
+
+  it("notifications_article_states_prerequisites_privacy_and_off_switch", () => {
+    const article = helpArticles.find((entry) => entry.id === "notifications");
+    expect(article).toBeDefined();
+    const text = article?.paragraphs.join("\n") ?? "";
+    // X10-66：开关在手机端、需系统「读取通知」授权；内容仅内存、不入日志、不上云；
+    // 并如实给出「离线不补发」与常驻通知不转发的边界，以及停止方式。
+    expect(text).toContain("读取通知");
+    expect(text).toContain("清空");
+    expect(text).toContain("不经过任何云端");
+    expect(text).toContain("不会补发");
+    expect(text).toContain("通知镜像");
+  });
+
+  it("readme_declares_the_same_help_article_count_as_shipped", () => {
+    // README 对外声明帮助文档篇数；新增/删除文章时必须同步，否则等于向用户报了
+    // 一个错数字（历史缺口：README 写 8 篇、实际 9 篇，X10-67 修正为 10 篇）。
+    // 注意：jsdom 环境下 import.meta.url 是 http:// 地址，须按工作目录解析真实路径。
+    const readme = readFileSync(resolve(process.cwd(), "README.md"), "utf8");
+    const match = readme.match(/(\d+)\s*篇完整帮助文档/);
+    expect(match).not.toBeNull();
+    expect(Number(match?.[1])).toBe(helpArticles.length);
   });
 });
