@@ -325,7 +325,28 @@ jobs:
           COMPANION_STORE_PASSWORD: ${{ secrets.COMPANION_STORE_PASSWORD }}
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          gradle :app:assembleDebug --no-daemon
+          # 完整日志落盘 + tee：编译失败时 `/logs` 端点需 admin 权限（403），
+          # job annotations 只有 "exit code 1" 没有编译器原文。上传日志 artifact
+          # 让编译失败**可诊断**，不必再靠猜。2026-10-03 v0.4.7 首次发版就是这样
+          # 被卡住的：连续两次都只看到 exit code 1。
+          set -o pipefail
+          gradle :app:assembleDebug --no-daemon 2>&1 | tee "$RUNNER_TEMP/gradle-build.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::group::Kotlin / Gradle 编译报错摘要"
+            grep -E "^e: |error:|FAILURE:|Caused by:|> Task .*FAILED" "$RUNNER_TEMP/gradle-build.log" | head -60 || true
+            echo "::endgroup::"
+          fi
+          exit "$status"
+
+      # 失败时也上传日志（成功时忽略），供事后定位。
+      - name: 上传编译日志（失败诊断用）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-apk-build-log
+          path: ${{ runner.temp }}/gradle-build.log
+          retention-days: 14
       # M4-5：APK 资产名带版本号（基础版本号，与桌面资产口径一致），
       # 否则 Release 里永远叫 app-debug.apk，多版本无法区分。
       - name: 规范化 APK 资产名
