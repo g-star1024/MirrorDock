@@ -87,6 +87,35 @@ describe("helpContent", () => {
     expect(text).toContain("通知镜像");
   });
 
+  it("notifications_article_covers_quick_reply_and_offline_notice", () => {
+    const article = helpArticles.find((entry) => entry.id === "notifications");
+    expect(article).toBeDefined();
+    const text = article?.paragraphs.join("\n") ?? "";
+    // X10-69：通知镜像二期把「回复框」交付给用户，但回复框只在通知自带回复动作时出现
+    // （系统提示类通知没有），且伴侣不在线时必须如实提示。帮助文案缺了这两条，
+    // 用户就会把「没有回复框」当成故障、把离线提示当成丢失。
+    expect(text).toContain("回复框");
+    expect(text).toContain("回复动作");
+    expect(text).toContain("连接不在线");
+    expect(text).toContain("不落盘");
+  });
+
+  it("multi_device_article_covers_favorites_per_session_target_and_tray_stop", () => {
+    const article = helpArticles.find((entry) => entry.id === "multi-device");
+    expect(article).toBeDefined();
+    const text = article?.paragraphs.join("\n") ?? "";
+    // X10-68：多设备管理三条用户可见路径——收藏置顶只影响本机排序（不劫持连接与授权）、
+    // 多会话设置「应用到哪台设备」只改动选中那一台、托盘逐台「结束 <设备名> 的镜像」。
+    // 三项都在界面上真实存在（App.tsx 星标 / 设置选择器，lib.rs build_tray_menu）。
+    expect(text).toContain("星标");
+    expect(text).toContain("置顶");
+    expect(text).toContain("应用到哪台设备");
+    expect(text).toContain("结束");
+    expect(text).toContain("的镜像");
+    // 收藏不得被描述成会改变连接或授权状态（与界面注释一致：只影响本机显示排序）。
+    expect(text).toContain("不会改变连接状态");
+  });
+
   it("readme_declares_the_same_help_article_count_as_shipped", () => {
     // README 对外声明帮助文档篇数；新增/删除文章时必须同步，否则等于向用户报了
     // 一个错数字（历史缺口：README 写 8 篇、实际 9 篇，X10-67 修正为 10 篇）。
