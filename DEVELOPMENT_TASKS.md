@@ -310,6 +310,10 @@
   - 测试：新增 5 项（三杠杆全拉满、读不到原值则跳过该杠杆、撤销顺序且假充电最前、会话重启只重写不覆盖账本、老版本账本文件兼容）；Rust 134 / clippy 0 / vitest 40 / build 通过。
   - ⚠️ **待真机验证**（手机在排查过程中掉线，无法当场实测）：需重连后确认三杠杆生效、锁屏页可持续亮、会话结束后手机状态栏充电指示消失。
 
+- [x] ✅ BUG-充电掩盖（X10-10 派生，2026-10-02 真机复现 + 已修复）：无线「保持唤醒」的伪造充电（`dumpsys battery set usb 1`）是**设备全局** mock 状态，复位 `restore_keep_awake` 按**原无线序列号**执行 `reset`；用户从无线切 USB 后旧序列号离线 → 复位静默失败 → `UPDATES STOPPED` 残留 → 真实充电被掩盖（已真机复现：mock 下 `Max charging current:0`/`status:3` 放电，`reset` 后 `status:2`/`500mA` 正常充；电量 1% 系 mock 冻结值，真实 80%）。
+  - **已按方案1修复（2026-10-02）**：移除 `set_charging_override` 方法与全部调用、`faked_charging` 字段，保留 `stay_on_while_plugged_in`+`screen_off_timeout` 两把安全杠杆；无线亮屏由 scrcpy `--stay-awake` 覆盖（启动 scrcpy 时已传入）。同步改写 App.tsx / helpContent 中「状态栏可能显示充电中」的过时说明。`cargo test` 192 passed / `cargo clippy` 0 warning / 前端 `pnpm build`+`vitest` 58 passed 全绿。应用数据 `screen-timeout-backup.json`（含 192.168.1.9:44093、192.168.0.165:33943、192.168.0.165:44327 共 3 条 `faked_charging:true` 旧账）已备份至 /tmp 并删除。
+  - 证据：代码（enable/restore 不再出现 `set usb 1`）、测试（改 `wireless_keep_awake_arms_timeout_and_stay_on_levers`、撤销顺序断言不再含 `set_charging`）、真机（手动 `dumpsys battery reset` 后恢复 500mA 充电）。真机回归待用户按 GUI 验收清单复测「无线保持唤醒不再伪造充电」。
+
 - [x] X10-11 「屏幕亮着但镜像黑」的第二段根因与修复：电源策略卡在变暗（DIM）阶段（真机取证复现）。
   - 用户真机反馈：屏幕明明亮着，镜像窗口黑屏，点「屏幕唤醒」也没用；怀疑是「安全策略不让镜像输密码」。
   - 排查中排除的假设（均有实测证据）：①锁屏页 FLAG_SECURE 屏蔽——screencap 与 scrcpy 流在锁屏主页都能拿到正常画面（亮度 131/255、129/255）；②PIN 键盘界面屏蔽——多次尝试验证均被 DIM 干扰，未定案；③参数问题（--max-size/--bit-rate/codec）——逐参数对照全部为亮；④自适应亮度变暗——`screen_brightness_mode=0`（手动，255），光线传感器不参与。
