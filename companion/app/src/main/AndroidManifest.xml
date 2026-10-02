@@ -66,6 +66,18 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- X10-66 通知镜像：系统绑定式服务（BIND_NOTIFICATION_LISTENER_SERVICE
+             由系统持有，应用侧无法伪造）；用户在系统设置显式授权读取通知，
+             应用内开关默认关，可随时关。 -->
+        <service
+            android:name=".NotificationMirrorService"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- 只共享「下载/MirrorDock」里的电脑推送文件，供查看与 APK 安装使用。 -->
         <provider
             android:name="androidx.core.content.FileProvider"

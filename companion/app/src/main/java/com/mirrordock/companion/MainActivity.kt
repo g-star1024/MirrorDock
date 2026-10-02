@@ -46,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fileEmpty: View
     private lateinit var fileEmptyText: TextView
     private lateinit var grantFilesButton: Button
+    // X10-66 通知镜像：开关 + 如实状态（是否已授予读取通知）。
+    private lateinit var notifyMirrorButton: Button
+    private lateinit var notifyMirrorStatus: TextView
+    private lateinit var grantListenerButton: Button
 
     private val logLines = StringBuilder()
     private var client: PairingClient? = null
@@ -127,6 +131,13 @@ class MainActivity : AppCompatActivity() {
         fileEmpty = findViewById(R.id.file_empty)
         fileEmptyText = findViewById(R.id.file_empty_text)
         grantFilesButton = findViewById(R.id.button_grant_files)
+        notifyMirrorButton = findViewById(R.id.button_notify_mirror)
+        notifyMirrorStatus = findViewById(R.id.notify_mirror_status)
+        grantListenerButton = findViewById(R.id.button_grant_listener)
+        notifyMirrorButton.setOnClickListener { toggleNotifyMirror() }
+        grantListenerButton.setOnClickListener {
+            NotificationMirrorService.openListenerSettings(this)
+        }
 
         setStatusConnected(false)
 
@@ -234,6 +245,8 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // 从系统设置（授权文件访问）或安装器返回时刷新列表。
         refreshFiles()
+        // X10-66：从系统通知授权页返回时，如实刷新镜像开关状态。
+        refreshNotifyMirrorUi()
         // 已配对电脑卡与常驻连接状态（M4-2）。
         refreshComputerCard()
         linkListener?.let { LinkState.addListener(it) }
@@ -259,7 +272,8 @@ class MainActivity : AppCompatActivity() {
         val host = prefs.getString("last_host", null)?.substringBeforeLast(':') ?: "未知地址"
         val fingerprint = prefs.getString("desktop_fingerprint", null)?.take(16) ?: ""
         val residentPort = prefs.getInt("resident_port", -1).takeIf { it > 0 }
-        val endpoint = if (residentPort != null) "$host:$residentPort" else host
+        // X10-64B：与服务的回退口径一致——没学到端口也按默认端口显示，不显示成「连不上」。
+        val endpoint = if (residentPort != null) "$host:$residentPort" else "$host:47017（默认）"
         computerInfo.text = getString(R.string.computer_info, endpoint, fingerprint)
     }
 
@@ -292,6 +306,42 @@ class MainActivity : AppCompatActivity() {
         if (pushLinkLine(payload.toString())) {
             log("已把上次的崩溃记录报给电脑（可在电脑端查看）。")
         }
+    }
+
+    // -- 通知镜像（X10-66 一期） ------------------------------------------------
+
+    /** 开关切换：开启时若还没授予「读取通知」，引导去系统设置（授权后回来自动刷新）。 */
+    private fun toggleNotifyMirror() {
+        val prefs = getSharedPreferences(NotificationMirrorService.PREFS, MODE_PRIVATE)
+        val turningOn = !prefs.getBoolean(NotificationMirrorService.KEY_NOTIFY_MIRROR, false)
+        prefs.edit().putBoolean(NotificationMirrorService.KEY_NOTIFY_MIRROR, turningOn).apply()
+        if (turningOn && !NotificationMirrorService.isListenerGranted(this)) {
+            Toast.makeText(this, getString(R.string.notify_mirror_toast_need_permission), Toast.LENGTH_LONG).show()
+            NotificationMirrorService.openListenerSettings(this)
+        } else if (turningOn) {
+            log("通知镜像已开启：连接电脑后，新通知将实时转发。")
+        } else {
+            log("通知镜像已关闭。")
+        }
+        refreshNotifyMirrorUi()
+    }
+
+    /** 状态行如实反映三态：关 / 开（缺授权）/ 开（就绪）。 */
+    private fun refreshNotifyMirrorUi() {
+        val prefs = getSharedPreferences(NotificationMirrorService.PREFS, MODE_PRIVATE)
+        val on = prefs.getBoolean(NotificationMirrorService.KEY_NOTIFY_MIRROR, false)
+        val granted = NotificationMirrorService.isListenerGranted(this)
+        notifyMirrorButton.setText(
+            if (on) R.string.action_notify_mirror_off else R.string.action_notify_mirror_on,
+        )
+        notifyMirrorStatus.setText(
+            when {
+                !on -> R.string.notify_mirror_status_off
+                granted -> R.string.notify_mirror_status_on
+                else -> R.string.notify_mirror_status_need_permission
+            },
+        )
+        grantListenerButton.visibility = if (on && !granted) View.VISIBLE else View.GONE
     }
 
     /** 免扫码直连入口：Android 13+ 先请求通知权限（前台服务通知必须可见）。 */
@@ -452,7 +502,9 @@ class MainActivity : AppCompatActivity() {
                     if (residentPort != null) {
                         log("电脑常驻通道已开启（端口 $residentPort），之后可在上方「上次配对的电脑」一键重连。")
                     } else {
-                        log("电脑常驻通道未开启：在电脑端打开后，这里可以免扫码重连。")
+                        // X10-64：文案必须与真实能力一致——本机会回退默认端口 47017
+                        // 重连；只有电脑端口被占用回退到随机端口时才需要重新扫码。
+                        log("电脑常驻通道未开启：在电脑端打开「常驻通道」后，上方「上次配对的电脑」即可免扫码重连（本机按默认端口 47017 直连；仅当电脑端口被占用回退到其他端口时需要重新扫一次码）。")
                     }
                     refreshComputerCard()
                 }

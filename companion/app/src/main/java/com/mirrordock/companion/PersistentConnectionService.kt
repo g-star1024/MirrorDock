@@ -48,9 +48,10 @@ object LinkState {
  * - 心跳：每 15 秒发 `{"type":"ping"}`，写入失败即判断链（服务端 300 秒静默
  *   也会判死，两端口径一致）。
  * - 断连退避重试：5s → 10s → 20s → … 封顶 5 分钟；互信会话建立成功即归零。
- * - 重连目标：last_host 的主机 + 本地保存的 resident_port（桌面端固定端口
- *   47017，被占用回退随机并经 paired_ok/会话推送学到；都没有则无法直连，
-   *  如实提示重新扫码）。
+ * - 重连目标：last_host 的主机 + 本地保存的 resident_port；**没有学到端口时
+ *   回退默认端口 47017**（X10-64 定案 B：把「在电脑端打开常驻通道后可免扫码
+ *   重连」的文案承诺变成真实能力——电脑固定端口未被占用时直接连上；被占用
+ *   回退随机端口的场景仍需重新扫码）。
  * - 状态通知（M4-3）：前台常驻通知随「连接中/已连接/重试中」更新；
  *   连接建立/断开与电脑录制开始/结束另发可划走的事件通知（可关，默认开）。
  * - 互信凭据只来自本地 SharedPreferences（paired_computers），无凭据时服务
@@ -73,6 +74,10 @@ class PersistentConnectionService : Service() {
         private const val HEARTBEAT_MS = 15_000L
         private const val BACKOFF_BASE_MS = 5_000L
         private const val BACKOFF_MAX_MS = 300_000L
+
+        /** 桌面常驻通道默认端口（X10-64 定案 B）：本地没学到 resident_port 时
+         * 回退直连这个端口——与桌面端 RESIDENT_DEFAULT_PORT 一致。 */
+        const val RESIDENT_DEFAULT_PORT = 47017
     }
 
     @Volatile private var running = false
@@ -125,8 +130,9 @@ class PersistentConnectionService : Service() {
             val fingerprint = prefs.getString("desktop_fingerprint", null)?.takeIf { it.isNotBlank() }
             val lastHost = prefs.getString("last_host", null)?.takeIf { it.isNotBlank() }
             val residentPort = prefs.getInt("resident_port", -1).takeIf { it > 0 }
+                ?: RESIDENT_DEFAULT_PORT // X10-64B：没学到端口时回退默认端口直连。
             val host = lastHost?.substringBeforeLast(':')?.takeIf { it.isNotBlank() }
-            if (pairingId == null || fingerprint == null || host == null || residentPort == null) {
+            if (pairingId == null || fingerprint == null || host == null) {
                 LinkState.update(LinkPhase.IDLE, "还没有可直连的电脑，请先扫码配对并让电脑开启常驻通道")
                 notifyEvent(getString(R.string.link_event_no_credential), false)
                 stopForeground(STOP_FOREGROUND_REMOVE)

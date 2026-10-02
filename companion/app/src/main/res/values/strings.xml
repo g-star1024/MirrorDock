@@ -43,4 +43,15 @@
     <string name="link_event_no_credential">没有可直连的电脑，请先扫码配对。</string>
     <string name="link_event_recording_start">电脑已开始屏幕录制。</string>
     <string name="link_event_recording_stop">电脑已结束屏幕录制。</string>
+
+    <!-- X10-66 通知镜像一期 -->
+    <string name="notify_mirror_title">通知镜像</string>
+    <string name="notify_mirror_note">打开后，手机收到的新通知会实时显示在电脑客户端「工具」页。只转发给你已配对的那台电脑（加密直连，不经云端）；下载进度等常驻提示不转发，内容也不会记录在日志里。可随时在这里或系统设置关闭。</string>
+    <string name="action_notify_mirror_on">开启通知镜像</string>
+    <string name="action_notify_mirror_off">关闭通知镜像</string>
+    <string name="notify_mirror_status_off">已关闭。</string>
+    <string name="notify_mirror_status_on">已开启：连接电脑后，新通知将实时转发。</string>
+    <string name="notify_mirror_status_need_permission">已开启，但还没有「读取通知」权限：点下面的按钮到系统设置允许 MirrorDock 读取通知。</string>
+    <string name="action_grant_listener">授予通知读取权限</string>
+    <string name="notify_mirror_toast_need_permission">已开启通知镜像；还需要在系统设置里允许读取通知。</string>
 </resources>
