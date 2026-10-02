@@ -1548,6 +1548,9 @@ function App() {
       setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
     } catch (error) {
       setTransferError(errorMessage(error, "无法读取手机上的文件列表。"));
+      // 读取失败时不要留下"上次的结果"冒充当前状态——那会让用户以为
+      // 手机上的文件还在。置空让它回到"尚未读取"的诚实状态。
+      setDeviceFiles(null);
     } finally {
       setTransferBusy(false);
     }
@@ -1761,6 +1764,30 @@ function App() {
   // 快捷键处理器读取的最新 serial。
   shortcutsRef.current.readySerial = readySerial;
 
+  // X10-74 文件传输的目标设备：**不依赖镜像会话**。
+  // 优先已就绪设备；没有就绪设备但有会话设备（正在镜像/连接）也可用 ——
+  // 两者都拿不到才为空，此时面板如实提示去连接页。
+  // 取回/发送走 adb 通道，与 scrcpy 会话无关，所以不该被会话状态门禁挡住。
+  const transferDeviceSerial = readyDevice?.serial ?? sessionSerial;
+
+  // 设备换了就丢弃旧列表：否则会出现"这是上一台手机的文件"这种误导。
+  useEffect(() => {
+    setDeviceFiles(null);
+    setTransferMessage(null);
+    setTransferError(null);
+  }, [readyDevice?.serial]);
+
+  // 打开「工具」页时自动加载手机文件列表（首次也加载）。
+  // 旧实现只在用户点按钮后才有列表，导致"手机发了文件但客户端一直看不到"——
+  // 用户不点按钮就永远看不到。现在让"进入页面"本身就完成读取。
+  useEffect(() => {
+    if (tab !== "tools") return;
+    if (deviceFiles !== null || transferBusy) return;
+    if (!transferDeviceSerial) return;
+    void refreshDeviceFiles(transferDeviceSerial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, transferDeviceSerial]);
+
   // X10-72（修 X10-71 的可见性缺陷）：桌面模式设置的归属设备现在**始终**是一个
   // 真实设备 —— 显式选择 > 会话设备 > 当前就绪设备 > 唯一已配对设备。旧逻辑在
   // 「单设备 / 未镜像」时把它留空，于是读写落到全局 options，用户看到的就像全局
@@ -1970,12 +1997,17 @@ function App() {
       if (unlisten) unlisten();
     };
   }, []);
-  // 收到新文件事件后的实际动作：列表开着就刷新；没开着只留提示，用户打开列表时自然会看到。
+  // 收到新文件事件后的实际动作：**无条件加载列表**，不再要求用户先点过一次按钮。
+  // 旧实现要求 `deviceFiles !== null` 才刷新，而 deviceFiles 只在手动点按钮后
+  // 才赋值 —— 于是形成死锁：不点按钮就永远看不到新文件（用户实际报的现象）。
+  // 文件传输不依赖镜像会话，所以这里也不看 sessionActive。
   useEffect(() => {
     if (filesChangedHint === null) return;
     setTransferMessage("手机发送区有新文件到达。");
-    if (readyDevice && deviceFiles !== null && !transferBusy) {
-      void refreshDeviceFiles(readyDevice.serial);
+    // 切到工具页并自动刷新：新文件是用户等着要看的东西，不该要求他先点按钮。
+    setTab("tools");
+    if (transferDeviceSerial && !transferBusy) {
+      void refreshDeviceFiles(transferDeviceSerial);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesChangedHint]);
@@ -2511,15 +2543,32 @@ function App() {
                   )}
                   {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
                 </div>
-                <div className="capability-panel transfer-panel" aria-live="polite">
-                  <strong>文件传输</strong>
-                  <p className="capability-pending">发送到手机的「下载 / MirrorDock」，或取回该目录的文件到本机。</p>
+              </div>
+            ) : (
+              <div className="capability-panel">
+                <strong>先连接手机</strong>
+                <p className="capability-pending">截图与录像需要先在「连接」页连接并授权手机。文件传输不依赖镜像，见下方「文件传输」面板。</p>
+              </div>
+            )}
+
+            {/* 文件传输（X10-74）：**移出 {readyDevice ? ...} 门禁**。
+                取回/发送走的是 adb 通道，与镜像会话无关 —— 旧实现把它关在
+                readyDevice 里，手机已连接但没在镜像时整个面板消失，用户 complaints
+                「手机发来的文件看不到」。现在它始终可见，只在真的没有可用设备时
+                才提示去连接。 */}
+            <div className="capability-panel transfer-panel" aria-live="polite" style={{ marginTop: 16 }}>
+              <strong>文件传输</strong>
+              {transferDeviceSerial ? (
+                <>
+                  <p className="capability-pending">
+                    手机「下载 / MirrorDock」与这台电脑之间互传，只经过你自己的数据线或局域网。
+                  </p>
                   <span>
-                    <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(readyDevice.serial)}>
+                    <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(transferDeviceSerial)}>
                       {transferBusy ? "正在处理…" : "选择文件发送到手机"}
                     </button>
-                    <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void refreshDeviceFiles(readyDevice.serial)}>
-                      {transferBusy ? "正在处理…" : deviceFiles ? "刷新手机文件列表" : "查看手机上的文件"}
+                    <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void refreshDeviceFiles(transferDeviceSerial)}>
+                      {transferBusy ? "正在处理…" : "刷新手机文件列表"}
                     </button>
                   </span>
                   {lastTransfer && (
@@ -2534,18 +2583,29 @@ function App() {
                       {deviceFiles.map((name) => (
                         <li key={name}>
                           <span className="transfer-file-name">{name}</span>
-                          <button className="text-button" type="button" disabled={transferBusy} onClick={() => void fetchDeviceFile(readyDevice.serial, name)}>取回到电脑</button>
-                          <button className="text-button danger" type="button" disabled={transferBusy} onClick={() => void deleteDeviceFile(readyDevice.serial, name)}>删除</button>
+                          <button className="text-button" type="button" disabled={transferBusy} onClick={() => void fetchDeviceFile(transferDeviceSerial, name)}>取回到电脑</button>
+                          <button className="text-button danger" type="button" disabled={transferBusy} onClick={() => void deleteDeviceFile(transferDeviceSerial, name)}>删除</button>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="capability-pending">手机的「下载 / MirrorDock」文件夹当前没有文件。</p>
+                    <p className="capability-pending">
+                      {transferBusy ? "正在读取手机上的文件…" : "手机的「下载 / MirrorDock」当前没有文件。"}
+                    </p>
                   ))}
                   {transferMessage && <p className="apply-notice" role="status">{transferMessage}</p>}
                   {transferError && <p className="capability-pending" role="alert">{transferError}</p>}
-                </div>
-                <div className="capability-panel apk-panel" aria-live="polite">
+                </>
+              ) : (
+                <p className="capability-pending">
+                  没有可用的手机。请在「连接」页连接并授权一台手机（USB 或同一 Wi-Fi 的无线调试都可以，不需要开始镜像）。
+                </p>
+              )}
+            </div>
+
+            {/* X10-74：APK 安装需要已就绪设备（要下发到设备），留在原门禁内。 */}
+            {readyDevice && (
+              <div className="capability-panel apk-panel" aria-live="polite" style={{ marginTop: 16 }}>
                   <strong>安装 APK</strong>
                   <p className="capability-pending">选择本机的 .apk 安装包，一键装到手机（覆盖安装、保留应用数据）。</p>
                   <span>
@@ -2565,12 +2625,6 @@ function App() {
                   {apkMessage && <p className="apply-notice" role="status">{apkMessage}</p>}
                   {apkError && <p className="capability-pending" role="alert">{apkError}</p>}
                   <p className="capability-pending">安装由手机系统完成，需你在手机上确认（如「安装未知应用」）；安装包只在电脑与手机之间传输。</p>
-                </div>
-              </div>
-            ) : (
-              <div className="capability-panel">
-                <strong>先连接手机</strong>
-                <p className="capability-pending">截图、录像与文件传输需要先在「连接」页连接并授权手机。</p>
               </div>
             )}
 

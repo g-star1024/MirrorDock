@@ -932,3 +932,73 @@ describe("apk install", () => {
     expect(await screen.findByText(/INSTALL_FAILED_VERSION_DOWNGRADE/)).toBeInTheDocument();
   });
 });
+
+describe("phone → computer file transfer (X10-74)", () => {
+  // 用户报「手机发送到电脑的文件，客户端一直看不到」。根因是三处叠加：
+  // ① deviceFiles 初始 null，列表只在手动点按钮后才渲染；② files_changed 事件
+  // 的自动刷新被 `deviceFiles !== null` 卡住 → 死锁，不点按钮就永远看不到；
+  // ③ 整个文件传输面板被关在 {readyDevice ? ...} 里，而文件传输其实不依赖镜像会话。
+  // 这组测试锁死修复后的行为。
+  function withPhone(extra: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      const custom = extra(cmd);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  async function openToolsTab() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /工具/ }));
+  }
+
+  it("loads_the_phone_file_list_on_entering_the_tools_tab_without_any_button_press", async () => {
+    // 关键回归：不点任何按钮，进入工具页就应看到手机上的文件。
+    withPhone((cmd) =>
+      cmd === "list_device_files"
+        ? Promise.resolve(["增值税发票.pdf", "安装狮.apk.1"])
+        : undefined,
+    );
+    await openToolsTab();
+
+    expect(await screen.findByText("增值税发票.pdf")).toBeInTheDocument();
+    expect(await screen.findByText("安装狮.apk.1")).toBeInTheDocument();
+    // 后端确实被调用过，且带的是这台设备的 serial。
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "list_device_files");
+      expect(call?.[1]).toMatchObject({ serial: "phone" });
+    });
+  });
+
+  it("shows_the_panel_even_when_no_mirror_session_is_running", async () => {
+    // 文件传输走 adb 通道，不依赖 scrcpy 会话 —— 没有会话时面板也必须在。
+    withPhone((cmd) =>
+      cmd === "list_device_files" ? Promise.resolve(["报告.pdf"]) : undefined,
+    );
+    await openToolsTab();
+
+    expect(await screen.findByText("报告.pdf")).toBeInTheDocument();
+    // 「取回到电脑」入口必须在，否则用户看到了也拿不回来。
+    expect(screen.getAllByRole("button", { name: "取回到电脑" }).length).toBeGreaterThan(0);
+  });
+
+  it("does_not_pretend_the_list_is_current_after_a_read_failure", async () => {
+    // 读取失败时不得留着上一次的列表冒充当前状态。
+    withPhone((cmd) =>
+      cmd === "list_device_files"
+        ? Promise.reject({
+            code: "transfer_list_failed",
+            message: "无法读取手机上的文件列表。",
+            recovery: "请确认连接仍然有效，然后重试。",
+          })
+        : undefined,
+    );
+    await openToolsTab();
+
+    expect(await screen.findByText(/无法读取手机上的文件列表/)).toBeInTheDocument();
+    // 失败后不应显示"当前没有文件"——那会把"读不到"说成"没有"，是假的。
+    expect(screen.queryByText(/当前没有文件/)).not.toBeInTheDocument();
+  });
+});
