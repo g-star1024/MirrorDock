@@ -11,9 +11,9 @@ android {
         applicationId = "com.mirrordock.companion"
         minSdk = 26
         targetSdk = 34
-        // 0.2.2 = X10-60 发送区推送/崩溃上报；0.2.1 = FGS 崩溃修复。
-        versionCode = 13
-        versionName = "0.2.2"
+        // 0.2.3 = X10-62 常驻会话保活修复；0.2.2 = 发送区推送/崩溃上报。
+        versionCode = 14
+        versionName = "0.2.3"
     }
 
     // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本

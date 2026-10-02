@@ -592,7 +592,10 @@
   - **公开站点（`site/index.html`）本轮刻意未改**：该页以 v0.4.2 测试版为口径、下载链接直指 v0.4.2-beta 资产，而 USB 自动重连（X10-59）尚未进入任何已发布客户端——此刻在该页写「USB 也会自动恢复」属超前声明。文案随下一版发布同步（登记在下方待办）。
   - **证据（2026-10-02 10:3x，HEAD=4bbfe0b + 本改动，工作区仅本改动）**：`pnpm build` 通过（tsc + vite，255ms）；vitest **45 passed / 0 failed**（基线 43 + 新增 2 项：`auto_reconnect_switch_copy_covers_both_data_cable_and_wireless`（开关名/说明/开↔关提示四处口径）、`faq_explains_recovery_for_both_the_data_cable_and_wireless_drops`（FAQ 必须两种连接都说清并指明开关位置））；同 HEAD 的 Rust 基线 `cargo test` **186 passed / 0 failed** 已独立复核，本轮未触碰 Rust。
   - 未验证面：文案观感与真机拔线恢复的实际体验，随 X10-59 客户端验收一并由用户确认（外部阻塞）。
-- [ ] **待验收（X10-59/60/61）**：新 APK（0.2.2）+ 新客户端装真机后：拔线出现提示条并自动恢复、工具页收到实时「新文件」提示、发送区删除生效、崩溃卡展示（可制造一次崩溃验证）、设置页开关口径与帮助中心新条目可见。
+- [x] **X10-62 常驻会话建立即断的真 bug 修复（2026-10-02 真机验证桩实锤）**：用户报「手机传 APK 提示成功、电脑客户端没有正常显示」。排查路径：①真机查发送区——文件确实已落盘（`安装狮.apk.1` 在 `/sdcard/Download/MirrorDock`），手机端无问题；②手机装的是 0.2.1（无 files_changed 推送能力）+ 桌面 0.4.2（无 X10-60 处理）——版本不对齐是第一层；③自建 MDP2 验证桩（Python，用桌面真实 TLS 身份 identity.der/key + 台账做完整 RECONNECT 握手）实测 0.2.2：**握手与验签全通、paired_ok 后对端立刻 EOF，5 秒一次重连死循环**。根因=`PairingClient.connect()` 完成握手、启动读线程后**立即返回**，而 `PersistentConnectionService` runLoop 紧接着 `client.close()`——会话建立即被自己掐断（b54a222 引入，M4-2 真机测试被「每次重连都能完成握手」掩盖，心跳/下行事件/推送从未真正有存活窗口）。修复=connect() 在读线程上 `join()`，语义改为「返回 = 会话已结束」（扫码配对的一次性会话同样受益；MainActivity/服务的 connect 调用均在后台线程，阻塞无害）。
+  - 证据：gradle assembleDebug 绿；companion 0.2.3（versionCode 14）随 CI 出包后真机覆盖安装复测（见下）。
+  - 排障插曲：重装 0.2.2 重置了 POST_NOTIFICATIONS 运行时权限（点连接弹权限框挡住流程，pm grant 解决）；run-as 修 prefs 时 SharedPreferences 进程内缓存脏读到空凭据致服务自停（force-stop 重启解决）；手机 prefs 无 `resident_port`（扫码配对时桌面常驻通道未开，paired_ok 未带端口）——用户可感知的影响=「连接上次配对的电脑」提示无可直连电脑，属产品待改进项（配对页应引导开启常驻通道）。
+- [ ] **待验收（X10-59/60/61/62）**：新 APK（0.2.3）+ 新客户端装真机后：拔线出现提示条并自动恢复、工具页收到实时「新文件」提示、发送区删除生效、崩溃卡展示（可制造一次崩溃验证）、设置页开关口径与帮助中心新条目可见、常驻会话持续在线（状态通知不再每 5 秒重连）。
   - **验收前置条件（守卫轮 2026-10-02 明确，避免误验收）**：桌面端 X10-59/60 修复**不在任何已发布客户端内**——v0.4.2-beta 的 tag=6ad4e15 早于 a2400c3，其安装包既无 USB 自动重连也无本次文案。验收必须用**本地 `pnpm tauri build` 构建的客户端**，或等下一版 tag 发布后再下载；直接在 v0.4.2-beta 上验收拔线行为必然失败。
   - **伴侣 APK 0.2.2 来源**：`companion.yml`（workflow「Companion App」）随 4bbfe0b 的 push 已成功产出 artifact `mirrordock-companion-debug`（约 3.8 MB，run 36953624864），可直接下载安装验收。
 

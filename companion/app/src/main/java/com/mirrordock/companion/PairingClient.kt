@@ -197,6 +197,12 @@ class PairingClient(
                     listener.onDisconnected()
                 }
             }.also { it.isDaemon = true; it.start() }
+            // X10-62：阻塞到读线程退出（断开/关闭即返回）。connect 的语义是
+            // 「返回 = 会话已结束」——之前握手完成即返回，服务端 runLoop 紧接着
+            // client.close()，会话建立不到一秒就被自己掐断，只能靠 5 秒重连
+            // 循环掩盖（真机验证桩实锤：paired_ok 后对端立刻 EOF）。心跳、
+            // 桌面事件下行、files_changed 推送都没有存活窗口。
+            readerThread?.join()
         } catch (e: Exception) {
             listener.onError("会话异常：${e.message}")
             runCatching { tls.close() }
