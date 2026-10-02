@@ -310,7 +310,7 @@
   <section class="hero" id="top">
     <div class="wrap">
       <div>
-        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.4.2 测试版已发布</p>
+        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.4.3 测试版已发布</p>
         <h1>把手机放到<br><span class="dim">这台电脑的桌面上。</span></h1>
         <p class="lede">
           MirrorDock 用一根数据线或同一个 Wi-Fi，把 Android 手机的屏幕、声音和键鼠控制接到电脑上。
@@ -503,11 +503,15 @@
           </li>
           <li>
             <h4>电脑与手机互传文件</h4>
-            <p>发送的文件进入手机「下载 / MirrorDock」，取回的文件存到电脑的下载目录，只经过数据线或局域网。</p>
+            <p>发送的文件进入手机「下载 / MirrorDock」，取回的文件存到电脑的下载目录，只经过数据线或局域网。手机发送后电脑端实时提示；把文件直接拖进 MirrorDock 窗口也一样能发。</p>
           </li>
           <li>
-            <h4>无线断线自动重连</h4>
-            <p>手机熄屏后从 Wi-Fi 消失、回来发现镜像断了？现在会自动等待手机回网并恢复镜像（最多 15 分钟），点亮手机的那一刻画面就回来。</p>
+            <h4>手机通知出现在电脑上</h4>
+            <p>在手机伴侣 App 打开「通知镜像」（默认关，需你显式授权），新通知会实时显示在电脑「工具」页。只发给已配对的电脑、不落盘不进日志，随时可关。</p>
+          </li>
+          <li>
+            <h4>断线自动重连（数据线与无线）</h4>
+            <p>数据线被拔掉、手机熄屏后从 Wi-Fi 消失？连接页会明确提示正在等待，插回线或手机回网后自动恢复镜像（最多 15 分钟），点亮手机的那一刻画面就回来。</p>
           </li>
           <li>
             <h4>打字像本地键盘一样</h4>
@@ -527,7 +531,7 @@
           </li>
           <li>
             <h4>伴侣 App，加密配对</h4>
-            <p>手机端安装伴侣 App 后，与电脑建立 TLS 1.3 加密连接并锁定证书指纹；对已配对无线调试的手机，扫码成功后电脑会自动回连，直接进入连接列表。</p>
+            <p>手机端安装伴侣 App 后，与电脑建立 TLS 1.3 加密连接并锁定证书指纹；开启「常驻通道」后可免扫码一键重连，应用与文件互传都走这条加密通道。</p>
           </li>
         </ul>
       </div>
@@ -609,7 +613,7 @@
 
   <section class="band" id="download">
     <div class="wrap">
-      <h2>下载 v0.4.2 测试版</h2>
+      <h2>下载 v0.4.3 测试版</h2>
       <p class="sec-lede">
         安装包和校验值都发布在 GitHub Releases 上。不确定该下哪个，按你的系统对照下面的表。
       </p>
@@ -623,46 +627,46 @@
           <tr>
             <td>Windows</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_x64-setup.exe">安装程序（exe）</a>
-              <span class="fname">MirrorDock_0.4.2_x64-setup.exe</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_x64_en-US.msi" style="display:block;margin-top:8px">MSI 安装包</a>
-              <span class="fname">MirrorDock_0.4.2_x64_en-US.msi</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_x64-setup.exe">安装程序（exe）</a>
+              <span class="fname">MirrorDock_0.4.3_x64-setup.exe</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_x64_en-US.msi" style="display:block;margin-top:8px">MSI 安装包</a>
+              <span class="fname">MirrorDock_0.4.3_x64_en-US.msi</span>
             </td>
             <td>64 位。首次运行可能被 SmartScreen 提示，选择「仍要运行」。</td>
           </tr>
           <tr>
             <td>macOS<br>Apple 芯片</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_aarch64.dmg">磁盘映像</a>
-              <span class="fname">MirrorDock_0.4.2_aarch64.dmg</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_aarch64.dmg">磁盘映像</a>
+              <span class="fname">MirrorDock_0.4.3_aarch64.dmg</span>
             </td>
             <td>适用于 M1 及之后的所有芯片。</td>
           </tr>
           <tr>
             <td>macOS<br>Intel</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_x64.dmg">磁盘映像</a>
-              <span class="fname">MirrorDock_0.4.2_x64.dmg</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_x64.dmg">磁盘映像</a>
+              <span class="fname">MirrorDock_0.4.3_x64.dmg</span>
             </td>
             <td>未签名版本，首次打开需在「系统设置 → 隐私与安全性」中允许。</td>
           </tr>
           <tr>
             <td>Linux</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_amd64.AppImage">AppImage（免安装）</a>
-              <span class="fname">MirrorDock_0.4.2_amd64.AppImage</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock_0.4.2_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
-              <span class="fname">MirrorDock_0.4.2_amd64.deb</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/MirrorDock-0.4.2-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
-              <span class="fname">MirrorDock-0.4.2-1.x86_64.rpm</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_amd64.AppImage">AppImage（免安装）</a>
+              <span class="fname">MirrorDock_0.4.3_amd64.AppImage</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock_0.4.3_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
+              <span class="fname">MirrorDock_0.4.3_amd64.deb</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock-0.4.3-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
+              <span class="fname">MirrorDock-0.4.3-1.x86_64.rpm</span>
             </td>
             <td>AppImage 下载后加执行权限即可运行：<span style="font-family:var(--font-mono);font-size:12.5px">chmod +x 文件名</span></td>
           </tr>
           <tr>
             <td>Android 伴侣 App</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/app-debug.apk">APK</a>
-              <span class="fname">app-debug.apk</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/MirrorDock-companion-0.4.3.apk">APK</a>
+              <span class="fname">MirrorDock-companion-0.4.3.apk</span>
             </td>
             <td>需要 Android 8.0 及以上。安装后在手机与电脑同一 Wi-Fi 下扫码配对。</td>
           </tr>
@@ -670,8 +674,8 @@
       </table>
 
       <div class="dl-actions">
-        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.2-beta">打开发布页</a>
-        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.2-beta/SHA256SUMS-macos-x64.txt">校验值（SHA256SUMS）</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.3-beta">打开发布页</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.3-beta/SHA256SUMS-macos-x64.txt">校验值（SHA256SUMS）</a>
         <a class="btn-line" href="https://github.com/g-star1024/MirrorDock">查看源代码</a>
       </div>
       <p class="dl-hint">
@@ -717,7 +721,7 @@
 
 <footer>
   <div class="wrap">
-    <span>MirrorDock v0.4.2 测试版</span>
+    <span>MirrorDock v0.4.3 测试版</span>
     <a href="https://github.com/g-star1024/MirrorDock">源代码</a>
     <a href="compatibility.html">兼容性矩阵</a>
     <a href="https://github.com/g-star1024/MirrorDock/releases">全部版本</a>
