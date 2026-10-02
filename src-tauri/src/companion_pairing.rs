@@ -827,14 +827,21 @@ async fn serve_session(
                             // 心跳（M4-2）：回 pong 即可，内容不进事件流（15s 一条会刷屏）。
                             // 写出失败（含 flush 滞留）⇒ 会话结束；成功则无事可做，
                             // 由紧随的空臂承接（不得落入「未知消息类型」）。
-                            Some("ping")
-                                if stream.write_all(PONG_LINE.as_bytes()).await.is_err()
-                                    || stream.flush().await.is_err() =>
-                            {
-                                state.push_event("会话结束（心跳写出失败）");
-                                ended = true;
+                            // X10-73：ping 可带 `t`（伴侣端 System.nanoTime() 单调时钟），
+                            // 回包原样带回，伴侣端据此算 RTT 显示连接质量。不带 `t`
+                            // 的旧版 ping 仍回固定 PONG_LINE，双向兼容。
+                            Some("ping") => {
+                                let pong = match value.get("t").and_then(|t| t.as_i64()) {
+                                    Some(stamp) => format!("{{\"type\":\"pong\",\"t\":{stamp}}}\n"),
+                                    None => PONG_LINE.to_string(),
+                                };
+                                if stream.write_all(pong.as_bytes()).await.is_err()
+                                    || stream.flush().await.is_err()
+                                {
+                                    state.push_event("会话结束（心跳写出失败）");
+                                    ended = true;
+                                }
                             }
-                            Some("ping") => {}
                             Some("device_hello") => {
                                 // 互信握手已把设备报到并入 establish_trust；这里再收到
                                 // 说明对端走了旧协议流程，如实记录，不中断会话。
@@ -1567,6 +1574,20 @@ mod tests {
         signing: &p256::ecdsa::SigningKey,
         ping_after_paired: bool,
     ) -> Option<String> {
+        reconnect_client_with_ping(port, fingerprint, pairing_id, signing, ping_after_paired, None)
+            .await
+    }
+
+    /// [reconnect_client] 的可测版本：`ping_stamp` 非空时在心跳里带 `t` 字段，
+    /// 用于验证 X10-73 的 RTT 回带（pong 原样返回对端的时间戳）。
+    async fn reconnect_client_with_ping(
+        port: u16,
+        fingerprint: &str,
+        pairing_id: &str,
+        signing: &p256::ecdsa::SigningKey,
+        ping_after_paired: bool,
+        ping_stamp: Option<i64>,
+    ) -> Option<String> {
         use p256::ecdsa::signature::{SignatureEncoding, Signer};
         use tokio::io::AsyncWriteExt;
 
@@ -1597,7 +1618,11 @@ mod tests {
             return Some(verdict);
         }
         assert!(verdict.contains("paired_ok"), "got {verdict}");
-        write_half.write_all(b"{\"type\":\"ping\"}\n").await.unwrap();
+        let ping = match ping_stamp {
+            Some(stamp) => format!("{{\"type\":\"ping\",\"t\":{stamp}}}\n"),
+            None => "{\"type\":\"ping\"}\n".to_string(),
+        };
+        write_half.write_all(ping.as_bytes()).await.unwrap();
         lines.next_line().await.ok().flatten()
     }
 
@@ -1676,8 +1701,33 @@ mod tests {
             .expect("心跳会话必须成功");
         let pong: serde_json::Value = serde_json::from_str(&pong).unwrap();
         assert_eq!(pong["type"], "pong");
+        // 旧版 ping（不带 t）不得被回包带出时间戳字段，否则会误导伴侣端算 RTT。
+        assert!(
+            pong.get("t").is_none(),
+            "不带 t 的 ping 不应回显时间戳：{pong}"
+        );
 
-        // ④ 状态如实反映常驻监听。
+        // ④ X10-73：ping 带单调时钟戳时，pong 原样带回 —— 伴侣端靠它算 RTT。
+        let stamp = 1_789_000_000_000_000i64;
+        let pong = reconnect_client_with_ping(
+            port,
+            &fingerprint_of(&workdir),
+            "RESIDENTTEST0001",
+            &signing,
+            true,
+            Some(stamp),
+        )
+        .await
+        .expect("带时间戳的心跳会话必须成功");
+        let pong: serde_json::Value = serde_json::from_str(&pong).unwrap();
+        assert_eq!(pong["type"], "pong");
+        assert_eq!(
+            pong["t"].as_i64(),
+            Some(stamp),
+            "pong 必须原样带回 ping 的时间戳：{pong}"
+        );
+
+        // ⑤ 状态如实反映常驻监听。
         assert!(state.status().resident);
         let _ = std::fs::remove_dir_all(&workdir);
     }

@@ -18,6 +18,41 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 enum class LinkPhase { IDLE, CONNECTING, CONNECTED, RETRYING }
 
+/**
+ * 连接质量（X10-73）：ToDesk 风格的连接质量面板。
+ *
+ * 只报能如实测到的量，不猜：
+ * - `rttMs`：ping→pong 的往返毫秒。桌面端每 15s 回一次 pong，采样天然稀疏，
+ *   显示时写明"最近一次"，不做平滑——平滑会让用户以为有数可比的连续曲线。
+ * - `connectedAtMs`：本次连接建立时刻，用于算已连接时长。
+ * 采样失败（连接前、断链后）一律为 null，界面显示"—"而不是 0。
+ */
+object LinkQuality {
+    @Volatile var rttMs: Int? = null
+    @Volatile var connectedAtMs: Long = 0L
+    @Volatile var currentPairingId: String? = null
+
+    fun reset() {
+        rttMs = null
+        connectedAtMs = 0L
+    }
+
+    fun onConnected(pairingId: String) {
+        currentPairingId = pairingId
+        connectedAtMs = System.currentTimeMillis()
+        rttMs = null
+    }
+
+    fun onDisconnected() {
+        rttMs = null
+        connectedAtMs = 0L
+    }
+
+    /** 已连接时长（秒）；未连接返回 0。 */
+    fun connectedSeconds(): Long =
+        if (connectedAtMs == 0L) 0L else (System.currentTimeMillis() - connectedAtMs) / 1000
+}
+
 object LinkState {
     @Volatile var phase: LinkPhase = LinkPhase.IDLE
     @Volatile var detail: String = ""
@@ -96,6 +131,7 @@ class PersistentConnectionService : Service() {
                 startInForeground()
                 running = false
                 LinkState.lineSender = null
+                LinkQuality.onDisconnected()
                 LinkState.update(LinkPhase.IDLE, "已断开")
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -116,6 +152,7 @@ class PersistentConnectionService : Service() {
 
     override fun onDestroy() {
         running = false
+        LinkQuality.onDisconnected()
         LinkState.update(LinkPhase.IDLE, "已断开")
         super.onDestroy()
     }
@@ -125,15 +162,21 @@ class PersistentConnectionService : Service() {
     private fun runLoop() {
         var attempt = 0
         while (running) {
-            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-            val pairingId = prefs.getString("pairing_id", null)?.takeIf { it.isNotBlank() }
-            val fingerprint = prefs.getString("desktop_fingerprint", null)?.takeIf { it.isNotBlank() }
-            val lastHost = prefs.getString("last_host", null)?.takeIf { it.isNotBlank() }
-            val residentPort = prefs.getInt("resident_port", -1).takeIf { it > 0 }
-                ?: RESIDENT_DEFAULT_PORT // X10-64B：没学到端口时回退默认端口直连。
-            val host = lastHost?.substringBeforeLast(':')?.takeIf { it.isNotBlank() }
-            if (pairingId == null || fingerprint == null || host == null) {
+            // X10-73：多设备。连谁由 ComputerStore 决定（用户选中的那台优先，
+            // 否则最近连过的那台）。无凭据时如实停下并提示，不再静默失败。
+            val target = ComputerStore.active(this)
+            if (target == null) {
                 LinkState.update(LinkPhase.IDLE, "还没有可直连的电脑，请先扫码配对并让电脑开启常驻通道")
+                notifyEvent(getString(R.string.link_event_no_credential), false)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
+            val pairingId = target.pairingId
+            val fingerprint = target.fingerprint
+            val residentPort = target.residentPort ?: RESIDENT_DEFAULT_PORT
+            val host = target.host.takeIf { it.isNotBlank() } ?: run {
+                LinkState.update(LinkPhase.IDLE, "已配对这台电脑但缺少地址，请重新扫码配对")
                 notifyEvent(getString(R.string.link_event_no_credential), false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -155,7 +198,7 @@ class PersistentConnectionService : Service() {
             var heartbeat: Thread? = null
             LinkState.update(
                 if (attempt == 0) LinkPhase.CONNECTING else LinkPhase.RETRYING,
-                "正在连接 $endpoint …",
+                "正在连接 ${target.displayName()}（$endpoint）…",
             )
 
             client.connect(object : PairingClient.Listener {
@@ -169,11 +212,19 @@ class PersistentConnectionService : Service() {
                     // 下行发送桥：UI 层经 LinkState.lineSender 推 JSON 给电脑。
                     LinkState.lineSender = { line -> client.sendLine(line) }
                     android.util.Log.i("PersistentLink", "onPaired: lineSender attached (pid=$pid)")
+                    LinkQuality.onConnected(pid)
                     // 桌面端常驻端口可能变化（回退随机端口后重开）：学到即更新。
-                    if (newResidentPort != null && newResidentPort != residentPort) {
-                        prefs.edit().putInt("resident_port", newResidentPort).apply()
+                    if (newResidentPort != null) {
+                        ComputerStore.touch(this@PersistentConnectionService, pairingId) {
+                            it.copy(residentPort = newResidentPort)
+                        }
                     }
-                    LinkState.update(LinkPhase.CONNECTED, "已连接 $endpoint")
+                    // 记录这次真正连上了：活动目标 + 最近连接时间，供设备列表排序。
+                    ComputerStore.setActive(this@PersistentConnectionService, pairingId)
+                    ComputerStore.touch(this@PersistentConnectionService, pairingId) {
+                        it.copy(lastConnectedAt = System.currentTimeMillis())
+                    }
+                    LinkState.update(LinkPhase.CONNECTED, "已连接 ${target.displayName()}（$endpoint）")
                     notifyEvent(getString(R.string.link_event_connected), true)
                     heartbeat = Thread {
                         while (running && sessionAlive.get()) {
@@ -184,7 +235,8 @@ class PersistentConnectionService : Service() {
                             }
                             if (!running || !sessionAlive.get()) return@Thread
                             // 写失败即断链：主动断开触发外层重连。
-                            if (!client.sendLine("{\"type\":\"ping\"}")) {
+                            // X10-73：ping 带单调时钟戳，回包原样带回 → RTT 可测。
+                            if (!client.sendLine("{\"type\":\"ping\",\"t\":${System.nanoTime()}}")) {
                                 client.close()
                                 return@Thread
                             }
@@ -195,6 +247,7 @@ class PersistentConnectionService : Service() {
                 override fun onRejected() {
                     // 台账里被移除/身份不符：如实告知，不再退避重试（重试也不会过）。
                     LinkState.lineSender = null
+                    LinkQuality.onDisconnected()
                     notifyEvent(getString(R.string.link_event_rejected), true)
                     LinkState.update(LinkPhase.IDLE, "电脑拒绝了这次连接（可能已解除互信）")
                 }
@@ -206,6 +259,7 @@ class PersistentConnectionService : Service() {
                 override fun onDisconnected() {
                     sessionAlive.set(false)
                     LinkState.lineSender = null
+                    LinkQuality.onDisconnected()
                     android.util.Log.w("PersistentLink", "onDisconnected: lineSender cleared")
                     if (running) {
                         notifyEvent(getString(R.string.link_event_disconnected), true)
@@ -225,7 +279,18 @@ class PersistentConnectionService : Service() {
                         )
                         // 常驻端口更新（电脑端重开常驻通道后经活跃会话推送）。
                         "resident_port" -> json.optInt("port", -1).takeIf { it > 0 }?.let { port ->
-                            prefs.edit().putInt("resident_port", port).apply()
+                            ComputerStore.touch(this@PersistentConnectionService, pairingId) {
+                                it.copy(residentPort = port)
+                            }
+                        }
+                        // X10-73：pong 回带 ping 里的单调时钟戳，差值即 RTT。
+                        "pong" -> json.optLong("t", 0L).takeIf { it > 0 }?.let { sentAt ->
+                            val rtt = (System.nanoTime() - sentAt) / 1_000_000
+                            // 只采信合理区间：负数=时钟异常，>10s=对端卡住而非网络延迟。
+                            if (rtt in 0..10_000) {
+                                LinkQuality.rttMs = rtt.toInt()
+                                LinkState.update(LinkPhase.CONNECTED, "已连接 ${target.displayName()}（$endpoint）")
+                            }
                         }
                         // 快捷回复（X10-69）：桌面端下发的通知回复文本，交给
                         // 监听服务填进原通知的 RemoteInput 动作。字段缺失直接忽略。
@@ -236,7 +301,7 @@ class PersistentConnectionService : Service() {
                                 NotificationMirrorService.handleReply(key, text)
                             }
                         }
-                        // pong 及未知类型静默忽略。
+                        // 未知类型静默忽略。
                     }
                 }
             })
