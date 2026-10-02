@@ -84,8 +84,14 @@ class MainActivity : AppCompatActivity() {
 
     /** 经常驻连接推一行 JSON 给电脑；无连接或写出失败返回 false。 */
     private fun pushLinkLine(line: String): Boolean {
-        val sender = LinkState.lineSender ?: return false
-        return runCatching { sender(line) }.getOrDefault(false)
+        val sender = LinkState.lineSender
+        if (sender == null) {
+            android.util.Log.w("PersistentLink", "pushLinkLine: lineSender=null (phase=${LinkState.phase})")
+            return false
+        }
+        val ok = runCatching { sender(line) }.getOrDefault(false)
+        android.util.Log.i("PersistentLink", "pushLinkLine: sent=$ok line=$line")
+        return ok
     }
 
     private fun openSendPicker() {

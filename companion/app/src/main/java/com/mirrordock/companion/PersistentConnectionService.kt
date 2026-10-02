@@ -162,6 +162,7 @@ class PersistentConnectionService : Service() {
                     attempt = 0
                     // 下行发送桥：UI 层经 LinkState.lineSender 推 JSON 给电脑。
                     LinkState.lineSender = { line -> client.sendLine(line) }
+                    android.util.Log.i("PersistentLink", "onPaired: lineSender attached (pid=$pid)")
                     // 桌面端常驻端口可能变化（回退随机端口后重开）：学到即更新。
                     if (newResidentPort != null && newResidentPort != residentPort) {
                         prefs.edit().putInt("resident_port", newResidentPort).apply()
@@ -199,6 +200,7 @@ class PersistentConnectionService : Service() {
                 override fun onDisconnected() {
                     sessionAlive.set(false)
                     LinkState.lineSender = null
+                    android.util.Log.w("PersistentLink", "onDisconnected: lineSender cleared")
                     if (running) {
                         notifyEvent(getString(R.string.link_event_disconnected), true)
                         LinkState.update(LinkPhase.RETRYING, "会话断开，稍后自动重连")
