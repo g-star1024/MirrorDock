@@ -685,6 +685,16 @@
     ③ `LinkShortcutManager` 直接读 `result.isLongLived` —— 该属性是 **API 30+**，而 `minSdk = 26`，会在 Android 8/9 上抛 `NoSuchMethodError`。已加 `SDK_INT >= R` 版本判断（外层再包 `runCatching` 兜底）。
   - **门禁补强（不让同类问题再拖垮发版）**：`scripts/verify-companion.py` 新增第 7.5 类检查（Kotlin 编译期陷阱：`View` 上的 `minWidth`/`minHeight`、Long 与 IntRange 混用、API 30+ 未判 `SDK_INT`），并已**反向验证**（注入 3 类错误 → 脚本全部抓到；恢复后全绿）。同时把该脚本接入 `build.yml` 的 `verify` job（`companion-apk` 与 `release` 都 `needs: verify`），**成为发版硬门禁** —— 下次同类错误在 push 阶段就会被拦下，而不是等 30 分钟后发现 Release 没产出。
   - **教训**：本地无 gradle 时，静态校验是唯一防线，**但校验器本身也会有盲区**。这次的代价是四平台包白跑一轮（tag 已推、代码已冻结，只改了 3 行 Kotlin）。发版记录必须以「Release 资产实际存在」为准，不能以「tag 已推」为准。
+  - **⚠ 第二次发版仍失败（run 37039214291）**：修完上述三处后重打 tag，**APK job 依旧失败**。原因是**还有第 4 处、我完全没料到的编译错误**，而当时已无路可查：`/logs` 端点需 admin（403）、job annotations 只有 `Process completed with exit code 1`、check-runs annotations 也只有 exit code 无编译器原文。**只能靠猜，猜了两次都不中。**
+  - **突破：本地跑起真实 kotlinc**。发现本机其实具备完整条件，只是没有 gradle 发行版（沙箱拦大文件下载）：`~/.gradle/caches` 里有 `kotlin-compiler-embeddable 2.0.20`（与项目一致）、`~/Library/Android/sdk/platforms/android-34/android.jar`、850M 依赖缓存（含全部 AndroidX aar）、Android Studio 自带 JBR，以及**系统 `/usr/bin/java` 是 Temurin 17**。直接用 `K2JVMCompiler` 跑类型检查即拿到编译器原文：
+    - 关键点：Android Studio 的 JBR 是 **JDK 25**，kotlinc 2.0.20 解析不了 Java 版本号（`IllegalArgumentException: 25.0.2`），必须用系统 JDK 17。
+    - 关键点：AGP 生成的 `R.class` 本地没有，需按 `res/` 实际内容生成同形状存根（`javac` 编译），否则报一堆假 `unresolved reference` 把真错误淹没。
+  - **真正的第 4 处错误（`LinkShortcutManager`，2 个根因）**：
+    ① `ShortcutInfo.Builder(SHORTCUT_ID)` —— **`Builder` 只有 `(Context, String)` 构造器，没有单参 String 版本**（`javap` 核对 android.jar 确认）。→ 改 `Builder(activity, SHORTCUT_ID)`。
+    ② `requestPinShortcut` 返回的 `ShortcutManager.RequestPinShortcutResult` 是 **`@hide` 类型**，公开 SDK 里查不到（`javap` 直接报"找不到类"），因此 `isSuccess` / `isLongLived` **根本不可访问**。→ 只能判返回值是否为 null；文案改为"已向系统请求固定…在弹出的确认框点「添加」"，**不谎报已固定**。另补 `isRequestPinShortcutSupported` 预检（部分国产 ROM 禁用固定请求）。
+  - **门禁再次补强**：新增 `scripts/check-companion-kotlin.py` —— 用 Gradle 缓存里的 kotlinc + `android.jar` + 全部 AndroidX aar **真实做类型检查**（并按 `res/` 生成 R 存根）。**已反向验证**：注入第 4 处错误 → 脚本抓到并报出精确行号 `LinkShortcutManager.kt:63:34`；恢复后 0 error。接入 `build.yml` 的 `verify` job。
+    - 脚本只统计**前端 `error:` 行**；后端 `BackendException`（IR lowering）在本环境必然出现（缺 aapt 产物），已用**发版前未改动的原始代码验证过同样报错**，确认与代码无关。
+  - **元教训（比 bug 本身更重要）**：**猜 bug 是错的做法**。第一次靠猜修对了两处、但漏了更深的一处，代价是四平台包白跑两轮。正确顺序是：先把「拿到编译器原文」的能力建起来（本地 kotlinc / CI 日志 artifact），再修 bug。在此之前不要改代码 —— 改了也无法验证是否修全。
   - **重新发版**：修复后需重打 tag 触发 CI（`git tag -f v0.4.7-beta`）。
 
 ## 最终成品退出条件

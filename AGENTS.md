@@ -30,10 +30,13 @@ Run the narrowest applicable check; the leftmost that exists is the fastest sign
 | Frontend types + build | `pnpm build` | Runs `tsc` then `vite build`. Fails on any type error. |
 | Frontend tests | `pnpm vitest run` | Rendering contracts + pure functions. |
 | Rust | `cargo test --manifest-path src-tauri/Cargo.toml` | Then `cargo clippy --manifest-path src-tauri/Cargo.toml`. |
-| Companion (Android) static | `python3 scripts/verify-companion.py` | **Required before every companion change.** |
+| Companion (Android) static | `python3 scripts/verify-companion.py` | **Required before every companion change.** Resource references, ids, manifest classes, Kotlin type traps. |
+| Companion (Android) Kotlin | `python3 scripts/check-companion-kotlin.py` | **Required before every companion change.** Runs a real `kotlinc` type check (compiler from the Gradle cache + `android.jar`) without gradle. |
 | Companion real build | push a `v*` tag, or run `companion.yml` | Gradle only exists on the CI runner. |
 
-`scripts/verify-companion.py` exists because this workstation has no `gradle` and the sandbox blocks large downloads, so Kotlin compilation is CI-only. The script catches locally — before CI — the errors that would otherwise wait for CI: malformed XML, dangling `@string`/`@color`/`@style`/`@drawable` references, `findViewById(R.id.x)` where `x` is declared in no layout, `AndroidManifest` classes with no source file, unbalanced Kotlin delimiters, and dead string resources. Treat a red run as a build break.
+Both companion scripts exist because this workstation has no `gradle` and the sandbox blocks large downloads, so a full Android build is CI-only. `check-companion-kotlin.py` runs the real Kotlin compiler front-end (type checking) using `kotlin-compiler-embeddable` from the Gradle cache and the SDK's `android.jar`; it needs JDK 17 (`/usr/bin/java`) because kotlinc 2.0.20 cannot parse a Java 25 version string. A `BackendException` during IR lowering is expected in that ad-hoc environment (no aapt-generated `R.class`) and is not a code defect — the script reports only front-end `error:` lines, which are the ones that break CI.
+
+`scripts/verify-companion.py` exists for the same reason and the sandbox blocks large downloads, so Kotlin compilation is CI-only. The script catches locally — before CI — the errors that would otherwise wait for CI: malformed XML, dangling `@string`/`@color`/`@style`/`@drawable` references, `findViewById(R.id.x)` where `x` is declared in no layout, `AndroidManifest` classes with no source file, unbalanced Kotlin delimiters, and dead string resources. Treat a red run as a build break.
 
 ## Team and skills
 
