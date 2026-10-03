@@ -578,7 +578,7 @@ export function groupTransferFiles(names: string[]): TransferGroup[] {
   }
   const byName = (a: string, b: string) => a.localeCompare(b, "zh-Hans-CN");
   return [
-    { kind: "installer", label: "安装包（可装到手机）", files: buckets.installer.sort(byName) },
+    { kind: "installer", label: "安装包", files: buckets.installer.sort(byName) },
     { kind: "document", label: "文档", files: buckets.document.sort(byName) },
     { kind: "other", label: "其他文件", files: buckets.other.sort(byName) },
   ].filter((group) => group.files.length > 0);
@@ -635,6 +635,9 @@ function App() {
   const [fetchedFiles, setFetchedFiles] = useState<Record<string, TransferReceipt>>({});
   // 正在取回的文件名（用于行内 loading，只让该行转圈而不是整表转圈）。
   const [fetchingName, setFetchingName] = useState<string | null>(null);
+  // X10-75（impeccable 评审）：失败必须是**行内**状态，不能只是面板底部一行红字 ——
+  // 8 行列表里那行字扫不出来，而且失败后没有恢复动作会让人卡死。
+  const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({});
   // 安装 APK：选中的安装包路径只存在内存里（不写 localStorage，不入日志）。
   const [apkPath, setApkPath] = useState<string | null>(null);
   const [apkBusy, setApkBusy] = useState(false);
@@ -1634,23 +1637,57 @@ function App() {
   }
 
   // 取回文件：保存到本机「下载 / MirrorDock」，同名时后端自动顺延序号。
-  // X10-75：状态记到**该文件**上（fetchedFiles），行内据此显示「已取回 ✓」；
-  // 提示语也只说这一个文件，不再写"已保存到…文件夹"（会被读成"全部都存好了"）。
+  // X10-75：状态记到**该文件**上（fetchedFiles）；提示语也只说这一个文件，
+  // 不写"已保存到…文件夹"（会被读成全部都存好了）。失败记在 fetchErrors，
+  // 由该行显示原因并提供「重试」，而不是只在面板底部留一行红字。
   async function fetchDeviceFile(serial: string, fileName: string) {
     setTransferMessage(null);
     setTransferError(null);
     setFetchingName(fileName);
+    setFetchErrors((prev) => {
+      if (!(fileName in prev)) return prev;
+      const next = { ...prev };
+      delete next[fileName];
+      return next;
+    });
     try {
       const receipt = await invoke<TransferReceipt>("fetch_file_from_device", { serial, fileName });
       setFetchedFiles((prev) => ({ ...prev, [fileName]: receipt }));
-      setTransferMessage(`已把「${fileName}」保存到这台电脑的「下载 / MirrorDock」文件夹。`);
+      setTransferMessage(`已取回「${fileName}」，保存在这台电脑的「下载 / MirrorDock」。`);
       // 文件已安全落在本机，刷新列表以便看到最新状态。
       setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
     } catch (error) {
-      setTransferError(errorMessage(error, "文件没有从手机取回。"));
+      setFetchErrors((prev) => ({ ...prev, [fileName]: errorMessage(error, "没有取回成功。") }));
     } finally {
       setFetchingName(null);
     }
+  }
+
+  // 删除前确认（X10-75）：「删除」在已取回态下有两种可能含义（删手机原件？删电脑副本？），
+  // 用户点之前无从判断。确认必须点名文件并说清只删哪一份 —— 用项目既有的
+  // window.confirm 风格，不引入新的弹窗依赖。
+  function confirmDeleteDeviceFile(fileName: string) {
+    const ok = window.confirm(
+      `删除「${fileName}」？\n\n会删掉手机上的这个文件。电脑里已取回的副本不受影响。`,
+    );
+    if (ok) void deleteDeviceFile(transferDeviceSerial ?? "", fileName);
+  }
+
+  // 打开取回目录（列表级工具条用）。目录由后端约定，这里用最近一次取回的路径定位；
+  // 一个都没取回过时退回到该目录本身。
+  async function openFetchedFolder() {
+    const entries = Object.values(fetchedFiles);
+    if (entries.length > 0) {
+      const latest = entries[entries.length - 1];
+      try {
+        await revealItemInDir(latest.path);
+        return;
+      } catch (error) {
+        setTransferError(errorMessage(error, "无法打开文件夹。"));
+        return;
+      }
+    }
+    setTransferMessage("还没有取回过文件。取回后就能从这里直接打开了。");
   }
 
   // 删除手机发送区里的一个文件（X10-60）：只删「下载 / MirrorDock」内的这个文件。
@@ -1673,16 +1710,6 @@ function App() {
     }
   }
 
-  // 在访达/文件管理器里定位某个已取回的文件。
-  async function revealFetched(fileName: string) {
-    const receipt = fetchedFiles[fileName];
-    if (!receipt) return;
-    try {
-      await revealItemInDir(receipt.path);
-    } catch (error) {
-      setTransferError(errorMessage(error, "无法在文件夹中显示这个文件。"));
-    }
-  }
 
   // 修改快捷键组合：立即持久化；会话进行中会按新组合重新注册（见注册 effect）。
   function updateShortcuts(next: ShortcutSettings) {
@@ -1816,6 +1843,8 @@ function App() {
   const transferDeviceSerial = readyDevice?.serial ?? sessionSerial;
   // X10-75：按用途分组展示。分组是纯函数结果，列表为空时自然为空数组。
   const transferGroups = groupTransferFiles(deviceFiles ?? []);
+  // 已取回数量（用于列表底部的计数说明）。
+  const fetchedCount = Object.keys(fetchedFiles).length;
 
   // 设备换了就丢弃旧列表：否则会出现"这是上一台手机的文件"这种误导。
   useEffect(() => {
@@ -2626,31 +2655,49 @@ function App() {
               </div>
               {deviceFiles !== null && deviceFiles.length > 0 ? (
                 <>
+                  {/* 「打开文件夹」上移到列表级：8 行里 8 个「在文件夹中显示」指向同一个
+                      目录，是纯冗余，也是操作列宽度不稳定的元凶。这里一次解决三件事：
+                      列宽恒定、噪音少 7 个元素、"文件去哪了"有了全局答案。 */}
+                  <div className="transfer-toolbar">
+                    <span>取回后保存在 <span className="transfer-toolbar-dest">下载 / MirrorDock</span></span>
+                    <button className="ghost-button" type="button" onClick={() => void openFetchedFolder()}>
+                      打开文件夹
+                    </button>
+                  </div>
                   {transferGroups.map((group) => (
                     <section key={group.kind} className="transfer-group">
                       <h4 className="transfer-group-title">
                         {group.label}
+                        {group.kind === "installer" && (
+                          <span className="transfer-group-hint">装到手机上的程序文件</span>
+                        )}
                         <span className="transfer-group-count">{group.files.length}</span>
                       </h4>
-                      <ul className="transfer-file-list">
+                      {/* 列表级 grid + 行 display:contents → 操作列全列表对齐 */}
+                      <ul className="transfer-list">
                         {group.files.map((name) => {
                           const receipt = fetchedFiles[name];
                           const fetching = fetchingName === name;
+                          const failure = fetchErrors[name];
                           return (
-                            <li key={name} className={`transfer-file-row${receipt ? " done" : ""}`}>
-                              <span className="transfer-file-name" title={name}>{name}</span>
+                            <li key={name} className="transfer-file-row">
+                              <div className={`transfer-file-cell${receipt ? " done" : ""}${failure ? " failed" : ""}`}>
+                                <span className="transfer-name">
+                                  <span className="transfer-file-name" title={name}>{name}</span>
+                                  {failure && <span className="transfer-row-error">{failure}</span>}
+                                </span>
+                              </div>
                               <div className="transfer-row-actions">
                                 {fetching ? (
-                                  <span className="transfer-row-state busy">取回中…</span>
+                                  <span className="transfer-row-state busy">正在取回…</span>
                                 ) : receipt ? (
-                                  <>
-                                    <span className="transfer-row-state ok">已取回</span>
-                                    <button className="ghost-button" type="button" onClick={() => void revealFetched(name)}>在文件夹中显示</button>
-                                  </>
+                                  <span className="transfer-row-state ok">已取回</span>
+                                ) : failure ? (
+                                  <button className="text-button" type="button" onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>重试</button>
                                 ) : (
                                   <button className="text-button" type="button" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>取回到电脑</button>
                                 )}
-                                <button className="text-button danger" type="button" disabled={fetchingName !== null} onClick={() => void deleteDeviceFile(transferDeviceSerial ?? "", name)}>删除</button>
+                                <button className="text-button danger" type="button" disabled={fetchingName !== null} onClick={() => void confirmDeleteDeviceFile(name)}>删除</button>
                               </div>
                             </li>
                           );
@@ -2658,10 +2705,10 @@ function App() {
                       </ul>
                     </section>
                   ))}
-                  <p className="setting-note">
+                  {/* 计数即可，不再重复"取回不会删除原件"这类防御性解释（删除处已有确认）。 */}
+                  <p className="transfer-summary">
                     共 {deviceFiles.length} 个文件
-                    {Object.keys(fetchedFiles).length > 0 && `，其中 ${Object.keys(fetchedFiles).length} 个已取回这台电脑`}。
-                    取回不会删除手机上的原件；不再需要时用「删除」清理。
+                    {fetchedCount > 0 && `，${fetchedCount} 个已取回`}
                   </p>
                 </>
               ) : (

@@ -1081,7 +1081,9 @@ describe("file transfer presentation (X10-75)", () => {
 
     // 该行变成已取回状态，并且提供「在文件夹中显示」而不是重复的取回按钮。
     expect(await screen.findByText("已取回")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "在文件夹中显示" })).toBeInTheDocument();
+    // 「打开文件夹」上移到列表级工具条（X10-75 评审：8 行里 8 个「在文件夹中显示」
+    // 指向同一目录，是纯冗余，也是操作列宽度不稳定的元凶）。
+    expect(screen.getByRole("button", { name: "打开文件夹" })).toBeInTheDocument();
     // 整个列表里不应再有「取回到电脑」按钮。
     expect(screen.queryByRole("button", { name: "取回到电脑" })).not.toBeInTheDocument();
   });
@@ -1099,16 +1101,34 @@ describe("file transfer presentation (X10-75)", () => {
     fireEvent.click(within(row).getByRole("button", { name: "取回到电脑" }));
 
     // 提示必须点名是哪个文件，且给出计数 —— 不能让用户以为全部都存好了。
-    const notice = await screen.findByText(/已把「报告.pdf」保存到这台电脑/);
+    const notice = await screen.findByText(/已取回「报告.pdf」，保存在这台电脑/);
     expect(notice).toBeInTheDocument();
-    expect(await screen.findByText(/共 2 个文件，其中 1 个已取回这台电脑/)).toBeInTheDocument();
+    expect(await screen.findByText("共 2 个文件，1 个已取回")).toBeInTheDocument();
     // 另一行仍是未取回状态 —— 逐文件独立，不是整体标记。
     const other = (await screen.findByText("图片.png")).closest("li") as HTMLElement;
     expect(within(other).getByRole("button", { name: "取回到电脑" })).toBeInTheDocument();
   });
 
-  it("drops_the_fetched_marker_when_the_file_is_deleted", async () => {
+  it("shows_the_failure_on_the_row_with_a_retry_instead_of_a_bare_red_line", async () => {
+    // impeccable 评审：失败态必须落在**行内**且有恢复动作。8 行列表里面板底部一行
+    // 红字扫不出来，而且失败后没重试会让人卡死。
     withPhoneFiles(["报告.pdf"], (cmd) =>
+      cmd === "fetch_file_from_device"
+        ? Promise.reject({ code: "transfer_pull_failed", message: "文件没有从手机取回。", recovery: "请确认手机上这个文件还在，然后重试。" })
+        : undefined,
+    );
+    await openTools();
+
+    fireEvent.click(await screen.findByRole("button", { name: "取回到电脑" }));
+
+    // 失败原因显示在该行，且该行出现「重试」。
+    expect(await screen.findByText(/文件没有从手机取回/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "重试" })).toBeInTheDocument();
+    // 失败后仍可重新取回，不是死路。
+    expect(screen.queryByRole("button", { name: "取回到电脑" })).not.toBeInTheDocument();
+  });
+
+  it("drops_the_fetched_marker_when_the_file_is_deleted", async () => {    withPhoneFiles(["报告.pdf"], (cmd) =>
       cmd === "fetch_file_from_device"
         ? Promise.resolve({ file_name: "报告.pdf", path: "/Users/huluobo/Downloads/MirrorDock/报告.pdf", bytes: 2048 })
         : undefined,
@@ -1127,10 +1147,13 @@ describe("file transfer presentation (X10-75)", () => {
       if (cmd === "list_device_files") return Promise.resolve([]);
       return baseInvoke(cmd);
     });
+    // 删除现在有确认框（X10-75：已取回态下「删除」有两种含义，必须说清删哪一份）。
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
     await waitFor(() => {
-      expect(screen.queryByText(/已取回这台电脑/)).not.toBeInTheDocument();
+      expect(screen.queryByText("已取回")).not.toBeInTheDocument();
     });
+    confirmSpy.mockRestore();
   });
 });
