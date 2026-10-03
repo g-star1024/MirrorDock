@@ -78,3 +78,31 @@ description: MirrorDock（Android 桌面镜像工具）全部工程工作的入�
 
 - `references/mirrordock-context.md` — 仓库结构、构建命令、阶段验收表、当前阻塞项速查
 - `references/verification-evidence.md` — 证据要求、不可替代验收项清单、发版完成度核验（tag/Release/latest.json）
+
+## ⚠️ 「app」有两个指代 —— 动手前必须确认是哪个端（2026-10-03 血泪）
+
+MirrorDock 交付**两个端**，它们都叫"app"：
+
+| 端 | 位置 | 发布方式 | 用户会怎么称呼 |
+| --- | --- | --- | --- |
+| **PC 桌面端** | `src/` + `src-tauri/`（Tauri+React） | `vX.Y-beta` tag → 四平台安装包 | "电脑端"、"桌面版" |
+| **安卓伴侣 App** | `companion/`（Kotlin+XML） | 随桌面版重打包，APK 名为 `MirrorDock-companion-X.Y.Z.apk` | **"app"、"客户端"、"装到手机上"** |
+
+**用户在 2026-10-03 的原话**：「手机发送到电脑的文件，客户端一直看不到」「调用你的设计 skill，给 app 整体做个设计升级」「修改完打包推送把新包安装到**手机**」—— 全程指**安卓伴侣 App**。我却改了一整轮 PC 桌面端（做了 impeccable 全局审计、设计令牌层、暗色主题、信息架构重组……），还把「PC 端已有的 `appVersion` 挪到侧栏」当成"看不到版本信息"的修复，而**安卓端一个版本号都没显示**。
+
+**为什么容易错**：项目历史 6 次发版全是桌面端，我形成了惯性。
+
+**铁律**：
+1. 用户说"app / 客户端 / 安装到手机 / 打包推送"时，**先确认是哪个端**，别从最近上下文推。
+2. 用户报"看不到 X"时，**先 grep 确认它到底存不存在**。PC 端存在（只是位置错）、安卓端不存在（真缺失）—— 不查就动手，方向从根上就错。
+3. 「先调研再动手」的习惯是对的，但**调研对象错了，习惯对了等于白做**。这个错误本可以用一句话确认避免。
+
+## 安卓端（companion）的本地验证能力
+
+- **本地无 gradle**（沙箱拦大文件下载，gradle 发行版拉不下来），**真编译只能靠 CI**。
+- 本地两道强制闸门（`AGENTS.md` 有登记）：
+  - `python3 scripts/verify-companion.py` —— 8 类静态交叉检查
+  - `python3 scripts/check-companion-kotlin.py` —— **真实 kotlinc 类型检查**（用 Gradle 缓存里的编译器 + `android.jar`，**必须用系统 `/usr/bin/java`（Temurin 17）**，Android Studio 的 JBR 是 JDK 25，kotlinc 2.0.20 解析不了）
+- **本地 checker 的已知盲区**（2026-10-03 修掉两处）：R 存根原本只覆盖 6 种资源、**漏了 `dimen`**（导致所有 `dp(R.dimen.*)` 报假 unresolved reference，真错误被淹没）；且只读 `res/values/`、**漏掉 `res/values-night/`**。**新增资源类型或新的 values-* 限定符目录时，要同步更新 R 存根。**
+- **CI 上唯一能验证、本地验证不了的部分**：`assembleDebug`（aapt 资源编译 + dex + 打包）。本地 kotlinc 只做类型检查，**不过资源链接**。
+- **APK 分发的现实**：`companion.yml` 只上传 artifact，**而 GitHub artifact 下载端点需要认证**（沙箱无 token）。要装到手机上，需要：① 用户提供 PAT，或 ② 打 tag 走 `build.yml` 的 `companion-apk` job（产物会进 Release 的 assets，那里下载不需要认证）。
