@@ -685,6 +685,7 @@
   - **根因**：`ScrcpyRuntime::start` 只 `spawn()` 不接管输出，MirrorDock 是 GUI 应用无终端，**scrcpy 的全部报错随进程丢失**——用户报白屏让我"看运行日志"，日志里却什么都没有，排查只能靠手动复现。
   - **修法**：① 子进程 stdout/stderr 显式 `piped()`，双读线程收进 16KB 环形缓冲（`ScrcpyOutputSink`，读不完会堵死 scrcpy 的反面已注释）；② `MirrorProcess::output_tail()` 进 `resolve_process_exit`，异常退出时把 scrcpy 原文末 8 行附进界面错误（不再是一句干巴巴的「已意外关闭」）；③ 实测发现 scrcpy 4.1 **不响应 SIGTERM**（发信号后 6 秒仍活），原 3 秒优雅等待永远耗满才强杀——注释如实记录，保留超时兜底。
   - **门禁**：cargo **194 passed** ✅ / clippy 0 warning ✅ / pnpm build (tsc) ✅ / vitest **76 passed** ✅。版本 0.4.11 → **0.4.12**；site/index.html 同步。
+  - **发版证据（已核验）**：CI run `37119816359` **success**，Release id `402489792`，**30 资产全齐**；`latest.json` version=0.4.12、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.12.apk` 在列（伴侣源码版本 0.3.2，随包分发）。commit `fbb0aa5`。Mac 已换装 0.4.12（旧版备份在 `/Applications/MirrorDock.app.old-0.4.11`），**需用户重启客户端生效**。site/index.html 已同步 0.4.12。
 - [x] ✅ **X10-78 真机可见的两处布局错乱（2026-10-03 14:00；用户截图指出「两个按钮贴一起了，底部文案错行」）**
   - 用户截图指出后我**抓真机屏复现**，确认是两处**我自己引入的**（X10-76）缺陷，不是用户误看。
   - **① 「端到端加密」被挤成两行**（显示成「端到端加」/「密」）：`quality_row` 是横向 LinearLayout，三个子 TextView **全是 `wrap_content`**，按内容抢宽度；状态文案「尚未连接，连接后显示延迟与时长」占掉大半，第三个就被压到折行。**修法**：加密状态**独占一行**（它不只是"放不下"—— 它是安全承诺，折行后「密」字单独一行读起来像错字）；延迟与时长同行，时长给 `layout_weight=1` 吃掉剩余空间。**已全量扫过布局里其它横向行，无第二处同类隐患**。
