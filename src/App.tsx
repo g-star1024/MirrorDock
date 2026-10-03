@@ -2057,6 +2057,29 @@ function App() {
       if (unlisten) unlisten();
     };
   }, []);
+  // X10-80：桌面模式下虚拟屏启动的应用没有真正落地（常见于部分游戏的投屏
+  // 兼容性限制，真机实证见 lib.rs X10-80 注释）→ 白屏的根因提示与替代路径，
+  // 不让用户对着一面白屏自己猜。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ serial: string; package: string }>("desktop-app-missing", (event) => {
+      const pkg = event.payload?.package ?? "";
+      setReconnectNotice(
+        `应用（${pkg}）未能在虚拟屏上启动，桌面模式窗口可能保持空白。建议关闭该设备的「桌面模式」改用普通镜像，或换用兼容的应用（部分游戏/应用有虚拟屏限制）。`,
+      );
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
   // X10-60：伴侣端发送区有新文件 → 提示 + 已打开的列表自动刷新。
   useEffect(() => {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

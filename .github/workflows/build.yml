@@ -162,6 +162,9 @@ jobs:
           Expand-Archive scrcpy.download -DestinationPath tmp-scrcpy
           New-Item -ItemType Directory -Force src-tauri/resources/scrcpy | Out-Null
           Move-Item tmp-scrcpy/scrcpy-win64-v4.1/* src-tauri/resources/scrcpy/
+          # X10-79：scrcpy 启动时在自身目录找 scrcpy.png 当窗口/Dock 图标，
+          # 缺了就刷「Could not open icon image」两行错误混进故障排查。统一用应用图标。
+          Copy-Item src-tauri/icons/icon.png src-tauri/resources/scrcpy/scrcpy.png -Force
 
       - name: 下载并校验 scrcpy 运行时（macOS）
         if: runner.os == 'macOS'
@@ -179,6 +182,9 @@ jobs:
           mkdir -p src-tauri/resources/scrcpy tmp-scrcpy
           tar -xzf scrcpy.download -C tmp-scrcpy
           mv "tmp-scrcpy/${NAME%.tar.gz}"/* src-tauri/resources/scrcpy/
+          # X10-79：macOS 官方包不带 scrcpy.png，scrcpy 启动时找不到图标会刷
+          # 「Could not open icon image」错误。统一用应用图标补齐。
+          cp src-tauri/icons/icon.png src-tauri/resources/scrcpy/scrcpy.png
 
       # X10-48（用户拍板）：Linux 也随包分发 scrcpy。Linux 没有官方预编译包，
       # 改为在 runner 上从官方源码编译 v4.1（固定 tag + 固定源码哈希），
@@ -231,6 +237,7 @@ jobs:
           cp scrcpy-4.1/build/app/scrcpy src-tauri/resources/scrcpy/scrcpy
           cp scrcpy-server-v4.1 src-tauri/resources/scrcpy/scrcpy-server
           cp platform-tools/adb src-tauri/resources/scrcpy/adb
+          cp src-tauri/icons/icon.png src-tauri/resources/scrcpy/scrcpy.png
           chmod +x src-tauri/resources/scrcpy/scrcpy src-tauri/resources/scrcpy/adb
           ls -la src-tauri/resources/scrcpy/
 

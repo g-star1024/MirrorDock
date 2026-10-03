@@ -678,6 +678,13 @@
   - **资源治理**：删除已无引用的 `bg_hero`/`bg_pill_white`/`bg_ghost_button`；移除 6 条死字符串。
   - **验证**：伴侣 0.2.5 → **0.3.0**（versionCode 16→17）。本地无 gradle 且沙箱拦大文件下载（curl 拉 gradle 发行版 exit 56），故新增 `scripts/verify-companion.py` 静态交叉校验（XML 合法性 / `@string` `@color` `@style` `@drawable` 引用完整性 / `findViewById` 的 id 是否声明 / Manifest 类是否存在 / Kotlin 括号平衡 / 死资源检测）并接入 `AGENTS.md` 强制闸门——**全部通过**；Rust 侧 `reconnect_client_with_ping` 断言"不带 t 不回显 t、带 t 原样带回"，**cargo test companion_pairing 13 passed / 全量 192 passed，clippy 0 warning**；`pnpm build` + **vitest 66 passed**。commit `9259184` / `ec73c73` / `e0aa9a4` / `7a2bcd9`。
   - **未验证面（如实标记）**：APK 真编译与真机行为由 CI（`companion.yml` / `build.yml` 的 `companion-apk` job）+ 用户真机承担；本地无 gradle 无法预编译，静态校验只能覆盖资源引用与语法结构类错误，**不能替代编译**。
+- [x] ✅ **X10-80 桌面模式虚拟屏白屏根因定性 + 落地核验（2026-10-03 19:30；用户报「切 2560 白屏，切回 1920 依旧」）**
+  - **根因（全链路实证，非推断）**：白屏与画质无关。逐层排除：设备编码器在 1080×2400@16Mbps 正常出流（screenrecord 实测 level 5.1）；手动 scrcpy 1920/2560 普通镜像画面清晰（真窗口截图为证）；bundle 完整、签名有效。**真正的根因**：用户设备开了桌面模式 + `--start-app=com.netease.dhxy.qihoo`（大话西游），虚拟屏创建成功（dumpsys 实证 id=84 状态 ON，系统设置可完整渲染其上），但**网易系游戏的 SDK 跳板 Activity（ProtocolLauncher）在虚拟屏跑完即被移出**（WindowManager removeChildTask 实锤），真游戏 Activity 从未出现，MIUI SmartPower 把进程移入后台休眠 ⇒ 虚拟屏无内容 ⇒ 流传输的内容本身就是白的。切画质只是触发会话重启，纯属"背锅"。
+  - **修法**：① 会话启动后 10 秒做一次「落地核验」——从 scrcpy 输出解析 `on display <id>`，再 `dumpsys activity activities` 查该屏分段里有无 `packageName=<pkg>` 的记录；没有则发 `desktop-app-missing` 事件，前端提示条明确告知「应用未能在虚拟屏上启动 + 白屏原因 + 改用普通镜像的建议」（`spawn_desktop_app_landing_check` + 纯函数 `desktop_app_landed`/`extract_display_section`/`parse_desktop_display_id` 均有单测）。② scrcpy 窗口图标 `scrcpy.png` 随包补齐（CI 三平台 + 本地，此前每次启动刷两行 icon 错误混进排查）。
+- [x] ✅ **X10-79 「看运行日志却看不到」的根因修复（2026-10-03 19:30；与 X10-80 同源）**
+  - **根因**：`ScrcpyRuntime::start` 只 `spawn()` 不接管输出，MirrorDock 是 GUI 应用无终端，**scrcpy 的全部报错随进程丢失**——用户报白屏让我"看运行日志"，日志里却什么都没有，排查只能靠手动复现。
+  - **修法**：① 子进程 stdout/stderr 显式 `piped()`，双读线程收进 16KB 环形缓冲（`ScrcpyOutputSink`，读不完会堵死 scrcpy 的反面已注释）；② `MirrorProcess::output_tail()` 进 `resolve_process_exit`，异常退出时把 scrcpy 原文末 8 行附进界面错误（不再是一句干巴巴的「已意外关闭」）；③ 实测发现 scrcpy 4.1 **不响应 SIGTERM**（发信号后 6 秒仍活），原 3 秒优雅等待永远耗满才强杀——注释如实记录，保留超时兜底。
+  - **门禁**：cargo **194 passed** ✅ / clippy 0 warning ✅ / pnpm build (tsc) ✅ / vitest **76 passed** ✅。版本 0.4.11 → **0.4.12**；site/index.html 同步。
 - [x] ✅ **X10-78 真机可见的两处布局错乱（2026-10-03 14:00；用户截图指出「两个按钮贴一起了，底部文案错行」）**
   - 用户截图指出后我**抓真机屏复现**，确认是两处**我自己引入的**（X10-76）缺陷，不是用户误看。
   - **① 「端到端加密」被挤成两行**（显示成「端到端加」/「密」）：`quality_row` 是横向 LinearLayout，三个子 TextView **全是 `wrap_content`**，按内容抢宽度；状态文案「尚未连接，连接后显示延迟与时长」占掉大半，第三个就被压到折行。**修法**：加密状态**独占一行**（它不只是"放不下"—— 它是安全承诺，折行后「密」字单独一行读起来像错字）；延迟与时长同行，时长给 `layout_weight=1` 吃掉剩余空间。**已全量扫过布局里其它横向行，无第二处同类隐患**。

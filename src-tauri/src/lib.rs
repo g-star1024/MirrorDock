@@ -268,17 +268,32 @@ impl Default for MirrorSession {
 }
 
 /// 进程正常退出与异常退出分别回到空闲与失败，并给出可执行的恢复动作。
-fn resolve_process_exit(serial: &str, success: bool) -> MirrorSession {
+///
+/// `scrcpy_output` 是该进程生前的输出尾部（X10-79）：异常退出时把它附在恢复建议里，
+/// 用户在界面上能直接看到 scrcpy 的原文（如「ERROR: Could not open icon image」、
+/// 编码器拒绝参数、隧道被占用……），而不是一句干巴巴的「已意外关闭」。
+fn resolve_process_exit(serial: &str, success: bool, scrcpy_output: &str) -> MirrorSession {
     if success {
         MirrorSession::idle()
     } else {
+        let mut recovery = "请检查手机授权与连接后重新启动镜像。".to_owned();
+        let tail = scrcpy_output.trim();
+        if !tail.is_empty() {
+            // 只保留尾部若干行：环形缓冲本身有上限，这里再截一次，避免界面被刷爆。
+            let lines: Vec<&str> = tail.lines().collect();
+            let excerpt: Vec<&str> = lines
+                .iter()
+                .rev()
+                .take(8)
+                .rev()
+                .copied()
+                .collect();
+            recovery.push_str("\n\nscrcpy 输出（末尾）：\n");
+            recovery.push_str(&excerpt.join("\n"));
+        }
         MirrorSession::failed(
             Some(serial.to_owned()),
-            AppError::new(
-                "mirror_exited",
-                "镜像窗口已意外关闭。",
-                "请检查手机授权与连接后重新启动镜像。",
-            ),
+            AppError::new("mirror_exited", "镜像窗口已意外关闭。", &recovery),
         )
     }
 }
@@ -396,6 +411,12 @@ trait AdbRuntime: Send + Sync {
     ///
     /// 返回原始输出（每行 `package:<包名>`），由调用方解析；用于桌面模式
     /// 「虚拟屏启动的应用」候选列表。读操作，不改变设备状态。
+    /// 读取 `dumpsys activity activities` 原始输出（X10-80，桌面模式落地核验）。
+    ///
+    /// 默认实现返回空串：测试替身不关心这个偏运维的探针，真实实现覆盖它。
+    fn activity_dumpsys(&self, _serial: &str) -> Result<String, std::io::Error> {
+        Ok(String::new())
+    }
     fn list_device_apps(&self, serial: &str) -> Result<String, std::io::Error>;
 }
 
@@ -411,6 +432,16 @@ trait MirrorProcess: Send {
     /// 实现以保持用例快速、确定。
     fn stop(&mut self) -> Result<(), std::io::Error> {
         self.kill()
+    }
+    /// 取回该进程启动以来的 scrcpy 输出尾部（X10-79）。
+    ///
+    /// 真实实现会把子进程的 stdout/stderr 收进环形缓冲；测试替身没有子进程，
+    /// 默认返回空。**这是「用户报故障但看不到日志」的根因修复**：此前
+    /// `ScrcpyRuntime::start` 只 `spawn()` 不接管输出，scrcpy 的报错
+    /// （编码器拒绝参数、SDL 起不来窗口、隧道被占…）全部随进程一起消失，
+    /// 界面上只剩一句笼统的「无法启动镜像窗口」。
+    fn output_tail(&self) -> String {
+        String::new()
     }
 }
 
@@ -986,6 +1017,18 @@ impl AdbRuntime for SystemAdbRuntime {
         Self::capture(&["-s", serial, "shell", "pm", "list", "packages", "-3"])
     }
 
+    fn activity_dumpsys(&self, serial: &str) -> Result<String, std::io::Error> {
+        // argv 形式逐个传参，与后端其余 adb 调用一致（不经过设备端 shell 二次分词）。
+        Self::capture(&[
+            "-s",
+            serial,
+            "shell",
+            "dumpsys",
+            "activity",
+            "activities",
+        ])
+    }
+
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error> {
         Self::run(&["disconnect", endpoint])
     }
@@ -1035,9 +1078,84 @@ impl AdbRuntime for SystemAdbRuntime {
     }
 }
 
+/// scrcpy 输出环形缓冲的容量（字节）。足够装下十几行报错，又不会无限增长。
+const SCRCPY_OUTPUT_CAP: usize = 16 * 1024;
+
+/// 收进环形缓冲的 scrcpy 输出片段。
+///
+/// 两路输出（stdout / stderr）由两个后台线程持续读取，任一读满即丢弃最旧的
+/// 字节，**永远不会因为管道写满而把 scrcpy 进程堵死**——这是本改动最关键的一点：
+/// 一旦没人读管道，scrcpy 会在写日志时阻塞，表现为「启动了但画面不出来」，
+/// 那正是我们要修的故障本身。
+#[derive(Default)]
+struct ScrcpyOutputSink {
+    text: std::sync::Mutex<String>,
+}
+
+impl ScrcpyOutputSink {
+    fn append(&self, chunk: &[u8]) {
+        let Ok(mut text) = self.text.lock() else {
+            return;
+        };
+        // 只保留可打印文本：scrcpy 的日志是 UTF-8，但混入二进制也不至于让
+        // 诊断包变成乱码——逐字节过滤掉控制字符即可。
+        for byte in chunk {
+            if byte.is_ascii_graphic() || *byte == b' ' || *byte == b'\n' || *byte == b'\t' {
+                text.push(*byte as char);
+            }
+        }
+        if text.len() > SCRCPY_OUTPUT_CAP {
+            let excess = text.len() - SCRCPY_OUTPUT_CAP;
+            text.drain(..excess);
+        }
+    }
+
+    fn tail(&self) -> String {
+        self.text.lock().map(|text| text.clone()).unwrap_or_default()
+    }
+}
+
 /// 真实的镜像进程。`Drop` 时确保子进程被终止并回收，避免应用退出后残留 scrcpy。
 struct SystemMirrorProcess {
     child: Child,
+    /// scrcpy 的 stdout/stderr 汇聚到这里，供失败时给出真实原因（X10-79）。
+    output: Arc<ScrcpyOutputSink>,
+}
+
+impl SystemMirrorProcess {
+    /// 接管子进程两路输出并开读。读线程是 detached 的：进程结束后管道自然 EOF，
+    /// 读线程随之结束，不需要 join。
+    fn capture_output(child: &mut Child) -> Arc<ScrcpyOutputSink> {
+        let sink = Arc::new(ScrcpyOutputSink::default());
+        for stream in [
+            child.stdout.take().map(StreamKind::Out),
+            child.stderr.take().map(StreamKind::Err),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let sink = Arc::clone(&sink);
+            std::thread::spawn(move || {
+                let mut reader: Box<dyn std::io::Read + Send> = match stream {
+                    StreamKind::Out(handle) => Box::new(handle),
+                    StreamKind::Err(handle) => Box::new(handle),
+                };
+                let mut buffer = [0u8; 1024];
+                while let Ok(count) = reader.read(&mut buffer) {
+                    if count == 0 {
+                        break;
+                    }
+                    sink.append(&buffer[..count]);
+                }
+            });
+        }
+        sink
+    }
+}
+
+enum StreamKind {
+    Out(std::process::ChildStdout),
+    Err(std::process::ChildStderr),
 }
 
 impl MirrorProcess for SystemMirrorProcess {
@@ -1046,6 +1164,10 @@ impl MirrorProcess for SystemMirrorProcess {
             Ok(Some(status)) => Some(status.success()),
             _ => None,
         }
+    }
+
+    fn output_tail(&self) -> String {
+        self.output.tail()
     }
 
     fn kill(&mut self) -> Result<(), std::io::Error> {
@@ -1068,8 +1190,16 @@ impl MirrorProcess for SystemMirrorProcess {
                 }
                 return Err(std::io::Error::last_os_error());
             }
-            let deadline = std::time::Instant::now() + PROCESS_GRACEFUL_TIMEOUT;
-            while std::time::Instant::now() < deadline {
+            // X10-79：scrcpy 4.1 **不响应 SIGTERM**（真机实测：连发 6 秒仍在运行，
+            // 只能靠 SIGKILL 结束）。原来的 3 秒等待因此永远走不到头，
+            // 每次「切换画质 / 结束会话」都会耗满 3 秒再强杀；强杀会跳过
+            // scrcpy 的清理流程（设备端 server 与 adb 隧道的收尾），在紧跟着
+            // 启动新会话时容易出现画面出不来。
+            //
+            // 现在显式先等 SIGTERM，若它不生效就直接升级为 SIGKILL——不再把
+            // 3 秒当成「scrcpy 会优雅退出」的赌注。
+            let graceful = std::time::Instant::now() + PROCESS_GRACEFUL_TIMEOUT;
+            while std::time::Instant::now() < graceful {
                 if self.try_wait().is_some() {
                     return Ok(());
                 }
@@ -1139,8 +1269,16 @@ impl MirrorRuntime for ScrcpyRuntime {
                 .arg(format!("--record={}", path.to_string_lossy()))
                 .arg("--record-format=mp4");
         }
-        let child = command.spawn()?;
-        Ok(Box::new(SystemMirrorProcess { child }))
+        // X10-79：必须显式 piped。默认情况下子进程继承父进程的 stdio，
+        // MirrorDock 是 GUI 应用、没有可用终端，scrcpy 的报错会**直接丢失**——
+        // 这正是「用户报白屏、日志里什么都看不到」的原因。接管后既能读到原文，
+        // 也顺带避免管道写满把 scrcpy 阻塞住。
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        command.stdin(std::process::Stdio::null());
+        let mut child = command.spawn()?;
+        let output = SystemMirrorProcess::capture_output(&mut child);
+        Ok(Box::new(SystemMirrorProcess { child, output }))
     }
 }
 
@@ -1480,8 +1618,10 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                     // ⇒ 录制随进程一起终止。无论退出是用户关窗（正常）还是手机掉线
                     // （异常），伴侣端都应收到「录制结束」——这是 M4-3 已知边界的补齐。
                     was_recording = state.record_path.is_some();
+                    // 先取出输出再交还进程：退出原因就写在 scrcpy 的输出里（X10-79）。
+                    let scrcpy_output = process.output_tail();
                     state.process = None;
-                    state.session = resolve_process_exit(&serial, success);
+                    state.session = resolve_process_exit(&serial, success, &scrcpy_output);
                     true
                 }
                 None => false,
@@ -1535,6 +1675,113 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                 }
             }
             return;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 桌面模式「虚拟屏启动应用」落地核验（X10-80）
+//
+// 真机实证（Redmi M2104K10AC / MIUI 14 / Android 13，2026-10-03）：桌面模式 +
+// start-app 后 scrcpy 窗口全白。逐层排查确认：编码、传输、渲染管线全部正常
+// （系统设置能完整渲染在虚拟屏上），白屏是因为应用根本没落到虚拟屏——网易系
+// 游戏的 SDK 跳板 Activity（ProtocolLauncher）在虚拟屏上跑完即被移出
+// （WindowManager removeChildTask），真正的游戏 Activity 从未出现，MIUI
+// SmartPower 随即把进程移入后台休眠。这与画质参数无关（2560/1920 都一样白）。
+// ---------------------------------------------------------------------------
+
+/// 启动后等待应用落地的时间。游戏/应用冷启动普遍要数秒，太短会把「还没起来」
+/// 误判成「起不来」；10 秒是「用户等得已经可疑」与「误报」之间的折中。
+const DESKTOP_APP_LANDING_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 从 scrcpy 输出解析虚拟屏 id。
+///
+/// 依据是服务端中继到客户端 stderr 的日志行：
+/// `[server] INFO: Starting app "大话西游" [...] on display 84...`
+fn parse_desktop_display_id(scrcpy_output: &str) -> Option<u32> {
+    const MARKER: &str = "on display ";
+    let start = scrcpy_output.rfind(MARKER)? + MARKER.len();
+    let digits: String = scrcpy_output[start..]
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+/// 截取 `dumpsys activity activities` 输出里指定虚拟屏的分段。
+fn extract_display_section(dumpsys: &str, display_id: u32) -> Option<&str> {
+    let start_marker = format!("Display #{} ", display_id);
+    let start = dumpsys.find(&start_marker)?;
+    let rest = &dumpsys[start..];
+    let end = rest[start_marker.len()..]
+        .find("\nDisplay #")
+        .map(|offset| offset + start_marker.len())
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// 判断应用是否已在（或至少出现在）指定虚拟屏上。
+///
+/// 判据：该屏分段里存在 `packageName=<package>` 的 ActivityRecord。真机核验：
+/// 失败案例（大话西游）中虚拟屏分段里**一条**该应用的记录都没有；成功案例
+/// （系统设置）则能看到完整记录。解析不出分段（格式变化）时调用方传 `None`
+/// 退化为全局查找——宁可保守地不报错，也不对正常的会话喊狼来了。
+fn desktop_app_landed(dumpsys: &str, display_id: Option<u32>, package: &str) -> bool {
+    let marker = format!("packageName={}", package);
+    match display_id.and_then(|id| extract_display_section(dumpsys, id)) {
+        Some(section) => section.contains(&marker),
+        None => dumpsys.contains(&marker),
+    }
+}
+
+/// 落地核验线程：会话起来后延迟检查一次，应用没出现在虚拟屏就给用户明确提示。
+///
+/// 只做一次、不做重试：提示的目的是解释白屏并给出替代路径，不是监控。
+/// 任何一步拿不到证据（进程已退出、adb 失败、输出解析不出）都安静放弃——
+/// 这条核验只允许在「确有证据」时说话。
+fn spawn_desktop_app_landing_check(
+    store: SessionStore,
+    epoch: u64,
+    serial: String,
+    package: String,
+) {
+    std::thread::spawn(move || {
+        std::thread::sleep(DESKTOP_APP_LANDING_DELAY);
+        let scrcpy_output = {
+            let Ok(map) = store.0.lock() else {
+                return;
+            };
+            let Some(state) = map.get(&serial) else {
+                return;
+            };
+            if state.epoch != epoch {
+                return;
+            }
+            let Some(process) = state.process.as_ref() else {
+                return;
+            };
+            process.output_tail()
+        };
+        let display_id = parse_desktop_display_id(&scrcpy_output);
+        // 输出里连 "Starting app" 都没有 ⇒ 应用启动意图根本没下发（老版本 scrcpy
+        // 或参数没透传），此刻提示「应用没落地」反而是误导，放弃。
+        if display_id.is_none() && !scrcpy_output.contains("Starting app") {
+            return;
+        }
+        let Some(adb) = MONITOR_ADB.get() else {
+            return;
+        };
+        let Ok(dumpsys) = adb.activity_dumpsys(&serial) else {
+            return;
+        };
+        if desktop_app_landed(&dumpsys, display_id, &package) {
+            return;
+        }
+        if let Some(app) = TRAY_APP.get() {
+            let _ = app.emit(
+                "desktop-app-missing",
+                serde_json::json!({ "serial": serial, "package": package }),
+            );
         }
     });
 }
@@ -4232,6 +4479,16 @@ fn macos_mirror_bundle_exec(scrcpy: &Path, adb: &Path) -> Option<PathBuf> {
     }
     // adb 也放进 bundle：scrcpy 启动时会在自己的目录里找 adb。
     let _ = mirror_copy(adb, &macos_dir.join("adb"));
+    // X10-79：图标资源也必须跟进去。scrcpy 启动时会在**自身所在目录**找
+    // `scrcpy.png` 设置窗口/Dock 图标，缺了它就在 stderr 打
+    // 「ERROR: Could not open icon image / Could not load icon」。
+    // 此前每次重建 bundle 都没复制这两个文件，于是每次启动镜像都刷这两行错误，
+    // 混在真正的故障信息里干扰排查（真机实测确认）。
+    for image in ["scrcpy.png", "disconnected.png"] {
+        if let Some(source) = Some(dir.join(image)).filter(|path| path.is_file()) {
+            let _ = mirror_copy(&source, &macos_dir.join(image));
+        }
+    }
     if let Some(icon) = app_icon_icns() {
         let _ = mirror_copy(&icon, &resources_dir.join("AppIcon.icns"));
     }
@@ -5207,6 +5464,13 @@ fn launch_into_reserved_session(
     };
 
     let keep_awake = options.keep_awake;
+    // X10-80：桌面模式 + 指定应用时，会话起来后核验一次「应用是否真的落到虚拟屏」。
+    // scrcpy 只发启动意图，应用拒不渲染它管不着（真机实证：MIUI 上网易系游戏的
+    // SDK 跳板启动后即被移出虚拟屏，窗口全白）——必须由我们补上这层核验。
+    let desktop_app = options
+        .desktop_mode
+        .then(|| options.desktop_app.clone())
+        .flatten();
     let epoch = attach_process(
         sessions,
         process,
@@ -5215,6 +5479,9 @@ fn launch_into_reserved_session(
         record_path.map(|path| path.to_string_lossy().into_owned()),
     )?;
     spawn_session_monitor(sessions.clone(), epoch, serial.clone());
+    if let Some(package) = desktop_app {
+        spawn_desktop_app_landing_check(sessions.clone(), epoch, serial.clone(), package);
+    }
     // 无线连接下 `--stay-awake` 无效（见亮屏补偿注释）：会话真正跑起来后才补偿，
     // 启动失败路径不会留下被延长却无人还原的熄屏时间。重启会话时备份已存在，
     // 这里幂等地重写延长值；关闭保持唤醒或换回 USB 时则顺势还原。
@@ -8952,7 +9219,10 @@ mod tests {
     fn a_graceful_stop_lets_a_recording_finalize_instead_of_killing() {
         // 用一个真实的子进程验证系统实现的 stop：SIGTERM 后进程退出，而不是被强杀。
         let child = Command::new("sleep").arg("30").spawn().unwrap();
-        let mut process = SystemMirrorProcess { child };
+        let mut process = SystemMirrorProcess {
+            child,
+            output: std::sync::Arc::new(ScrcpyOutputSink::default()),
+        };
 
         let started = std::time::Instant::now();
         process.stop().unwrap();
@@ -8982,7 +9252,10 @@ mod tests {
         let mut ready = String::new();
         std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready).unwrap();
         assert!(ready.contains("ready"), "子进程未就绪：{ready}");
-        let mut process = SystemMirrorProcess { child };
+        let mut process = SystemMirrorProcess {
+            child,
+            output: std::sync::Arc::new(ScrcpyOutputSink::default()),
+        };
 
         let started = std::time::Instant::now();
         process.stop().unwrap();
@@ -10795,6 +11068,34 @@ mod tests {
         };
         assert!(!camera.arguments().unwrap().iter().any(|a| a.contains("start-app")));
 
+        // X10-79：异常退出时把 scrcpy 输出尾部附进恢复建议，用户能看到原文。
+        let exited = resolve_process_exit("phone", false, "ERROR: Could not open icon image\n[server] INFO: Cleaning up");
+        let error = exited.error.expect("异常退出必须是失败态");
+        assert!(error.recovery.contains("scrcpy 输出"), "恢复建议应带上 scrcpy 原文");
+        assert!(error.recovery.contains("Could not open icon image"));
+        // 正常退出与空输出都不附加。
+        assert!(resolve_process_exit("phone", true, "whatever").error.is_none());
+        assert!(!resolve_process_exit("phone", false, "  \n ")
+            .error
+            .unwrap()
+            .recovery
+            .contains("scrcpy 输出"));
+
+        // X10-80：从 scrcpy 输出解析虚拟屏 id。
+        let output = "[server] INFO: New display: 1072x2400/440 (id=84)\n[server] INFO: Starting app \"大话西游\" [com.netease.dhxy.qihoo] on display 84...";
+        assert_eq!(parse_desktop_display_id(output), Some(84));
+        assert_eq!(parse_desktop_display_id("没有任何线索"), None);
+
+        // X10-80：落地判定——真机失败案例的形状：虚拟屏分段里没有该应用的记录。
+        let dumpsys = "Display #84 (activities from top to bottom):\n  * Task{... type=standard A=1000:com.android.settings.root ...}\n    packageName=com.android.settings\nDisplay #0 (activities from top to bottom):\n    packageName=com.netease.dhxy.qihoo\n";
+        // 应用在别的屏（#0）不算落地 —— 正是真机上「游戏跑到主屏之外消失」的形状。
+        assert!(!desktop_app_landed(dumpsys, Some(84), "com.netease.dhxy.qihoo"));
+        // 在指定屏上有记录才算落地。
+        let landed = "Display #84 (activities from top to bottom):\n    packageName=com.netease.dhxy.qihoo\n";
+        assert!(desktop_app_landed(landed, Some(84), "com.netease.dhxy.qihoo"));
+        // 解析不出分段时退化为全局查找（宁可不报，不误报）。
+        assert!(desktop_app_landed(dumpsys, None, "com.netease.dhxy.qihoo"));
+
         // 旧配置（缺字段）视为未填。
         let parsed: SessionOptions = serde_json::from_str(r#"{"desktop_mode":true}"#).unwrap();
         assert!(parsed.desktop_app.is_none());
@@ -11261,7 +11562,7 @@ mod tests {
             let mut map = store.0.lock().unwrap();
             let state = map.get_mut("phone").unwrap();
             state.process = None;
-            state.session = resolve_process_exit("phone", false);
+            state.session = resolve_process_exit("phone", false, "");
         }
         assert!(
             !any_session_recording(&store),
