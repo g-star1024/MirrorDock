@@ -685,7 +685,13 @@
   - **其余采纳（纯视觉/文案）**：文件名单行 ellipsis → **2 行 `-webkit-line-clamp:2`**（版本号/`.apk`/`.apk.1` 在**尾部**，单行截断恰好砍掉最值钱的信息，用户就答不出「该用哪个版本」）；补**行内失败态**（原因 + 「重试」，原来只有面板底部一行红字，8 行里扫不出来且无恢复动作）；**删除加确认框**（已取回态下「删除」有两种可能含义，点之前无从判断）；整行绿底 → **左侧 2px 绿竖条**（8 行绿底会把三个分组从视觉上切碎）；竖直方向改 hairline 分隔线放弃等高（文件名 2 行时等高必然参差）；**术语统一为「取回」**（原「取回/保存到/复制到/已取回」四个词说一件事）；组标题「安装包（可装到手机）」→「安装包」+ 副标题（原文括号方向反了：面板用途是拿到电脑）；底部 60 字三重冗余 → 「共 8 个文件，3 个已取回」；字号 px → rem 建立 5 级级差。
   - **明确未采纳**（会动功能，超出用户「只升级完善 ui」的边界，已如实告知用户）：后端返回文件大小/时间（需改 `list_device_files` 返回结构）、「全部取回」批量操作、真实进度条与取消、磁盘不足/同名冲突等第 5–7 态。
   - **测试**：本轮共 10 个（X10-74 三个 + X10-75 七个：分组顺序 / 真实文件名 `.apk.1` 分类 / 空列表 / 取回状态变更 / 文案点名 + 逐文件独立 / 删除撤标记 / 行内失败态 + 重试）。**每轮都做反向验证**：还原「行内状态 + 文案 + 自动加载」后对应测试全红，恢复后全绿。vitest 69 → **76**。`pnpm build` ✅ / cargo 192 ✅ / 伴侣静态 ✅ / 伴侣 Kotlin 0 error ✅。
-- [ ] **v0.4.9-beta 发版**：版本 0.4.8→0.4.9（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处）；新增 `docs/releases/v0.4.9-beta.md`。伴侣 App 本版**未改动**（维持 0.3.0），APK 随桌面重打包。tag `v0.4.9-beta` → CI 四平台 + Release。
+- [x] ✅ **v0.4.9-beta 已成功发版（run `37090091310`，2026-10-03 10:47 完成）**：**7 个 job 全绿**（验证 ✅ / 伴侣 App APK ✅ / macos-arm64 ✅ / linux-x64 ✅ / windows-x64 ✅ / macos-x64 ✅ / 发布 Release ✅）。tag `v0.4.9-beta` → `5e9de1d`。
+  - **Release 已发布**：id `402289232`，draft=false / prerelease=true，published 2026-10-03T02:46:10Z，**30 资产全齐**（四平台安装包 + rpm + 伴侣 APK + `latest.json` + 7 个 `.sig` + 4 份 SHA256SUMS + 8 份 SBOM）。
+  - **updater 端点已核验**：`latest.json` → `version=0.4.9`、4 平台且**签名全部非空**。
+  - **Mac**：0.4.9 已装 `/Applications/MirrorDock.app`（x86_64，旧版备份 `/tmp/MirrorDock.app.bak.20261003-103726`），**需重启客户端生效**。
+  - **伴侣 App 本版未改动**（维持 0.3.0 / versionCode 17）：0.4.7 与 0.4.9 发布的 APK **字节数完全相同**（4,500,264），且 `git diff 0c35e0f..HEAD -- companion/` 为空 → 只是重新打包。**手机已装 0.3.0，无需重装**。
+  - **踩坑**：沙箱代理对 4.5 MB APK 的直连下载会**静默截断**（先后得到 516 KB / 786 KB / 1.6 MB 三次不完整文件，ZIP 校验失败）。改用 `Range: bytes=` 分段（每段 512 KB 可过）后可拼齐，但最后一段越界导致多出 65,536 字节、ZIP 损坏 —— **下载后必须用 `zipfile.testzip()` 校验，不能只看文件大小**。本次因版本未变无需安装，未造成影响。
+- [x] ✅ **v0.4.9-beta 发版**：版本 0.4.8→0.4.9（四处代码口径 + README + site/index.html 29 处 + site/compatibility.html 6 处 + docs/compatibility-matrix.md 4 处）；新增 `docs/releases/v0.4.9-beta.md`。伴侣 App 本版**未改动**（维持 0.3.0），APK 随桌面重打包。tag `v0.4.9-beta` → CI 四平台 + Release。
   - **发版证据（tag 推送 + Release 核验后回填，此行不预填）**：
 - [x] ✅ **X10-74 手机→电脑文件传输不可见（2026-10-03 06:30 夜间；用户报"客户端一直看不到"）**：**根因不是手机/adb/解析，是前端状态门禁形成死锁**。实机核查（adb）确认手机 `/sdcard/Download/MirrorDock` 确有 8 个文件、`adb shell ls -1` 输出干净（od 核对无 CR/乱码）、后端 `make_directory`/`list_directory`/`parse_device_listing` 全部正常。
   - **三处叠加**：①`deviceFiles` 初始 `null`，列表只在 `deviceFiles !== null` 时渲染，而它只在用户**手动点按钮**后才赋值，从不主动加载；②伴侣端 `files_changed` 的自动刷新条件是 `readyDevice && deviceFiles !== null && !transferBusy` —— 首次为空不刷新，列表又没打开过就永远变不成非 null，**不点按钮就永远看不到**；③整个文件传输面板被关在 `{readyDevice ? ... : ...}` 内，而文件传输走 adb 通道、**不依赖镜像会话**，却被会话状态一并挡掉。
