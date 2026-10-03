@@ -1008,13 +1008,13 @@ describe("file transfer presentation (X10-75)", () => {
   // 用户截图指出：①「取回到电脑」列参差不齐；②取回后一直显示「取回到电脑」，
   // 不知道哪个已经取回；③底部「已保存到这台电脑的下载/MirrorDock 文件夹」会让人
   // 误会**全部**都保存了，实际只保存了刚取回的那一个。
-  function withPhoneFiles(files: string[], extra?: (cmd: string, args?: unknown) => Promise<unknown> | undefined) {
-    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+  function withPhoneFiles(files: string[], extra?: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "check_adb_devices") {
         return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
       }
       if (cmd === "list_device_files") return Promise.resolve(files);
-      const custom = extra?.(cmd, args);
+      const custom = extra?.(cmd);
       return custom ?? baseInvoke(cmd);
     });
   }
@@ -1066,7 +1066,7 @@ describe("file transfer presentation (X10-75)", () => {
 
   it("swaps_the_row_action_to_a_fetched_state_after_retrieval", async () => {
     // 核心回归：取回后该行不再显示「取回到电脑」，而是「已取回」。
-    withPhoneFiles(["报告.pdf"], (cmd, args) =>
+    withPhoneFiles(["报告.pdf"], (cmd) =>
       cmd === "fetch_file_from_device"
         ? Promise.resolve({
             file_name: "报告.pdf",
