@@ -731,6 +731,20 @@ fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 
 impl SystemAdbRuntime {
     /// 固定参数直接调用 `adb`，不使用 shell，也不做字符串拼接。
+    /// 与 `run` 相同，但接受拥有所有权的参数。
+    ///
+    /// 存在的理由：经过 shell 引号处理的路径（`shell_quote` 的输出）是一个
+    /// 临时 `String`，无法借用成 `&str` 塞进 `&[&str]`。与其在调用点
+    /// `leak` 或克隆一份，不如让这条路径显式拥有参数。
+    fn run_owned(args: &[String]) -> Result<(), std::io::Error> {
+        let output = quiet_command(adb_binary()).args(args).output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("adb returned a failing status"))
+        }
+    }
+
     fn run(args: &[&str]) -> Result<(), std::io::Error> {
         let output = quiet_command(adb_binary()).args(args).output()?;
         if output.status.success() {
@@ -930,10 +944,9 @@ impl AdbRuntime for SystemAdbRuntime {
     }
 
     fn remove_device_file(&self, serial: &str, remote_path: &str) -> Result<(), std::io::Error> {
-        // 固定参数直调：路径作为单个 argv 传给 adb，不做 shell 拼接（工程铁律）。
-        // `rm -f`：文件已不存在视为清理成功，避免并发刷新时的竞态误报。
-        Self::run(&["-s", serial, "shell", "rm", "-f", "--", remote_path])
+        Self::run_owned(&remove_device_file_argv(serial, remote_path))
     }
+
 
     fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
         // 固定参数直接调用：APK 路径作为单个 argv 传入，不做 shell 拼接或插值，
@@ -3774,6 +3787,51 @@ fn fetch_file_from_device_into(
 ///
 /// 只允许删 `DEVICE_TRANSFER_DIR` 内经 `validate_transfer_name` 校验的文件名；
 /// 名单外的一切（路径分隔符、`..`、超长名）在拼路径前就被拒绝。
+/// 把任意字符串安全地包成**设备端 shell** 的单个词。
+///
+/// 存在的理由（2026-10-03 真机实证）：`adb shell ARGV...` 不是把 argv 直接
+/// exec 到设备，而是先用空格拼成一条命令串，再交给设备端的 shell 解析。
+/// 因此「作为单独 argv 传入」**不能**保护空格 —— 传
+/// `/sdcard/Dir/has space.txt` 会被拆成两个词。
+///
+/// 用单引号包裹，并按 POSIX 惯例把内嵌的单引号写成 `'"'"'`：
+/// - `abc`      → `'abc'`
+/// - `has space` → `'has space'`
+/// - `it's`     → `'it'"'"'s'`
+///
+/// 单引号内一切字符都是字面量（含 `$`、反引号、`\`、`*`），所以这同时
+/// 消除了注入面。**只用于经过远端 shell 的调用**；`adb push` / `adb pull`
+/// 不经 shell，路径要原样传（见 `push_file` / `pull_file`）。
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// 构造 `adb rm` 的 argv。抽成函数是为了让测试能覆盖**接线**，
+/// 而不只是测 `shell_quote` 这个纯函数（2026-10-03 教训：只测实现的测试
+/// 无法发现"忘了调用它"）。
+///
+/// `rm -f`：文件已不存在视为清理成功，避免并发刷新时的竞态误报。
+///
+/// 路径**必须做 shell 引号**（2026-10-03 真机实证，见 X10-77）：
+/// `adb shell` 会把 argv 用空格拼成一条命令串，再交给**设备端的 shell**
+/// 重新解析。所以「作为单个 argv 传入」并不能保护空格 —— 路径
+/// `/sdcard/Download/MirrorDock/has space.txt` 会被远端拆成
+/// `/sdcard/.../has` 与 `space.txt` 两个词，`rm -f` 对两个都不存在的路径
+/// 静默返回 0，于是**文件没删掉、后端却报告成功**。
+/// `--` 也救不了：它是给本地 shell 用的，远端 shell 已在 argv 拼接之后
+/// 才看到这条命令。
+fn remove_device_file_argv(serial: &str, remote_path: &str) -> Vec<String> {
+    vec![
+        "-s".to_string(),
+        serial.to_string(),
+        "shell".to_string(),
+        "rm".to_string(),
+        "-f".to_string(),
+        "--".to_string(),
+        shell_quote(remote_path),
+    ]
+}
+
 fn delete_device_file_with(
     runtimes: &AppRuntimes,
     serial: String,
@@ -7220,6 +7278,57 @@ pub fn run() {
             }
         });
 }
+
+
+    // -- shell_quote（X10-77）------------------------------------------------
+    //
+    // 回归测试：2026-10-03 真机发现「删除含空格的文件」静默失败 ——
+    // `adb shell rm -f -- <含空格路径>` 把路径拆成多个词，rm -f 对不存在的
+    // 路径返回 0，于是文件没删掉、后端却报成功，UI 提示"已删除"但列表不变。
+    #[test]
+    fn shell_quote_protects_paths_from_adb_shell_resplitting() {
+        // 基本情形：包起来就够。
+        assert_eq!(shell_quote("/sdcard/Dir/a.txt"), "'/sdcard/Dir/a.txt'");
+        // 关键回归：含空格。远端 shell 必须把它当**一个**词。
+        assert_eq!(
+            shell_quote("/sdcard/Download/MirrorDock/has space.txt"),
+            "'/sdcard/Download/MirrorDock/has space.txt'"
+        );
+        // 中文文件名（真实数据里就有 `MirrorDock 传输 冒烟.txt`）。
+        assert_eq!(
+            shell_quote("/sdcard/Download/MirrorDock/MirrorDock 传输 冒烟.txt"),
+            "'/sdcard/Download/MirrorDock/MirrorDock 传输 冒烟.txt'"
+        );
+        // 最恶劣情况：内嵌单引号。用 POSIX 的闭合-转义-重开，不能直接套。
+        assert_eq!(shell_quote("it's.txt"), r#"'it'"'"'s.txt'"#);
+        // shell 元字符在单引号内是字面量 —— 顺带消除注入面。
+        assert_eq!(shell_quote("a;rm -rf /"), "'a;rm -rf /'");
+        assert_eq!(shell_quote("$(whoami)"), "'$(whoami)'");
+        assert_eq!(shell_quote("`id`"), "'`id`'");
+    }
+
+    // 接线测试：断言 `adb rm` 的 argv **真的带上了引号**。
+    //
+    // 为什么单独一条：只测 `shell_quote` 这个纯函数是不够的 —— 2026-10-03
+    // 我先写了纯函数测试，**反向验证时把 `shell_quote(remote_path)` 改回
+    // `remote_path`，测试依然全绿**，因为纯函数本身没变、只是没人调用它了。
+    // 这类「只测实现、不测接线」的盲区与 v0.4.7 那次同源。
+    #[test]
+    fn remove_device_file_argv_actually_quotes_the_path() {
+        let argv = remove_device_file_argv("phone", "/sdcard/D/MirrorDock 传输 冒烟.txt");
+        // 前 6 段是固定前缀。
+        assert_eq!(&argv[..6], &[
+            "-s", "phone", "shell", "rm", "-f", "--"
+        ].map(String::from));
+        // 关键：最后一段必须是**带引号的完整路径**，不能是裸路径。
+        let last = argv.last().expect("argv 非空");
+        assert_eq!(last, "'/sdcard/D/MirrorDock 传输 冒烟.txt'");
+        // 反向断言：裸路径形态（修复前的 bug）必须不等于引号形态。
+        assert_ne!(last, &"/sdcard/D/MirrorDock 传输 冒烟.txt".to_string());
+        // 引号内不含未转义的单引号 —— 否则远端 shell 会报 no closing quote。
+        let inner = last.trim_matches('\'');
+        assert!(!inner.contains('\''), "引号内出现未转义单引号: {inner}");
+    }
 
 #[cfg(test)]
 mod tests {
