@@ -11,6 +11,11 @@ android {
         applicationId = "com.mirrordock.companion"
         minSdk = 26
         targetSdk = 34
+        // 0.3.2 = X10-78 修两处真机可见的布局错乱：
+        //        ①「端到端加密」与延迟/时长同处横向 wrap_content 行，被状态文案
+        //          挤到折行（「端到端加」/「密」两行）→ 改为独占一行；
+        //        ② 版本行与隐私摘要是「卡的兄弟节点」，直接躺在灰色页面上，
+        //          与上方五张白卡不是一套视觉 → 包进 Card。
         // 0.3.1 = X10-76 设计令牌层（dimens.xml，113 处硬编码 dp 收敛）
         //        + 暗色主题（values-night，此前完全缺失）
         //        + 4 处 WCAG AA 对比度硬失败修复（实测 2.15-2.60 → 4.7-6.0）
@@ -20,8 +25,8 @@ android {
         //        + 桌面 pinned shortcut（协议对旧版桌面端双向兼容）。
         // 0.2.5 = X10-69 快捷回复（notification_reply 下行 + RemoteInput 填充）。
         // 0.2.4 = X10-66 通知镜像一期 + X10-64B 默认端口回退；0.2.3 = 常驻会话保活修复。
-        versionCode = 18
-        versionName = "0.3.1"
+        versionCode = 19
+        versionName = "0.3.2"
     }
 
     // 固定签名（X10-21）：CI 从 GitHub Secrets 注入密钥库与口令，保证跨版本

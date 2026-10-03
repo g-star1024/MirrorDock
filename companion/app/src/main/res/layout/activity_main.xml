@@ -101,17 +101,23 @@
                         <TextView
                             android:id="@+id/quality_duration"
                             style="@style/CardBody"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginLeft="@dimen/space_4" />
-
-                        <TextView
-                            style="@style/CardBody"
-                            android:layout_width="wrap_content"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginLeft="@dimen/space_4"
-                            android:text="@string/quality_encrypted" />
+                            android:layout_weight="1" />
                     </LinearLayout>
+
+                    <!-- 加密状态独占一行（X10-78）：此前与延迟/时长同处一个
+                         horizontal LinearLayout 且都是 wrap_content，三者抢宽度。
+                         状态文案一长，第三个就被压到折行（截图里「端到端加密」
+                         变成「端到端加」/「密」两行）。它是安全承诺，不能被压缩，
+                         也不能折行 —— 单独一行最稳。 -->
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_1"
+                        android:text="@string/quality_encrypted" />
 
                     <Button
                         android:id="@+id/button_link_start"
@@ -637,57 +643,71 @@
                     </ScrollView>
                 </LinearLayout>
 
-                <!-- 版本信息（X10-76）：此前**整个 App 没有任何地方显示版本号**
-                     （versionName 只存在于 build.gradle.kts，不进 UI）。
-                     整行可点 → 展开完整信息；长按 → 复制到剪贴板
-                     （小白报障的真实动作是复制粘贴，不是朗读）。 -->
+                <!-- 关于卡片（X10-78 修）：版本行与隐私摘要此前是**卡的兄弟节点**，
+                     直接躺在灰色页面上 —— 截图上像两段散落的文字，与上面五张白卡
+                     完全不是一套东西。包进 Card 里，与全页视觉一致。 -->
                 <LinearLayout
-                    android:id="@+id/row_app_version"
+                    style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:background="?android:attr/selectableItemBackground"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:gravity="center_vertical"
-                    android:minHeight="@dimen/touch_target_min"
-                    android:orientation="horizontal"
-                    android:paddingTop="@dimen/space_3"
-                    android:paddingBottom="@dimen/space_3">
+                    android:layout_marginTop="@dimen/space_4"
+                    android:orientation="vertical">
 
-                    <TextView
-                        style="@style/CardTitle"
-                        android:layout_width="0dp"
+                    <!-- 版本信息（X10-76）：此前整个 App 没有任何地方显示版本号。
+                         整行可点 → 展开完整信息；长按 → 复制到剪贴板
+                         （小白报障的真实动作是复制粘贴，不是朗读）。 -->
+                    <LinearLayout
+                        android:id="@+id/row_app_version"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/app_about_title" />
+                        android:background="?android:attr/selectableItemBackground"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:gravity="center_vertical"
+                        android:minHeight="@dimen/touch_target_min"
+                        android:orientation="horizontal"
+                        android:paddingTop="@dimen/space_1"
+                        android:paddingBottom="@dimen/space_1">
 
+                        <TextView
+                            style="@style/CardTitle"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/app_about_title" />
+
+                        <TextView
+                            android:id="@+id/app_version_label"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="@dimen/text_caption" />
+                    </LinearLayout>
+
+                    <!-- 展开的详情行：与版本行同缩进、用分隔线隔开，
+                         避免"点开后文字凭空跳到卡片外"的错乱感。 -->
                     <TextView
-                        android:id="@+id/app_version_label"
-                        android:layout_width="wrap_content"
+                        android:id="@+id/app_version_detail"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:textColor="@color/text_secondary"
+                        android:paddingTop="@dimen/space_2"
+                        android:paddingBottom="@dimen/space_2"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="@dimen/text_caption"
+                        android:visibility="gone" />
+
+                    <!-- 隐私承诺（X10-76）：从 58 字的设置页末位提到一级页，一行说清
+                         —— 这是这个产品对小白最大的转化点，他最担心的就是镜像软件偷传数据。 -->
+                    <TextView
+                        android:id="@+id/privacy_note_short"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_2"
+                        android:paddingTop="@dimen/space_2"
+                        android:text="@string/privacy_short"
+                        android:textColor="@color/text_tertiary"
                         android:textSize="@dimen/text_caption" />
                 </LinearLayout>
-
-                <TextView
-                    android:id="@+id/app_version_detail"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:paddingBottom="@dimen/space_2"
-                    android:textColor="@color/text_tertiary"
-                    android:textSize="@dimen/text_caption"
-                    android:visibility="gone" />
-
-                <!-- 隐私承诺（X10-76）：从 58 字的设置页末位提到一级页，一行说清
-                     —— 这是这个产品对小白最大的转化点，他最担心的就是镜像软件偷传数据。 -->
-                <TextView
-                    android:id="@+id/privacy_note_short"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:paddingTop="@dimen/space_2"
-                    android:text="@string/privacy_short"
-                    android:textColor="@color/text_tertiary"
-                    android:textSize="@dimen/text_caption" />
             </LinearLayout>
         </ScrollView>
     </FrameLayout>
