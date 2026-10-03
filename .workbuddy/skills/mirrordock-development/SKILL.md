@@ -106,3 +106,33 @@ MirrorDock 交付**两个端**，它们都叫"app"：
 - **本地 checker 的已知盲区**（2026-10-03 修掉两处）：R 存根原本只覆盖 6 种资源、**漏了 `dimen`**（导致所有 `dp(R.dimen.*)` 报假 unresolved reference，真错误被淹没）；且只读 `res/values/`、**漏掉 `res/values-night/`**。**新增资源类型或新的 values-* 限定符目录时，要同步更新 R 存根。**
 - **CI 上唯一能验证、本地验证不了的部分**：`assembleDebug`（aapt 资源编译 + dex + 打包）。本地 kotlinc 只做类型检查，**不过资源链接**。
 - **APK 分发的现实**：`companion.yml` 只上传 artifact，**而 GitHub artifact 下载端点需要认证**（沙箱无 token）。要装到手机上，需要：① 用户提供 PAT，或 ② 打 tag 走 `build.yml` 的 `companion-apk` job（产物会进 Release 的 assets，那里下载不需要认证）。
+
+## 改完 UI 必须抓屏（2026-10-03 血泪）
+
+X10-76 那一轮我改了 13 个文件（新建 `dimens.xml` + `values-night/` + 版本显示），
+跑通了两道本地门禁（`verify-companion.py` + `check-companion-kotlin.py` 真实 kotlinc
+类型检查），CI 9 步全绿（含 aapt + dex）—— **但没有抓一张真机截图**。
+
+结果用户截图指出两处**视觉上明显错乱**的缺陷：
+
+1. **「端到端加密」被挤成两行**（显示成「端到端加」/「密」）——
+   `quality_row` 是横向 LinearLayout，三个子 TextView 全是 `wrap_content`，
+   按内容抢宽度，状态文案一长第三个就被压到折行。
+2. **版本行与隐私摘要不在卡片里** —— 我插入时锚在了日志卡的闭合标签处，
+   于是它们成了 ScrollView 的直接子节点（卡的**兄弟**），直接躺在灰色页面上，
+   与上方五张白卡完全不是一套视觉。
+
+**两处都是"结构合法、类型正确、编译通过"** —— 静态检查、类型检查、aapt、
+dex 全都抓不到。**只有看渲染结果才能发现。**
+
+### 铁律
+
+- **改完 `activity_main.xml` 或任何视觉样式后，抓一次真机截图确认**：
+      adb -s <serial> exec-out screencap -p > /tmp/x.png
+  然后**真的用 Read 工具看那张图**。截图存下来不等于看过。
+- 改完记得恢复手机设置（我为了测暗色 `cmd uimode night yes`，验完必须改回 `no`）。
+- **横向 LinearLayout 里有 3 个以上 `wrap_content` 子控件就要警惕** ——
+  它们会互相抢宽度。把承载关键信息（尤其安全承诺、错误提示）的那一个
+  拆到独占一行，或给它 `layout_weight=1` 吃掉剩余空间。
+- **插入新元素时锚点要选"内容容器内部"**，不是"容器的闭合标签处" ——
+  后者会让你插到卡片外面去。
