@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  暗色主题覆盖（X10-76）。主题本体在 values/themes.xml（两者不重复定义）。
+
+  唯一必须翻转的属性是 `windowLightStatusBar`：
+  浅色版是 `true`（深色图标配浅色状态栏）。不翻转的后果是
+  **暗色下深色图标压在深色状态栏上，时间与电量看不见** ——
+  这是加暗色模式最常见的漏项。
+-->
+<resources>
+    <style name="Theme.Companion" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/screen_bg</item>
+        <item name="android:statusBarColor">@color/screen_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorAccent">@color/accent</item>
+    </style>
+</resources>

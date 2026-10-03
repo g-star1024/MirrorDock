@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.annotation.DimenRes
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -77,6 +78,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var notifyMirrorButton: Button
     private lateinit var notifyMirrorStatus: TextView
     private lateinit var grantListenerButton: Button
+    // X10-76 版本信息：此前 App 里一处都没显示过版本号。
+    private lateinit var appVersionRow: View
+    private lateinit var appVersionLabel: TextView
+    private lateinit var appVersionDetail: TextView
 
     private val logLines = StringBuilder()
     private var client: PairingClient? = null
@@ -207,6 +212,7 @@ class MainActivity : AppCompatActivity() {
         notifyMirrorButton = findViewById(R.id.button_notify_mirror)
         notifyMirrorStatus = findViewById(R.id.notify_mirror_status)
         grantListenerButton = findViewById(R.id.button_grant_listener)
+        bindAppVersion()
     }
 
     // -- 三 Tab 导航（X10-73） ------------------------------------------------
@@ -280,7 +286,7 @@ class MainActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setPadding(dp(R.dimen.space_4), dp(R.dimen.space_3), dp(R.dimen.space_4), dp(R.dimen.space_3))
             background = ContextCompat.getDrawable(context, R.drawable.bg_device_item)
             isSelected = isActive
             isClickable = true
@@ -288,7 +294,7 @@ class MainActivity : AppCompatActivity() {
             val params = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            params.bottomMargin = dp(8)
+            params.bottomMargin = dp(R.dimen.space_2)
             layoutParams = params
         }
 
@@ -318,11 +324,11 @@ class MainActivity : AppCompatActivity() {
             textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
             background = ContextCompat.getDrawable(context, R.drawable.bg_status_pill)
-            setPadding(dp(8), dp(3), dp(8), dp(3))
+            setPadding(dp(R.dimen.space_2), dp(R.dimen.space_1), dp(R.dimen.space_2), dp(R.dimen.space_1))
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            lp.leftMargin = dp(8)
+            lp.leftMargin = dp(R.dimen.space_2)
             layoutParams = lp
         })
         if (computer.group.isNotBlank()) {
@@ -331,11 +337,11 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(ContextCompat.getColor(context, R.color.accent_dark))
                 textSize = 11f
                 background = ContextCompat.getDrawable(context, R.drawable.bg_status_pill)
-                setPadding(dp(8), dp(3), dp(8), dp(3))
+                setPadding(dp(R.dimen.space_2), dp(R.dimen.space_1), dp(R.dimen.space_2), dp(R.dimen.space_1))
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
                 )
-                lp.leftMargin = dp(6)
+                lp.leftMargin = dp(R.dimen.space_2)
                 layoutParams = lp
             })
         }
@@ -376,10 +382,10 @@ class MainActivity : AppCompatActivity() {
             setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
             textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(dp(10), 0, dp(6), 0)
+            setPadding(dp(R.dimen.space_2), 0, dp(R.dimen.space_2), 0)
             isClickable = true
             isFocusable = true
-            minWidth = dp(28)
+            minWidth = dp(R.dimen.space_8)
             setOnClickListener { showDeviceMenu(computer) }
         })
         row.addView(right)
@@ -416,7 +422,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 setTypeface(typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
                 background = ContextCompat.getDrawable(context, R.drawable.bg_status_pill)
-                setPadding(dp(12), dp(6), dp(12), dp(6))
+                setPadding(dp(R.dimen.space_3), dp(R.dimen.space_2), dp(R.dimen.space_3), dp(R.dimen.space_2))
                 isClickable = true
                 setOnClickListener {
                     groupFilter = value
@@ -425,7 +431,7 @@ class MainActivity : AppCompatActivity() {
                 val params = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
                 )
-                params.rightMargin = dp(8)
+                params.rightMargin = dp(R.dimen.space_2)
                 layoutParams = params
             })
         }
@@ -995,11 +1001,11 @@ class MainActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(0, dp(11), 0, dp(11))
+            setPadding(0, dp(R.dimen.space_3), 0, dp(R.dimen.space_3))
             val margin = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            margin.topMargin = dp(4)
+            margin.topMargin = dp(R.dimen.space_1)
             layoutParams = margin
             isClickable = true
             isFocusable = true
@@ -1012,13 +1018,13 @@ class MainActivity : AppCompatActivity() {
             textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
             background = ContextCompat.getDrawable(context, R.drawable.bg_file_badge)
-            setPadding(dp(9), dp(5), dp(9), dp(5))
+            setPadding(dp(R.dimen.space_2), dp(R.dimen.badge_pad_v), dp(R.dimen.space_2), dp(R.dimen.badge_pad_v))
         }
         row.addView(badge)
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            params.leftMargin = dp(12)
+            params.leftMargin = dp(R.dimen.space_3)
             layoutParams = params
         }
         info.addView(TextView(this).apply {
@@ -1055,7 +1061,103 @@ class MainActivity : AppCompatActivity() {
         else -> "$bytes B"
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    // -- 版本信息（X10-76） -------------------------------------------------
+    //
+    // 为什么用 PackageInfo 而不是 BuildConfig.VERSION_NAME：
+    // - BuildConfig 是**编译期常量**（内联进字节码），反映的是打包时的值；
+    //   一旦 APK 被重打包或走多渠道分发就会失真。而且 AGP 8.0 起默认
+    //   **不生成** BuildConfig 类，要用它得先加 buildFeatures { buildConfig = true }。
+    // - PackageInfo 读的是**手机上实际安装的 APK** 的元数据 —— 报障时
+    //   「这台手机上装的到底是什么」只有它是真相来源。
+    // 结论：用 PackageInfo，顺带不用改构建配置，耦合更低。
+
+    /** 版本信息。显示与复制共用同一个数据类，避免两处逻辑漂移。 */
+    private data class AppVersion(val name: String, val code: Long) {
+        /** 屏幕显示：0.3.0（17） */
+        fun label(): String = "$name（$code）"
+    }
+
+    private fun appVersion(): AppVersion? = try {
+        val pm = packageManager
+        // API 33 起 getPackageInfo(String,int) 被 PackageInfoFlags 取代，
+        // 必须分支 —— targetSdk 34 上旧重载的行为不确定。
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0L))
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(packageName, 0)
+        }
+        // versionCode 在 API 28 起被 longVersionCode 取代（Int 会溢出）
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
+        AppVersion(info.versionName ?: "?", code)
+    } catch (error: Exception) {
+        // 读不到就如实说读不到，不显示空白 —— 空白会被读成"没有版本"。
+        android.util.Log.w("AppVersion", "读取版本信息失败", error)
+        null
+    }
+
+    private fun bindAppVersion() {
+        appVersionRow = findViewById(R.id.row_app_version)
+        appVersionLabel = findViewById(R.id.app_version_label)
+        appVersionDetail = findViewById(R.id.app_version_detail)
+
+        val version = appVersion()
+        appVersionLabel.text = version?.label() ?: getString(R.string.app_version_unknown)
+
+        // 点一下展开完整信息（版本 + 系统 + 架构）。小白报障时被要求
+        // 「告诉我你的版本」，往下翻到底就能看到 —— 这是这个功能的真实路径。
+        appVersionRow.setOnClickListener {
+            if (appVersionDetail.visibility == View.VISIBLE) {
+                appVersionDetail.visibility = View.GONE
+                return@setOnClickListener
+            }
+            val v = version ?: return@setOnClickListener
+            appVersionDetail.text = getString(
+                R.string.app_version_detail,
+                v.label(),
+                Build.VERSION.RELEASE,
+                Build.SUPPORTED_ABIS.firstOrNull() ?: "?",
+            )
+            appVersionDetail.visibility = View.VISIBLE
+        }
+
+        // 长按复制完整信息 —— 小白报障的真实动作是复制粘贴，不是朗读。
+        appVersionRow.setOnLongClickListener {
+            val clip = getSystemService(android.content.ClipboardManager::class.java)
+            clip.setPrimaryClip(
+                android.content.ClipData.newPlainText(
+                    getString(R.string.app_name),
+                    buildString {
+                        append(getString(R.string.app_name))
+                        append(' ')
+                        append(version?.label() ?: "?")
+                        append(" · Android ").append(Build.VERSION.RELEASE)
+                        append(" (API ").append(Build.VERSION.SDK_INT).append(')')
+                        append(" · ").append(Build.SUPPORTED_ABIS.firstOrNull() ?: "?")
+                    },
+                ),
+            )
+            // Android 13+ 系统会自己弹"已复制"提示，我们就不再重复弹一次。
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                Toast.makeText(this, R.string.app_version_copied, Toast.LENGTH_SHORT).show()
+            }
+            true
+        }
+    }
+
+    /**
+     * 读间距/尺寸令牌。
+     *
+     * 旧实现是 `(value * density)` —— 它**绕过资源限定符**：values-night 与
+     * values-sw600dp 永远不会生效。暗色主题要靠同一批令牌在 night 下取到
+     * 不同值，就必须走 getDimensionPixelSize(@DimenRes)。
+     */
+    private fun dp(@DimenRes id: Int): Int = resources.getDimensionPixelSize(id)
 
     /**
      * 是否运行在 Android TV 上（leanback 设备）。电视没有相机与触屏，

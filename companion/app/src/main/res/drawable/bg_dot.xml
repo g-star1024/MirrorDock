@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 状态圆点：颜色经 backgroundTintList 在代码里切换（灰=未连接，绿=已连接）。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <solid android:color="#FFFFFF" />
-    <size android:width="10dp" android:height="10dp" />
+    <solid android:color="@color/card_bg" />
+    <size android:width="@dimen/status_dot_size" android:height="@dimen/status_dot_size" />
 </shape>

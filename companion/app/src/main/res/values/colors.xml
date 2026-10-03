@@ -6,7 +6,7 @@
 -->
 <resources>
     <!-- 品牌主色：青碧（不变）。 -->
-    <color name="accent">#2F98A1</color>
+    <color name="accent">#1F7F88</color>
     <color name="accent_bright">#50B0B8</color>
     <color name="accent_tint">#E6F4F5</color>
     <!-- 主色深：按压态与强调文字。 -->
@@ -20,13 +20,13 @@
     <!-- 文字三档。 -->
     <color name="text_primary">#16181D</color>
     <color name="text_secondary">#5B6470</color>
-    <color name="text_tertiary">#9AA1AC</color>
+    <color name="text_tertiary">#5B6470</color>
     <color name="text_on_accent">#FFFFFF</color>
 
     <!-- 状态语义色（ToDesk 式：在线绿 / 离线灰 / 连接中琥珀 / 危险红）。 -->
-    <color name="success">#21BA72</color>
+    <color name="success">#0F7A4E</color>
     <color name="success_bg">#E7F7EF</color>
-    <color name="warn">#F59E0B</color>
+    <color name="warn">#8A5A00</color>
     <color name="warn_bg">#FEF4E6</color>
     <color name="danger">#E5484D</color>
     <color name="danger_text">#B91C1C</color>
@@ -43,7 +43,17 @@
     <color name="dot_ready">#2F98A1</color>
     <color name="file_badge_bg">#E6F4F5</color>
 
+    <!-- 卡片描边（X10-76）：现状卡片无描边，仅靠 #FFFFFF 与 #F2F4F7 之间
+         1.10:1 的亮度差 —— 远低于 3:1 可辨识阈值，所以界面对比度不足。
+         不引入 elevation（那会与三处 stateListAnimator="@null" 刻意去掉
+         系统投影的决定冲突），改用细描边 + surface 亮度阶。 -->
+    <color name="stroke_card">#DDE3EA</color>
+
+    <!-- 语义别名：accent_tint 底上的文字色。浅色下可复用 accent_dark，
+         但暗色下 accent_dark 作背景用、accent_on_tint 需提亮，故独立定义。 -->
+    <color name="accent_on_tint">#1A6B73</color>
+
     <!-- 底部导航：白底 + 顶部细线，选中用品牌色。 -->
     <color name="nav_bg">#FFFFFF</color>
-    <color name="nav_unselected">#9AA1AC</color>
+    <color name="nav_unselected">#5B6470</color>
 </resources>

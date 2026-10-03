@@ -106,4 +106,20 @@
     <string name="notify_mirror_status_need_permission">已开启，但还没有「读取通知」权限：点下面的按钮到系统设置允许 MirrorDock 读取通知。</string>
     <string name="action_grant_listener">授予通知读取权限</string>
     <string name="notify_mirror_toast_need_permission">已开启通知镜像；还需要在系统设置里允许读取通知。</string>
+
+    <!-- 版本信息（X10-76）：用户报「看不到版本信息」——此前 App 里**一处都没有**。
+         app_version_label 用 %1$s（版本名）+ %2$d（versionCode）。
+         刻意不提供「检查更新」按钮：伴侣端无独立更新渠道，APK 随桌面版重打包，
+         服务端不存在 —— 给了按钮只会训练出用户对不上版本号的习惯，
+         反过来恶化报障时的可诊断性。给文案与补救动作，不给死路按钮。 -->
+    <string name="app_about_title">关于 MirrorDock 伴侣</string>
+    <string name="app_version_label">%1$s（%2$d）</string>
+    <string name="app_version_detail">%1$s\nAndroid %2$s · %3$s</string>
+    <string name="app_version_copied">已复制版本信息，发给客服或贴在反馈里就行</string>
+    <string name="app_version_unknown">版本未知</string>
+    <string name="app_version_hint">长按可复制完整版本信息</string>
+    <!-- 更新方式：说明 + 补救动作（不设按钮） -->
+    <string name="app_update_note">伴侣 App 随电脑端一起发布。在电脑上更新 MirrorDock，手机会收到新版本安装包；也可以在「文件」页手动安装。</string>
+    <!-- 隐私承诺摘要：从 58 字的 privacy_note 压到一行，提到设置页一级 -->
+    <string name="privacy_short">画面与文件只在你的手机和电脑之间直连，不经过任何服务器。</string>
 </resources>

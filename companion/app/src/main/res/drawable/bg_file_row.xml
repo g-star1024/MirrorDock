@@ -3,9 +3,9 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
-            <solid android:color="#FFFFFF" />
-            <corners android:radius="12dp" />
-            <stroke android:width="2dp" android:color="#50B0B8" />
+            <solid android:color="@color/card_bg" />
+            <corners android:radius="@dimen/radius_sm" />
+            <stroke android:width="@dimen/stroke_focus" android:color="@color/accent_bright" />
         </shape>
     </item>
     <item android:drawable="@drawable/bg_input" />

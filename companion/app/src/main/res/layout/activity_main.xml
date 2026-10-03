@@ -29,10 +29,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
-                android:paddingTop="24dp"
-                android:paddingBottom="20dp">
+                android:paddingLeft="@dimen/screen_padding_h"
+                android:paddingRight="@dimen/screen_padding_h"
+                android:paddingTop="@dimen/space_6"
+                android:paddingBottom="@dimen/screen_padding_bottom">
 
                 <TextView
                     style="@style/SectionTitle"
@@ -44,7 +44,7 @@
                     style="@style/CardBody"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="@dimen/space_1"
                     android:text="@string/app_tagline" />
 
                 <!-- 连接状态主卡：取代旧版墨色 hero，改为白卡 + 品牌色左条。 -->
@@ -52,13 +52,13 @@
                     android:id="@+id/status_card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="@dimen/space_5"
                     android:background="@drawable/bg_status_card"
                     android:orientation="vertical"
-                    android:paddingLeft="20dp"
-                    android:paddingRight="20dp"
-                    android:paddingTop="16dp"
-                    android:paddingBottom="16dp">
+                    android:paddingLeft="@dimen/screen_padding_h"
+                    android:paddingRight="@dimen/screen_padding_h"
+                    android:paddingTop="@dimen/space_4"
+                    android:paddingBottom="@dimen/space_4">
 
                     <LinearLayout
                         android:layout_width="wrap_content"
@@ -68,18 +68,18 @@
 
                         <View
                             android:id="@+id/status_dot"
-                            android:layout_width="10dp"
-                            android:layout_height="10dp"
+                            android:layout_width="@dimen/status_dot_size"
+                            android:layout_height="@dimen/status_dot_size"
                             android:background="@drawable/bg_dot" />
 
                         <TextView
                             android:id="@+id/status_text"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginLeft="9dp"
+                            android:layout_marginLeft="@dimen/space_2"
                             android:text="@string/status_idle"
                             android:textColor="@color/text_primary"
-                            android:textSize="15sp"
+                            android:textSize="@dimen/text_title"
                             android:textStyle="bold" />
                     </LinearLayout>
 
@@ -89,7 +89,7 @@
                         android:id="@+id/quality_row"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
+                        android:layout_marginTop="@dimen/space_3"
                         android:orientation="horizontal">
 
                         <TextView
@@ -103,13 +103,13 @@
                             style="@style/CardBody"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginLeft="16dp" />
+                            android:layout_marginLeft="@dimen/space_4" />
 
                         <TextView
                             style="@style/CardBody"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginLeft="16dp"
+                            android:layout_marginLeft="@dimen/space_4"
                             android:text="@string/quality_encrypted" />
                     </LinearLayout>
 
@@ -117,16 +117,16 @@
                         android:id="@+id/button_link_start"
                         style="@style/PrimaryButton"
                         android:layout_width="match_parent"
-                        android:layout_height="52dp"
-                        android:layout_marginTop="14dp"
+                        android:layout_height="@dimen/control_height_lg"
+                        android:layout_marginTop="@dimen/space_4"
                         android:text="@string/action_link_start" />
 
                     <Button
                         android:id="@+id/button_link_stop"
                         style="@style/SecondaryButton"
                         android:layout_width="match_parent"
-                        android:layout_height="44dp"
-                        android:layout_marginTop="8dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_2"
                         android:visibility="gone"
                         android:text="@string/action_link_stop" />
                 </LinearLayout>
@@ -135,7 +135,7 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="22dp"
+                    android:layout_marginTop="@dimen/space_6"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -164,7 +164,7 @@
                         android:id="@+id/group_filter_scroll"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:scrollbars="none"
                         android:visibility="gone">
 
@@ -179,7 +179,7 @@
                         android:id="@+id/device_list"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:orientation="vertical" />
 
                     <!-- 空状态：没配对过电脑时显示，如实说明怎么开始。 -->
@@ -190,8 +190,8 @@
                         android:background="@drawable/bg_card"
                         android:gravity="center"
                         android:orientation="vertical"
-                        android:paddingTop="24dp"
-                        android:paddingBottom="24dp">
+                        android:paddingTop="@dimen/space_6"
+                        android:paddingBottom="@dimen/space_6">
 
                         <TextView
                             style="@style/CardBody"
@@ -206,22 +206,22 @@
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="@dimen/space_5"
                     android:orientation="vertical">
 
                     <Button
                         android:id="@+id/button_scan"
                         style="@style/PrimaryButton"
                         android:layout_width="match_parent"
-                        android:layout_height="52dp"
+                        android:layout_height="@dimen/control_height_lg"
                         android:text="@string/action_scan" />
 
                     <Button
                         android:id="@+id/button_manual"
                         style="@style/SecondaryButton"
                         android:layout_width="match_parent"
-                        android:layout_height="46dp"
-                        android:layout_marginTop="10dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/action_manual" />
 
                     <!-- 手动输入（默认隐藏）：点「手动输入」展开即聚焦弹键盘。
@@ -230,24 +230,24 @@
                         android:id="@+id/manual_input"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:autofillHints="none"
                         android:background="@drawable/bg_input_field"
                         android:hint="@string/manual_hint"
                         android:imeOptions="actionGo"
                         android:inputType="text"
                         android:maxLines="1"
-                        android:padding="14dp"
+                        android:padding="@dimen/space_4"
                         android:textColor="@color/text_primary"
                         android:textColorHint="@color/text_tertiary"
-                        android:textSize="13sp"
+                        android:textSize="@dimen/text_label"
                         android:visibility="gone" />
 
                     <TextView
                         style="@style/CardBody"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/pair_note" />
 
                     <!-- X10-73：把「连接上次配对的电脑」钉到桌面，点一下就连上。
@@ -256,8 +256,8 @@
                         android:id="@+id/button_pin_shortcut"
                         style="@style/SecondaryButton"
                         android:layout_width="match_parent"
-                        android:layout_height="46dp"
-                        android:layout_marginTop="10dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/action_pin_shortcut" />
                 </LinearLayout>
 
@@ -266,10 +266,10 @@
                     android:id="@+id/crash_card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="@dimen/space_5"
                     android:background="@drawable/bg_danger_card"
                     android:orientation="vertical"
-                    android:padding="18dp"
+                    android:padding="@dimen/space_4"
                     android:visibility="gone">
 
                     <TextView
@@ -277,41 +277,41 @@
                         android:layout_height="wrap_content"
                         android:text="@string/crash_title"
                         android:textColor="@color/danger_text"
-                        android:textSize="14.5sp"
+                        android:textSize="@dimen/text_title"
                         android:textStyle="bold" />
 
                     <TextView
                         android:id="@+id/crash_detail"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:background="@drawable/bg_input"
                         android:fontFamily="monospace"
-                        android:padding="12dp"
+                        android:padding="@dimen/space_3"
                         android:textColor="@color/danger_text"
                         android:textIsSelectable="true"
-                        android:textSize="11sp"
+                        android:textSize="@dimen/text_caption"
                         android:visibility="gone" />
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:orientation="horizontal">
 
                         <Button
                             android:id="@+id/button_crash_view"
                             style="@style/SecondaryButton"
                             android:layout_width="wrap_content"
-                            android:layout_height="40dp"
+                            android:layout_height="@dimen/control_height_md"
                             android:text="@string/action_view_detail" />
 
                         <Button
                             android:id="@+id/button_crash_clear"
                             style="@style/SecondaryButton"
                             android:layout_width="wrap_content"
-                            android:layout_height="40dp"
-                            android:layout_marginLeft="10dp"
+                            android:layout_height="@dimen/control_height_md"
+                            android:layout_marginLeft="@dimen/space_2"
                             android:text="@string/action_clear" />
                     </LinearLayout>
                 </LinearLayout>
@@ -337,10 +337,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
-                android:paddingTop="24dp"
-                android:paddingBottom="20dp">
+                android:paddingLeft="@dimen/screen_padding_h"
+                android:paddingRight="@dimen/screen_padding_h"
+                android:paddingTop="@dimen/space_6"
+                android:paddingBottom="@dimen/screen_padding_bottom">
 
                 <TextView
                     style="@style/SectionTitle"
@@ -351,14 +351,14 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="horizontal">
 
                     <Button
                         android:id="@+id/button_send_to_pc"
                         style="@style/PrimaryButton"
                         android:layout_width="0dp"
-                        android:layout_height="48dp"
+                        android:layout_height="@dimen/control_height_md"
                         android:layout_weight="1"
                         android:text="@string/action_send_to_pc" />
 
@@ -366,8 +366,8 @@
                         android:id="@+id/button_files_refresh"
                         style="@style/SecondaryButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="48dp"
-                        android:layout_marginLeft="10dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginLeft="@dimen/space_2"
                         android:text="@string/action_refresh" />
                 </LinearLayout>
 
@@ -375,14 +375,14 @@
                     style="@style/CardBody"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
+                    android:layout_marginTop="@dimen/space_2"
                     android:text="@string/files_note" />
 
                 <LinearLayout
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -398,8 +398,8 @@
                         android:layout_height="wrap_content"
                         android:gravity="center"
                         android:orientation="vertical"
-                        android:paddingTop="28dp"
-                        android:paddingBottom="28dp">
+                        android:paddingTop="@dimen/space_8"
+                        android:paddingBottom="@dimen/space_8">
 
                         <TextView
                             android:id="@+id/file_empty_text"
@@ -407,14 +407,14 @@
                             android:layout_height="wrap_content"
                             android:text="@string/files_empty"
                             android:textColor="@color/text_tertiary"
-                            android:textSize="13.5sp" />
+                            android:textSize="@dimen/text_body" />
 
                         <Button
                             android:id="@+id/button_grant_files"
                             style="@style/SecondaryButton"
                             android:layout_width="wrap_content"
-                            android:layout_height="42dp"
-                            android:layout_marginTop="12dp"
+                            android:layout_height="@dimen/control_height_md"
+                            android:layout_marginTop="@dimen/space_3"
                             android:visibility="gone"
                             android:text="@string/action_grant_files" />
                     </LinearLayout>
@@ -441,10 +441,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
-                android:paddingTop="24dp"
-                android:paddingBottom="20dp">
+                android:paddingLeft="@dimen/screen_padding_h"
+                android:paddingRight="@dimen/screen_padding_h"
+                android:paddingTop="@dimen/space_6"
+                android:paddingBottom="@dimen/screen_padding_bottom">
 
                 <TextView
                     style="@style/SectionTitle"
@@ -457,7 +457,7 @@
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -477,7 +477,7 @@
                             android:id="@+id/button_notify_mirror"
                             style="@style/SecondaryButton"
                             android:layout_width="wrap_content"
-                            android:layout_height="40dp"
+                            android:layout_height="@dimen/control_height_md"
                             android:text="@string/action_notify_mirror_on" />
                     </LinearLayout>
 
@@ -485,23 +485,23 @@
                         style="@style/CardBody"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/notify_mirror_note" />
 
                     <TextView
                         android:id="@+id/notify_mirror_status"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:textColor="@color/text_primary"
-                        android:textSize="12.5sp" />
+                        android:textSize="@dimen/text_body" />
 
                     <Button
                         android:id="@+id/button_grant_listener"
                         style="@style/SecondaryButton"
                         android:layout_width="wrap_content"
-                        android:layout_height="40dp"
-                        android:layout_marginTop="10dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_2"
                         android:visibility="gone"
                         android:text="@string/action_grant_listener" />
                 </LinearLayout>
@@ -511,7 +511,7 @@
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="vertical">
 
                     <TextView
@@ -524,15 +524,15 @@
                         style="@style/CardBody"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/capture_note" />
 
                     <Button
                         android:id="@+id/button_capture"
                         style="@style/SecondaryButton"
                         android:layout_width="match_parent"
-                        android:layout_height="46dp"
-                        android:layout_marginTop="10dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/action_capture" />
                 </LinearLayout>
 
@@ -541,7 +541,7 @@
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="vertical">
 
                     <TextView
@@ -554,15 +554,15 @@
                         style="@style/CardBody"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/trust_note" />
 
                     <Button
                         android:id="@+id/button_unpair_computer"
                         style="@style/DangerButton"
                         android:layout_width="match_parent"
-                        android:layout_height="46dp"
-                        android:layout_marginTop="10dp"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/action_unpair_active" />
                 </LinearLayout>
 
@@ -571,7 +571,7 @@
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="vertical">
 
                     <TextView
@@ -584,7 +584,7 @@
                         style="@style/CardBody"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
+                        android:layout_marginTop="@dimen/space_2"
                         android:text="@string/privacy_note" />
                 </LinearLayout>
 
@@ -593,7 +593,7 @@
                     style="@style/Card"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="@dimen/space_4"
                     android:orientation="vertical">
 
                     <LinearLayout
@@ -620,8 +620,8 @@
                     <ScrollView
                         android:id="@+id/log_scroller"
                         android:layout_width="match_parent"
-                        android:layout_height="220dp"
-                        android:layout_marginTop="10dp"
+                        android:layout_height="@dimen/log_scroller_height"
+                        android:layout_marginTop="@dimen/space_2"
                         android:background="@drawable/bg_input"
                         android:visibility="gone">
 
@@ -630,12 +630,64 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:fontFamily="monospace"
-                            android:padding="12dp"
+                            android:padding="@dimen/space_3"
                             android:textColor="@color/text_primary"
                             android:textIsSelectable="true"
-                            android:textSize="12sp" />
+                            android:textSize="@dimen/text_caption" />
                     </ScrollView>
                 </LinearLayout>
+
+                <!-- 版本信息（X10-76）：此前**整个 App 没有任何地方显示版本号**
+                     （versionName 只存在于 build.gradle.kts，不进 UI）。
+                     整行可点 → 展开完整信息；长按 → 复制到剪贴板
+                     （小白报障的真实动作是复制粘贴，不是朗读）。 -->
+                <LinearLayout
+                    android:id="@+id/row_app_version"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="?android:attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="@dimen/touch_target_min"
+                    android:orientation="horizontal"
+                    android:paddingTop="@dimen/space_3"
+                    android:paddingBottom="@dimen/space_3">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/app_about_title" />
+
+                    <TextView
+                        android:id="@+id/app_version_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="@dimen/text_caption" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/app_version_detail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingBottom="@dimen/space_2"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="@dimen/text_caption"
+                    android:visibility="gone" />
+
+                <!-- 隐私承诺（X10-76）：从 58 字的设置页末位提到一级页，一行说清
+                     —— 这是这个产品对小白最大的转化点，他最担心的就是镜像软件偷传数据。 -->
+                <TextView
+                    android:id="@+id/privacy_note_short"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingTop="@dimen/space_2"
+                    android:text="@string/privacy_short"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="@dimen/text_caption" />
             </LinearLayout>
         </ScrollView>
     </FrameLayout>
@@ -647,25 +699,25 @@
         android:layout_height="wrap_content"
         android:background="@color/nav_bg"
         android:orientation="horizontal"
-        android:paddingLeft="12dp"
-        android:paddingRight="12dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp">
+        android:paddingLeft="@dimen/space_3"
+        android:paddingRight="@dimen/space_3"
+        android:paddingTop="@dimen/space_2"
+        android:paddingBottom="@dimen/space_2">
 
         <LinearLayout
             android:id="@+id/nav_devices"
             style="@style/NavItem"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginRight="4dp"
+            android:layout_marginRight="@dimen/space_1"
             android:layout_weight="1"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp">
+            android:paddingTop="@dimen/space_2"
+            android:paddingBottom="@dimen/space_2">
 
             <ImageView
                 android:id="@+id/nav_devices_icon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
+                android:layout_width="@dimen/icon_size_sm"
+                android:layout_height="@dimen/icon_size_sm"
                 android:contentDescription="@string/tab_devices"
                 android:src="@drawable/ic_tab_devices" />
 
@@ -673,10 +725,10 @@
                 android:id="@+id/nav_devices_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
+                android:layout_marginTop="@dimen/space_1"
                 android:text="@string/tab_devices"
                 android:textColor="@color/nav_unselected"
-                android:textSize="11sp" />
+                android:textSize="@dimen/text_caption" />
         </LinearLayout>
 
         <LinearLayout
@@ -684,16 +736,16 @@
             style="@style/NavItem"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="4dp"
-            android:layout_marginRight="4dp"
+            android:layout_marginLeft="@dimen/space_1"
+            android:layout_marginRight="@dimen/space_1"
             android:layout_weight="1"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp">
+            android:paddingTop="@dimen/space_2"
+            android:paddingBottom="@dimen/space_2">
 
             <ImageView
                 android:id="@+id/nav_files_icon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
+                android:layout_width="@dimen/icon_size_sm"
+                android:layout_height="@dimen/icon_size_sm"
                 android:contentDescription="@string/tab_files"
                 android:src="@drawable/ic_tab_files" />
 
@@ -701,10 +753,10 @@
                 android:id="@+id/nav_files_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
+                android:layout_marginTop="@dimen/space_1"
                 android:text="@string/tab_files"
                 android:textColor="@color/nav_unselected"
-                android:textSize="11sp" />
+                android:textSize="@dimen/text_caption" />
         </LinearLayout>
 
         <LinearLayout
@@ -712,15 +764,15 @@
             style="@style/NavItem"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="4dp"
+            android:layout_marginLeft="@dimen/space_1"
             android:layout_weight="1"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp">
+            android:paddingTop="@dimen/space_2"
+            android:paddingBottom="@dimen/space_2">
 
             <ImageView
                 android:id="@+id/nav_settings_icon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
+                android:layout_width="@dimen/icon_size_sm"
+                android:layout_height="@dimen/icon_size_sm"
                 android:contentDescription="@string/tab_settings"
                 android:src="@drawable/ic_tab_settings" />
 
@@ -728,10 +780,10 @@
                 android:id="@+id/nav_settings_label"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
+                android:layout_marginTop="@dimen/space_1"
                 android:text="@string/tab_settings"
                 android:textColor="@color/nav_unselected"
-                android:textSize="11sp" />
+                android:textSize="@dimen/text_caption" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

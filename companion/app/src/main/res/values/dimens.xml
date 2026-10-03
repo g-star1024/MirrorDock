@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设计令牌（X10-76）。此前 companion 端**没有 dimens.xml**：间距全是硬编码字面量
+  （activity_main.xml 里 113 处 dp，MainActivity.kt 里 15 处 dp() 调用），
+  字号散落 12 种（含 11.5/12.5/13.5/14.5 这类随手值）。
+
+  审计判断：与 PC 端同一个根因 —— **没有令牌层**。视觉细节"差太多"不是审美问题，
+  是系统缺失。这里是 Android 侧的单一事实来源。
+-->
+<resources>
+    <!-- ============ 间距：4dp 基准栅格 ============
+         只允许用这 7 级。离轴值（10/14/18/22）一律映射到最近的一级。 -->
+    <dimen name="space_1">4dp</dimen>   <!-- 元素内元素间距、pill 内边距 -->
+    <dimen name="space_2">8dp</dimen>   <!-- 同组元素间距、chip 间距 -->
+    <dimen name="space_3">12dp</dimen>  <!-- 设备行内边距、按钮组间距 -->
+    <dimen name="space_4">16dp</dimen>  <!-- 卡片内边距、图标与文字间距 -->
+    <dimen name="space_5">20dp</dimen>  <!-- 区块间距、按钮左右内边距 -->
+    <dimen name="space_6">24dp</dimen>  <!-- 页面上下留白、页标题与内容间距 -->
+    <dimen name="space_8">32dp</dimen>  <!-- 空状态上下留白 -->
+
+    <!-- 屏幕边距：20dp 是既有视觉验证过的值，保留为唯一的离轴间距。 -->
+    <dimen name="screen_padding_h">20dp</dimen>
+    <dimen name="screen_padding_top">24dp</dimen>
+    <dimen name="screen_padding_bottom">20dp</dimen>
+
+    <!-- ============ 圆角：现状 5 个任意值（10/12/14/16/18/20）收敛为 4 级 ============ -->
+    <dimen name="radius_xs">8dp</dimen>     <!-- 分组 chip -->
+    <dimen name="radius_sm">12dp</dimen>    <!-- 输入框、状态 pill、文件徽标 -->
+    <dimen name="radius_md">16dp</dimen>    <!-- 设备行、次要按钮 -->
+    <dimen name="radius_lg">20dp</dimen>    <!-- 卡片 -->
+    <dimen name="radius_pill">999dp</dimen>
+
+    <!-- ============ 触控：Android 规范最小 48dp ============
+         审计实测：现状有 11 处控件不达标（⋯ 按钮 28dp、多个按钮 40/42/44/46dp、
+         TextButton 约 20dp）。这是"点不准"的直接原因，不是审美问题。 -->
+    <dimen name="touch_target_min">48dp</dimen>
+    <dimen name="control_height_lg">52dp</dimen>   <!-- 唯一主 CTA -->
+    <dimen name="control_height_md">48dp</dimen>   <!-- 标准/次要控件 -->
+    <dimen name="control_height_sm">40dp</dimen>   <!-- 仅限非交互标签，不可用于可点击元素 -->
+
+    <!-- ============ 图标 ============ -->
+    <dimen name="icon_size_sm">22dp</dimen>   <!-- 底部导航 -->
+    <dimen name="icon_size_md">24dp</dimen>   <!-- 内联图标（⋯ 等） -->
+    <!-- 状态圆点：尺寸不是间距，必须独立令牌。bg_dot 的 shape 里
+         android:size 也写死了 10dp，两处要一起改。 -->
+    <dimen name="status_dot_size">10dp</dimen>
+
+    <!-- ============ 描边 ============
+         现状 elevation / translationZ **零使用**，卡片层级只靠
+         #FFFFFF 与 #F2F4F7 之间 1.10:1 的亮度差 —— 远低于可辨识阈值，
+         所以界面对比度不足。描边 + surface 亮度阶是替代方案
+         （不引入 elevation：那会与现有三处 stateListAnimator="@null"
+         刻意去掉系统投影的决定冲突）。 -->
+    <dimen name="stroke_hairline">1dp</dimen>
+    <dimen name="stroke_focus">2dp</dimen>
+    <!-- 显式写 0 是决策记录，防止后人误加 elevation。 -->
+    <dimen name="elevation_card">0dp</dimen>
+
+    <!-- 组件级 -->
+    <dimen name="log_scroller_height">220dp</dimen>
+    <!-- 文件徽标（APK/文件）的上下内边距：5dp 是刻意的紧凑值（徽标纯装饰），
+         不并入间距级差 —— 记为专属令牌，避免后人「顺手」把它改成 4 或 8。 -->
+    <dimen name="badge_pad_v">5dp</dimen>
+
+    <!-- ============ 字号：12 种 → 5 级 ============
+         一律 sp（跟随系统字体缩放，这是 Android 相对 Web 的核心优势，
+         不要用 dp 锁死字号 —— 用户系统里调大字体，App 必须跟着放大）。
+         禁止出现 .5 sp：12.5/13.5/14.5 都是随手值，在中文下没有排版意义。 -->
+    <dimen name="text_display">20sp</dimen>  <!-- 页面大标题，每屏仅 1 处 -->
+    <dimen name="text_title">16sp</dimen>    <!-- 卡片标题、设备名、状态文字、主 CTA -->
+    <dimen name="text_body">14sp</dimen>     <!-- 正文、说明、文件名、次要按钮 -->
+    <dimen name="text_label">13sp</dimen>    <!-- 导航标签、chip、状态徽标 -->
+    <dimen name="text_caption">12sp</dimen>  <!-- 元信息、时间戳、版本号、运行日志 -->
+    <dimen name="text_mono">11sp</dimen>     <!-- 仅崩溃堆栈（ASCII，需高信息密度） -->
+</resources>

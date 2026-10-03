@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  暗色主题（X10-76）。此前 companion 端**完全没有 values-night/**，
+  系统切深色时 App 仍是白底 —— 这是安卓端比 PC 端更严重的一个缺口。
+
+  机制说明（已核实）：手写 shape drawable 里的 `@color/xxx` 引用在**运行时**
+  按资源限定符解析，所以只要这里的同名资源被覆盖，所有引用它的 drawable
+  自动跟着变 —— **不需要建 drawable-night/**。这也是本次把
+  bg_input_field / bg_file_row / bg_dot 里硬编码的 #FFFFFF、#50B0B8
+  改成颜色引用的原因：改完这 3 处后，暗色覆盖即可全量生效。
+
+  暗色不是把亮色反过来，四个关键差异：
+  1. 深度靠「表面更亮」而非阴影 —— elevation 在深底上几乎不可见
+  2. 正文不用纯白（#E8EDEF 而非 #FFF），降一档亮度减少眩光
+  3. 主色提亮降饱和 —— 亮色版的 #1F7F88 在深底上不够亮
+  4. 描边比浅色更重，补偿阴影失效后丢失的边界
+-->
+<resources>
+    <!-- 品牌主色：提亮。浅色版 #1F7F88 on card = 4.72:1，
+         但同一颜色在暗底上只有 2.9:1，不够亮。 -->
+    <color name="accent">#4FC3CC</color>
+    <color name="accent_bright">#6FD6DE</color>
+    <color name="accent_dark">#2A7C84</color>   <!-- 按压态，仅作背景 -->
+    <color name="accent_tint">#14312F</color>
+    <!-- 浅色下可复用 accent_dark，但暗色下 accent_dark 作背景、
+         文字需提亮，故独立定义而非复用。 -->
+    <color name="accent_on_tint">#7FD8DF</color>
+
+    <!-- 深度阶梯：不用纯黑，保留青碧冷调与"这是一块屏"的知觉。 -->
+    <color name="screen_bg">#0E1416</color>
+    <color name="card_bg">#171E21</color>
+    <color name="card_bg_subtle">#1E2629</color>
+    <color name="nav_bg">#141A1D</color>
+
+    <!-- 文字三档。不用纯白：深色底上纯白会眩光。 -->
+    <color name="text_primary">#E8EDEF</color>
+    <color name="text_secondary">#A7B4B8</color>
+    <color name="text_tertiary">#858F93</color>
+    <color name="text_on_accent">#06282B</color>
+
+    <!-- 状态语义色：暗色需提亮，浅色版在深底上不可读。
+         注意 text_on_accent 在暗色下是**深字亮底** —— 亮青底配白字只有 2.4:1。 -->
+    <color name="success">#3DD68C</color>
+    <color name="success_bg">#12291F</color>
+    <color name="warn">#FBBF24</color>
+    <color name="warn_bg">#2A2113</color>
+    <color name="danger">#F87171</color>
+    <color name="danger_text">#FCA5A5</color>
+    <color name="danger_bg">#2C1618</color>
+    <color name="danger_border">#4A2020</color>
+
+    <!-- 分隔线与输入框：暗色下描边必须比浅色更明显，补偿阴影失效。 -->
+    <color name="divider">#232C30</color>
+    <color name="input_border">#37474D</color>
+    <color name="input_bg">#1A2124</color>
+    <color name="stroke_card">#2B3539</color>
+
+    <color name="dot_idle">#5A6669</color>
+    <color name="dot_ready">#4FC3CC</color>
+    <color name="file_badge_bg">#14312F</color>
+    <color name="nav_unselected">#858F93</color>
+</resources>

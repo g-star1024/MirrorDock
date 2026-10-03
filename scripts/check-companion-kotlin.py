@@ -103,15 +103,29 @@ def make_r_stub(classpath_dir):
     一堆假的 "unresolved reference"，把真错误淹没。
     """
     res = os.path.join(SRC, "res")
+    # 必须遍历**所有** values-* 限定符目录（values-night / values-sw600dp …）：
+    # 2026-10-03 加暗色主题时，values-night/colors.xml 里的新令牌如果漏掉，
+    # 本地会报假的 unresolved reference，真错误反而被淹没。
     def names_in(fname, tag):
-        p = os.path.join(res, "values", fname)
-        if not os.path.exists(p):
-            return set()
-        return set(re.findall(rf'<{tag}[^>]*\bname="([^"]+)"',
-                              pathlib.Path(p).read_text(encoding="utf-8")))
+        found = set()
+        values_root = os.path.join(res)
+        for d in sorted(os.listdir(values_root)):
+            if not d.startswith("values"):
+                continue
+            fp = os.path.join(values_root, d, fname)
+            if not os.path.exists(fp):
+                continue
+            found |= set(re.findall(rf'<{tag}[^>]*\bname="([^"]+)"',
+                                   pathlib.Path(fp).read_text(encoding="utf-8")))
+        return found
 
     strings = names_in("strings.xml", "string")
     colors = names_in("colors.xml", "color")
+    # dimen 是 2026-10-03 引入 dimens.xml 后才有的资源类型。此前存根只覆盖
+    # 6 种（string/color/drawable/layout/mipmap/id），于是所有 dp(R.dimen.*)
+    # 都会报 unresolved reference —— 正是「校验器自身有盲区」的一个实例。
+    dimens = names_in("dimens.xml", "dimen")
+    styles = names_in("styles.xml", "style")
     drawables = {os.path.basename(f)[:-4]
                  for f in os.listdir(os.path.join(res, "drawable")) if f.endswith(".xml")}
     layouts = {os.path.basename(f)[:-4]
@@ -128,7 +142,8 @@ def make_r_stub(classpath_dir):
     os.makedirs(out_dir, exist_ok=True)
     parts = ["package com.mirrordock.companion;", "", "public final class R {"]
     for kind, names in [("string", strings), ("color", colors), ("drawable", drawables),
-                        ("layout", layouts), ("mipmap", mipmaps), ("id", ids)]:
+                        ("layout", layouts), ("mipmap", mipmaps), ("id", ids),
+                        ("dimen", dimens), ("style", styles)]:
         parts.append(f"  public static final class {kind} {{")
         for i, n in enumerate(sorted(names)):
             parts.append(f"    public static final int {n} = {0x7f000000 + i};")
