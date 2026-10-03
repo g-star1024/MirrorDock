@@ -552,6 +552,38 @@ function NavIcon({ d }: { d: string }) {
   );
 }
 
+export type TransferGroup = { kind: string; label: string; files: string[] };
+
+/**
+ * 按用途把手机发送区的文件分组（X10-75）。
+ *
+ * 面向的是不懂技术的人：`.apk` 是「装到手机的软件包」，常见文档格式单列，
+ * 其余归「其他文件」。分组的意义是让人一眼扫过去就知道"哪些是安装包、哪些是
+ * 要看的文档"，而不是面对一列同质的文件名。
+ *
+ * 纯函数：分组顺序固定（安装包 → 文档 → 其他），组内按名称自然排序，
+ * 这样两次刷新之间行不会跳动。空组不返回。
+ */
+export function groupTransferFiles(names: string[]): TransferGroup[] {
+  // 分类要认得 Android 传输产生的重名副本：`foo.apk.1`、`foo.apk (1).1`。
+  // 这些本质仍是安装包（用户从微信/QQ 传过来的），若按严格结尾判断会被甩进
+  // 「其他文件」，用户一眼扫不出哪些是安装包 —— 那就白分组了。
+  const INSTALLER = /\.(apk|apks|xapk)\b/i;
+  const DOCUMENT = /\.(pdf|docx?|xlsx?|pptx?|txt|md|csv|rtf|epub|json|log)\b/i;
+  const buckets: Record<string, string[]> = { installer: [], document: [], other: [] };
+  for (const name of names) {
+    if (INSTALLER.test(name)) buckets.installer.push(name);
+    else if (DOCUMENT.test(name)) buckets.document.push(name);
+    else buckets.other.push(name);
+  }
+  const byName = (a: string, b: string) => a.localeCompare(b, "zh-Hans-CN");
+  return [
+    { kind: "installer", label: "安装包（可装到手机）", files: buckets.installer.sort(byName) },
+    { kind: "document", label: "文档", files: buckets.document.sort(byName) },
+    { kind: "other", label: "其他文件", files: buckets.other.sort(byName) },
+  ].filter((group) => group.files.length > 0);
+}
+
 function App() {
   const [tab, setTab] = useState<TabKey>("home");
   const [check, setCheck] = useState<AdbCheck | null>(null);
@@ -595,7 +627,14 @@ function App() {
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferMessage, setTransferMessage] = useState<string | null>(null);
   const [transferError, setTransferError] = useState<string | null>(null);
-  const [lastTransfer, setLastTransfer] = useState<TransferReceipt | null>(null);
+  // X10-75：取回状态按**文件**记录，不再只有一个 lastTransfer。
+  // 旧实现只有一个 lastTransfer，导致：①同时/连续取回多个文件时只认最后一次，
+  // 界面却一直显示同一个「取回」按钮，用户不知道哪个已经取回；②底部提示
+  // 「已保存到这台电脑的下载/MirrorDock 文件夹」会让人以为**全部**都保存了。
+  // 现在每个文件有自己的状态，操作列据此切换成「已取回 ✓」而不是重复的按钮。
+  const [fetchedFiles, setFetchedFiles] = useState<Record<string, TransferReceipt>>({});
+  // 正在取回的文件名（用于行内 loading，只让该行转圈而不是整表转圈）。
+  const [fetchingName, setFetchingName] = useState<string | null>(null);
   // 安装 APK：选中的安装包路径只存在内存里（不写 localStorage，不入日志）。
   const [apkPath, setApkPath] = useState<string | null>(null);
   const [apkBusy, setApkBusy] = useState(false);
@@ -1517,7 +1556,6 @@ function App() {
   async function sendFileTo(serial: string) {
     setTransferMessage(null);
     setTransferError(null);
-    setLastTransfer(null);
     let picked: string | string[] | null;
     try {
       picked = await openFilePicker({ multiple: false, title: "选择要发送到手机的文件" });
@@ -1530,8 +1568,8 @@ function App() {
     setTransferBusy(true);
     try {
       const receipt = await invoke<TransferReceipt>("send_file_to_device", { serial, localPath: picked });
-      setLastTransfer(receipt);
-      setTransferMessage("已发送到手机的「下载 / MirrorDock」文件夹。");
+      // X10-75：说清是**哪个文件**发到了哪里，不写"已发送"这种含糊的话。
+      setTransferMessage(`已把「${receipt.file_name}」发送到手机（手机「下载 / MirrorDock」）。`);
       // 发送成功后设备目录内容已变化，让下一次列表请求重新拉取。
       setDeviceFiles(null);
     } catch (error) {
@@ -1596,46 +1634,53 @@ function App() {
   }
 
   // 取回文件：保存到本机「下载 / MirrorDock」，同名时后端自动顺延序号。
+  // X10-75：状态记到**该文件**上（fetchedFiles），行内据此显示「已取回 ✓」；
+  // 提示语也只说这一个文件，不再写"已保存到…文件夹"（会被读成"全部都存好了"）。
   async function fetchDeviceFile(serial: string, fileName: string) {
-    setTransferBusy(true);
     setTransferMessage(null);
     setTransferError(null);
-    setLastTransfer(null);
+    setFetchingName(fileName);
     try {
       const receipt = await invoke<TransferReceipt>("fetch_file_from_device", { serial, fileName });
-      setLastTransfer(receipt);
-      setTransferMessage("已保存到这台电脑的「下载 / MirrorDock」文件夹。");
-      // 文件已安全落在本机，顺带问一下是否清理手机上的原件（X10-60 发送区清理）。
+      setFetchedFiles((prev) => ({ ...prev, [fileName]: receipt }));
+      setTransferMessage(`已把「${fileName}」保存到这台电脑的「下载 / MirrorDock」文件夹。`);
+      // 文件已安全落在本机，刷新列表以便看到最新状态。
       setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
     } catch (error) {
       setTransferError(errorMessage(error, "文件没有从手机取回。"));
     } finally {
-      setTransferBusy(false);
+      setFetchingName(null);
     }
   }
 
   // 删除手机发送区里的一个文件（X10-60）：只删「下载 / MirrorDock」内的这个文件。
   async function deleteDeviceFile(serial: string, fileName: string) {
-    setTransferBusy(true);
     setTransferMessage(null);
     setTransferError(null);
     try {
       await invoke("delete_device_file", { serial, fileName });
       setDeviceFiles(await invoke<string[]>("list_device_files", { serial }));
-      setTransferMessage(`已从手机删除：${fileName}`);
+      // 删掉了就撤掉它的"已取回"标记——文件已不在手机上。
+      setFetchedFiles((prev) => {
+        if (!(fileName in prev)) return prev;
+        const next = { ...prev };
+        delete next[fileName];
+        return next;
+      });
+      setTransferMessage(`已从手机删除「${fileName}」。`);
     } catch (error) {
       setTransferError(errorMessage(error, "文件没有从手机上删除。"));
-    } finally {
-      setTransferBusy(false);
     }
   }
 
-  async function revealTransfer() {
-    if (!lastTransfer) return;
+  // 在访达/文件管理器里定位某个已取回的文件。
+  async function revealFetched(fileName: string) {
+    const receipt = fetchedFiles[fileName];
+    if (!receipt) return;
     try {
-      await revealItemInDir(lastTransfer.path);
+      await revealItemInDir(receipt.path);
     } catch (error) {
-      setTransferError(errorMessage(error, "无法打开文件所在的文件夹。"));
+      setTransferError(errorMessage(error, "无法在文件夹中显示这个文件。"));
     }
   }
 
@@ -1769,12 +1814,16 @@ function App() {
   // 两者都拿不到才为空，此时面板如实提示去连接页。
   // 取回/发送走 adb 通道，与 scrcpy 会话无关，所以不该被会话状态门禁挡住。
   const transferDeviceSerial = readyDevice?.serial ?? sessionSerial;
+  // X10-75：按用途分组展示。分组是纯函数结果，列表为空时自然为空数组。
+  const transferGroups = groupTransferFiles(deviceFiles ?? []);
 
   // 设备换了就丢弃旧列表：否则会出现"这是上一台手机的文件"这种误导。
   useEffect(() => {
     setDeviceFiles(null);
     setTransferMessage(null);
     setTransferError(null);
+    // 取回记录也属于"那台设备的状态"，换设备后一并清掉。
+    setFetchedFiles({});
   }, [readyDevice?.serial]);
 
   // 打开「工具」页时自动加载手机文件列表（首次也加载）。
@@ -2551,56 +2600,81 @@ function App() {
               </div>
             )}
 
-            {/* 文件传输（X10-74）：**移出 {readyDevice ? ...} 门禁**。
-                取回/发送走的是 adb 通道，与镜像会话无关 —— 旧实现把它关在
-                readyDevice 里，手机已连接但没在镜像时整个面板消失，用户 complaints
-                「手机发来的文件看不到」。现在它始终可见，只在真的没有可用设备时
-                才提示去连接。 */}
+            {/* 文件传输（X10-74 / X10-75 重设计）。
+                移出 {readyDevice ? ...} 门禁：取回/发送走 adb 通道，与镜像会话无关。
+                X10-75 的设计修正（纯视觉 + 状态表达，不动传输逻辑）：
+                - 操作列**固定宽度并右对齐**（旧实现文件名多长决定按钮位置，视觉上散乱）；
+                - 每行按自己的取回结果显示「已取回 ✓」而不是重复的「取回到电脑」；
+                - 按文件类型分组（安装包 / 文档 / 其他），小白用户更容易找；
+                - 提示语只说**这一个文件**，不说"已保存到文件夹"（会被读成全部都存好了）。 */}
             <div className="capability-panel transfer-panel" aria-live="polite" style={{ marginTop: 16 }}>
-              <strong>文件传输</strong>
-              {transferDeviceSerial ? (
-                <>
+              <div className="transfer-head">
+                <div>
+                  <strong>文件传输</strong>
                   <p className="capability-pending">
                     手机「下载 / MirrorDock」与这台电脑之间互传，只经过你自己的数据线或局域网。
                   </p>
-                  <span>
-                    <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(transferDeviceSerial)}>
-                      {transferBusy ? "正在处理…" : "选择文件发送到手机"}
-                    </button>
-                    <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void refreshDeviceFiles(transferDeviceSerial)}>
-                      {transferBusy ? "正在处理…" : "刷新手机文件列表"}
-                    </button>
-                  </span>
-                  {lastTransfer && (
-                    <div className="screenshot-result">
-                      <p className="capability-summary">{lastTransfer.file_name} · {formatBytes(lastTransfer.bytes)}</p>
-                      <p className="screenshot-path">{lastTransfer.path}</p>
-                      <button className="text-button" type="button" onClick={() => void revealTransfer()}>在文件夹中显示</button>
-                    </div>
-                  )}
-                  {deviceFiles !== null && (deviceFiles.length > 0 ? (
-                    <ul className="transfer-file-list">
-                      {deviceFiles.map((name) => (
-                        <li key={name}>
-                          <span className="transfer-file-name">{name}</span>
-                          <button className="text-button" type="button" disabled={transferBusy} onClick={() => void fetchDeviceFile(transferDeviceSerial, name)}>取回到电脑</button>
-                          <button className="text-button danger" type="button" disabled={transferBusy} onClick={() => void deleteDeviceFile(transferDeviceSerial, name)}>删除</button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="capability-pending">
-                      {transferBusy ? "正在读取手机上的文件…" : "手机的「下载 / MirrorDock」当前没有文件。"}
-                    </p>
+                </div>
+                <div className="transfer-actions">
+                  <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(transferDeviceSerial ?? "")}>
+                    {transferBusy ? "正在处理…" : "发送到手机"}
+                  </button>
+                  <button className="ghost-button" type="button" disabled={transferBusy || fetchingName !== null} onClick={() => transferDeviceSerial && void refreshDeviceFiles(transferDeviceSerial)}>
+                    刷新
+                  </button>
+                </div>
+              </div>
+              {deviceFiles !== null && deviceFiles.length > 0 ? (
+                <>
+                  {transferGroups.map((group) => (
+                    <section key={group.kind} className="transfer-group">
+                      <h4 className="transfer-group-title">
+                        {group.label}
+                        <span className="transfer-group-count">{group.files.length}</span>
+                      </h4>
+                      <ul className="transfer-file-list">
+                        {group.files.map((name) => {
+                          const receipt = fetchedFiles[name];
+                          const fetching = fetchingName === name;
+                          return (
+                            <li key={name} className={`transfer-file-row${receipt ? " done" : ""}`}>
+                              <span className="transfer-file-name" title={name}>{name}</span>
+                              <div className="transfer-row-actions">
+                                {fetching ? (
+                                  <span className="transfer-row-state busy">取回中…</span>
+                                ) : receipt ? (
+                                  <>
+                                    <span className="transfer-row-state ok">已取回</span>
+                                    <button className="ghost-button" type="button" onClick={() => void revealFetched(name)}>在文件夹中显示</button>
+                                  </>
+                                ) : (
+                                  <button className="text-button" type="button" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>取回到电脑</button>
+                                )}
+                                <button className="text-button danger" type="button" disabled={fetchingName !== null} onClick={() => void deleteDeviceFile(transferDeviceSerial ?? "", name)}>删除</button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
                   ))}
-                  {transferMessage && <p className="apply-notice" role="status">{transferMessage}</p>}
-                  {transferError && <p className="capability-pending" role="alert">{transferError}</p>}
+                  <p className="setting-note">
+                    共 {deviceFiles.length} 个文件
+                    {Object.keys(fetchedFiles).length > 0 && `，其中 ${Object.keys(fetchedFiles).length} 个已取回这台电脑`}。
+                    取回不会删除手机上的原件；不再需要时用「删除」清理。
+                  </p>
                 </>
               ) : (
                 <p className="capability-pending">
-                  没有可用的手机。请在「连接」页连接并授权一台手机（USB 或同一 Wi-Fi 的无线调试都可以，不需要开始镜像）。
+                  {transferBusy || fetchingName
+                    ? "正在读取手机上的文件…"
+                    : deviceFiles
+                      ? "手机的「下载 / MirrorDock」当前没有文件。手机上发送文件到这里后，刷新即可看到。"
+                      : "尚未读取。点「刷新」查看手机「下载 / MirrorDock」里的文件。"}
                 </p>
               )}
+              {transferMessage && <p className="apply-notice" role="status">{transferMessage}</p>}
+              {transferError && <p className="capability-pending" role="alert">{transferError}</p>}
             </div>
 
             {/* X10-74：APK 安装需要已就绪设备（要下发到设备），留在原门禁内。 */}

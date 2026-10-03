@@ -1,7 +1,7 @@
 // App 层纯函数与初始渲染的测试。
 // 组件测试通过 vi.mock 拦截 Tauri 命令面：这里验证的是前端的**呈现契约**——
 // 七种会话状态不得塌缩成一句"连接失败"、未知能力必须如实显示"未知"。
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
@@ -41,6 +41,7 @@ import App, {
   errorMessage,
   expiryText,
   formatBytes,
+  groupTransferFiles,
   isProEdition,
   lockSummary,
   lockTag,
@@ -1000,5 +1001,136 @@ describe("phone → computer file transfer (X10-74)", () => {
     expect(await screen.findByText(/无法读取手机上的文件列表/)).toBeInTheDocument();
     // 失败后不应显示"当前没有文件"——那会把"读不到"说成"没有"，是假的。
     expect(screen.queryByText(/当前没有文件/)).not.toBeInTheDocument();
+  });
+});
+
+describe("file transfer presentation (X10-75)", () => {
+  // 用户截图指出：①「取回到电脑」列参差不齐；②取回后一直显示「取回到电脑」，
+  // 不知道哪个已经取回；③底部「已保存到这台电脑的下载/MirrorDock 文件夹」会让人
+  // 误会**全部**都保存了，实际只保存了刚取回的那一个。
+  function withPhoneFiles(files: string[], extra?: (cmd: string, args?: unknown) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      if (cmd === "list_device_files") return Promise.resolve(files);
+      const custom = extra?.(cmd, args);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  async function openTools() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /工具/ }));
+  }
+
+  it("groups_files_by_purpose_so_users_can_scan_the_list", () => {
+    const groups = groupTransferFiles([
+      "增值税发票.pdf",
+      "安装狮.apk.1",
+      "MirrorDock 传输 冒烟.txt",
+      "shizuku-v13.5.3.apk",
+    ]);
+    // 分组顺序固定：安装包 → 文档 → 其他；空组不出现（这 4 个文件没有"其他"类）。
+    expect(groups.map((g) => g.kind)).toEqual(["installer", "document"]);
+    // 组内按 zh-Hans-CN 排序（中文在前），保证刷新时行不跳动。
+    expect(groups[0].files).toEqual(["安装狮.apk.1", "shizuku-v13.5.3.apk"]);
+    expect(groups[1].files).toEqual(["增值税发票.pdf", "MirrorDock 传输 冒烟.txt"]);
+  });
+
+  it("treats_android_duplicate_copies_as_installers_not_other_files", () => {
+    // 真实场景（取自用户手机上的文件）：`foo.apk.1`、`foo.apk (1).1` 是 Android
+    // 传输产生的重名副本，本质仍是安装包。若按严格结尾判断会被甩进「其他文件」，
+    // 用户一眼扫不出哪些是安装包 —— 那分组就白做了。
+    const real = [
+      "MirrorDock 传输 冒烟.txt",
+      "mirrordock-companion-debug-0.1.0-poc.apk",
+      "shizuku-v13.5.3.r1036.fff3f87-release.apk (1).1",
+      "shizuku-v13.5.3.r1036.fff3f87-release.apk.1",
+      "增值税发票.pdf",
+      "安装狮.apk.1",
+    ];
+    const groups = groupTransferFiles(real);
+    const installer = groups.find((g) => g.kind === "installer")?.files ?? [];
+    expect(installer).toContain("shizuku-v13.5.3.r1036.fff3f87-release.apk.1");
+    expect(installer).toContain("shizuku-v13.5.3.r1036.fff3f87-release.apk (1).1");
+    expect(installer).toContain("安装狮.apk.1");
+    // 这 4 个安装包不该有任何一个落到「其他文件」。
+    const other = groups.find((g) => g.kind === "other")?.files ?? [];
+    expect(other.some((n) => n.includes(".apk"))).toBe(false);
+  });
+
+  it("returns_no_groups_for_an_empty_list", () => {
+    expect(groupTransferFiles([])).toEqual([]);
+  });
+
+  it("swaps_the_row_action_to_a_fetched_state_after_retrieval", async () => {
+    // 核心回归：取回后该行不再显示「取回到电脑」，而是「已取回」。
+    withPhoneFiles(["报告.pdf"], (cmd, args) =>
+      cmd === "fetch_file_from_device"
+        ? Promise.resolve({
+            file_name: "报告.pdf",
+            path: "/Users/huluobo/Downloads/MirrorDock/报告.pdf",
+            bytes: 2048,
+          })
+        : undefined,
+    );
+    await openTools();
+
+    fireEvent.click(await screen.findByRole("button", { name: "取回到电脑" }));
+
+    // 该行变成已取回状态，并且提供「在文件夹中显示」而不是重复的取回按钮。
+    expect(await screen.findByText("已取回")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "在文件夹中显示" })).toBeInTheDocument();
+    // 整个列表里不应再有「取回到电脑」按钮。
+    expect(screen.queryByRole("button", { name: "取回到电脑" })).not.toBeInTheDocument();
+  });
+
+  it("names_the_single_retrieved_file_instead_of_implying_all_were_saved", async () => {
+    withPhoneFiles(["报告.pdf", "图片.png"], (cmd) =>
+      cmd === "fetch_file_from_device"
+        ? Promise.resolve({ file_name: "报告.pdf", path: "/Users/huluobo/Downloads/MirrorDock/报告.pdf", bytes: 2048 })
+        : undefined,
+    );
+    await openTools();
+
+    // 列表有两行，按行定位「报告.pdf」那一行的取回按钮。
+    const row = (await screen.findByText("报告.pdf")).closest("li") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "取回到电脑" }));
+
+    // 提示必须点名是哪个文件，且给出计数 —— 不能让用户以为全部都存好了。
+    const notice = await screen.findByText(/已把「报告.pdf」保存到这台电脑/);
+    expect(notice).toBeInTheDocument();
+    expect(await screen.findByText(/共 2 个文件，其中 1 个已取回这台电脑/)).toBeInTheDocument();
+    // 另一行仍是未取回状态 —— 逐文件独立，不是整体标记。
+    const other = (await screen.findByText("图片.png")).closest("li") as HTMLElement;
+    expect(within(other).getByRole("button", { name: "取回到电脑" })).toBeInTheDocument();
+  });
+
+  it("drops_the_fetched_marker_when_the_file_is_deleted", async () => {
+    withPhoneFiles(["报告.pdf"], (cmd) =>
+      cmd === "fetch_file_from_device"
+        ? Promise.resolve({ file_name: "报告.pdf", path: "/Users/huluobo/Downloads/MirrorDock/报告.pdf", bytes: 2048 })
+        : undefined,
+    );
+    await openTools();
+
+    fireEvent.click(await screen.findByRole("button", { name: "取回到电脑" }));
+    expect(await screen.findByText("已取回")).toBeInTheDocument();
+
+    // 删除后（列表里已无此文件）计数归零 —— 不留"已取回 1 个"的幽灵数字。
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      if (cmd === "delete_device_file") return Promise.resolve(undefined);
+      if (cmd === "list_device_files") return Promise.resolve([]);
+      return baseInvoke(cmd);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/已取回这台电脑/)).not.toBeInTheDocument();
+    });
   });
 });

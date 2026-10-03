@@ -277,10 +277,54 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .text-button.danger { color: #c0453e; }
 /* 键盘可达性：所有可交互元素在键盘聚焦时必须有清晰可见的焦点框。 */
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #2e6be6; outline-offset: 2px; }
-.transfer-panel span { display: flex; flex-wrap: wrap; gap: 12px; }
-.transfer-file-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-.transfer-file-list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border-radius: 8px; background: #f6f8fb; }
-.transfer-file-name { font-size: 13.5px; color: #3c4654; overflow-wrap: anywhere; }
+/* ---- 文件传输面板（X10-75 重设计） ----
+   旧实现的问题：`.transfer-file-name` 没有 flex 基准，按钮位置随文件名长度漂移，
+   一列「取回到电脑」参差不齐。这里改成 Grid 的固定列 —— 文件名自适应占满剩余
+   空间，操作列固定宽度且右对齐，与文件名长度无关。 */
+.transfer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.transfer-head .capability-pending { margin: 4px 0 0; }
+.transfer-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.transfer-group { margin-top: 14px; }
+.transfer-group-title {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 6px; font-size: 12px; font-weight: 600;
+  color: #6b7686; letter-spacing: .02em;
+}
+.transfer-group-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 6px;
+  border-radius: 999px; background: #eceff4; color: #5b6470;
+  font-size: 11px; font-weight: 500;
+}
+.transfer-file-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+/* 关键：两列 Grid。文件名列 minmax(0,1fr) 可收缩，操作列 auto 固定 —— 对齐由此保证。 */
+.transfer-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #f6f8fb;
+}
+.transfer-file-row.done { background: #f0f7f3; }
+.transfer-file-name {
+  font-size: 13.5px; color: #3c4654;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.transfer-row-actions { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.transfer-row-state { font-size: 12.5px; color: #6b7686; white-space: nowrap; }
+.transfer-row-state.ok { color: #1f7a4d; font-weight: 500; }
+.transfer-row-state.busy { color: #2e6be6; }
+/* 次要操作用轻量按钮，与「取回到电脑」的主操作区分层级。 */
+.ghost-button {
+  padding: 4px 10px; border: 1px solid #d7dde7; border-radius: 7px;
+  background: #fff; color: #46505f; font-size: 12.5px; font-family: inherit;
+  cursor: pointer;
+}
+.ghost-button:hover:not(:disabled) { background: #f2f5f9; border-color: #c2cbd9; }
+.ghost-button:disabled { opacity: .5; cursor: not-allowed; }
 .brand-guide .device-picker { margin-top: 14px; }
 .brand-steps { margin-top: 20px; }
 .brand-notes { margin: 14px 0 0; padding-left: 20px; display: grid; gap: 6px; color: #3c4654; font-size: 13px; line-height: 1.5; }
