@@ -70,6 +70,8 @@ description: MirrorDock（Android 桌面镜像工具）全部工程工作的入�
 
 **本地只出 Mac `.app` 时不要设 `TAURI_SIGNING_PRIVATE_KEY`**：会触发 macOS `codesign` 解锁登录钥匙串，后台无 TTY 时永久卡在 `Password:`。updater 签名交给 CI。
 
+**被 gitignore 的资源目录会被构建脚本重组——手动补文件必被吃掉（X10-81，2026-10-05）**：`src-tauri/resources/scrcpy/` 不入库，`beforeBuildCommand` 的 `scripts/prepare-runtime.sh` 每次构建 `rm -rf` 后从 `.tools/` 全量重灌。往这里手动 cp 任何文件（如把 `scrcpy.png` 换成应用图标）都会在下一次构建被覆盖回官方内容——X10-81 因此让镜像窗口图标「回退成 scrcpy 机器人」。**修资源必须修生成器（prepare-runtime.sh / build.yml），不是修产物。** 另外：scrcpy 的窗口/Dock 图标取自**二进制同目录的 `scrcpy.png`**，bundle 的 `AppIcon.icns` 不是生效渠道（Dock 截图对照实验证实）。
+
 **沙箱网络**：`curl` 直连 `github.com/.../releases/download/...` 常被拦，改用 GitHub API 或 GitHub MCP 工具；`gh` CLI 通常不在非交互 shell 的 PATH。
 
 **升级到新版本时的版本号口径（共 8 处）**：`src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`README.md`、`site/index.html`、`site/compatibility.html`、`docs/compatibility-matrix.md`。
@@ -106,6 +108,20 @@ MirrorDock 交付**两个端**，它们都叫"app"：
 - **本地 checker 的已知盲区**（2026-10-03 修掉两处）：R 存根原本只覆盖 6 种资源、**漏了 `dimen`**（导致所有 `dp(R.dimen.*)` 报假 unresolved reference，真错误被淹没）；且只读 `res/values/`、**漏掉 `res/values-night/`**。**新增资源类型或新的 values-* 限定符目录时，要同步更新 R 存根。**
 - **CI 上唯一能验证、本地验证不了的部分**：`assembleDebug`（aapt 资源编译 + dex + 打包）。本地 kotlinc 只做类型检查，**不过资源链接**。
 - **APK 分发的现实**：`companion.yml` 只上传 artifact，**而 GitHub artifact 下载端点需要认证**（沙箱无 token）。要装到手机上，需要：① 用户提供 PAT，或 ② 打 tag 走 `build.yml` 的 `companion-apk` job（产物会进 Release 的 assets，那里下载不需要认证）。
+
+## 镜像「白屏类」故障的分层排查法（X10-80 实证，2026-10-03）
+
+用户报「切画质后白屏」——真相是**画质背锅**：流管线完全正常，白的是"虚拟屏里没有内容"。不要从用户描述的触发动作（切画质）出发猜 bug，**按管线分层取证**：
+
+1. **设备端编码器**：`adb shell screenrecord --size ... --bit-rate ...` 录 6 秒，拉回 ffprobe 看 `width/height/level` —— 排除"编码器扛不住"。
+2. **手动 scrcpy 对照**：仓库 `src-tauri/resources/scrcpy/scrcpy` 直接跑同一台设备同参数（无 GUI 沙箱跑不了，需非沙箱），`screencapture -x -R <窗口坐标>` 抓窗口看画面。
+3. **虚拟屏内容定性（桌面模式专用）**：`adb shell dumpsys display | grep -i scrcpy` 确认虚拟屏存在且 ON；`am start -n com.android.settings/.Settings --display <id>` 往虚拟屏推系统设置 —— 设置能渲染 ⇒ 管线全好，问题锁定在"目标应用没落到虚拟屏"。
+4. **应用落点追踪**：`dumpsys activity activities` 找 `Display #<id>` 分段里的 `packageName=<pkg>`；网易系游戏（NetEase/qihoo SDK）的 `ProtocolLauncher` 跳板在虚拟屏跑完即被移出（WindowManager `removeChildTask`），MIUI SmartPower 随即休眠进程 —— **游戏本体从未出现**，自动化无解，只能提示用户改普通镜像。
+5. **拿 scrcpy 原文**：X10-79 起客户端输出已捕获进环形缓冲（异常退出会附在界面错误里）；排查时也可以手动跑 scrcpy 看 stderr（`[server] INFO:` 前缀是服务端中继日志）。
+
+另两条硬经验：
+- **`ps -ww -axo pid,command` 看正在运行会话的完整参数**，是区分"app 实际怎么启动 scrcpy"的最快路径（一眼看到 `--new-display --start-app=...`）。
+- 本地构建 `pnpm tauri build --bundles app` 在 updater 签名步骤会报 "no private key" **退出码 1，但 `.app` 产物已生成**——按铁律本地不带私钥，直接取 `bundle/macos/MirrorDock.app` 换装即可，updater 签名归 CI。
 
 ## 改完 UI 必须抓屏（2026-10-03 血泪）
 

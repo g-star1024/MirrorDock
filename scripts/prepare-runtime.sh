@@ -37,18 +37,32 @@ case "$OS_ARCH" in
     ;;
 esac
 
+# X10-81（2026-10-05）：官方包自带的 scrcpy.png 是 scrcpy 机器人图标，而 scrcpy
+# 启动时会用**二进制同目录的 scrcpy.png** 设置窗口/Dock 图标（AppIcon.icns 反而不
+# 是生效渠道，真机 Dock 截图对照实验证实）。不覆盖它，镜像窗口图标就会显示机器人。
+ensure_app_icon() {
+  if [ -f "$REPO_ROOT/src-tauri/icons/icon.png" ]; then
+    cp -f "$REPO_ROOT/src-tauri/icons/icon.png" "$DEST/scrcpy.png"
+    echo "prepare-runtime: scrcpy.png replaced with app icon (X10-81)"
+  fi
+}
+
 if [ -d "$SRC" ]; then
   mkdir -p "$DEST"
   # 全量同步官方包内容（scrcpy、scrcpy-server、adb 及附带文件）。
   rm -rf "${DEST:?}"/*
   cp -R "$SRC"/. "$DEST"/
+  ensure_app_icon
   echo "prepare-runtime: copied runtime from $SRC to $DEST"
   exit 0
 fi
 
 # CI 打包作业会先行下载官方运行时放进 DEST：此时无需本地 .tools。
 if [ -f "$DEST/scrcpy" ] || [ -f "$DEST/scrcpy.exe" ]; then
-  echo "prepare-runtime: runtime already prepared at $DEST, skip copying"
+  # 官方包（或上一轮同步）里的 scrcpy.png 仍是机器人图，这里再覆盖一次兜底；
+  # CI workflow 通常已自行 cp 过，重复覆盖同一文件无副作用。
+  ensure_app_icon
+  echo "prepare-runtime: runtime already prepared at $DEST, icon ensured"
   exit 0
 fi
 
