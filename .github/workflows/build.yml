@@ -241,8 +241,22 @@ jobs:
           chmod +x src-tauri/resources/scrcpy/scrcpy src-tauri/resources/scrcpy/adb
           ls -la src-tauri/resources/scrcpy/
 
+      # X10-82：构建输出 tee 进日志文件。失败时上传原文——0.4.13-beta 的
+      # macos-x64 失败只有一行 "exit code 1" 注解，raw log 又需要仓库 admin
+      # 权限才能下载，排查被迫盲猜。有 artifact 后，失败日志立即可取。
       - name: 构建安装包
-        run: pnpm tauri build --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm tauri build --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/build-${{ matrix.label }}.log"
+
+      - name: 上传构建日志（失败诊断用）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.label }}
+          path: ${{ runner.temp }}/build-${{ matrix.label }}.log
+          if-no-files-found: ignore
 
       # A1-08：产物哈希清单 + 依赖清单（SBOM）随产物一起发布，
       # 供下载者核对与审计。
