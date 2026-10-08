@@ -847,4 +847,4 @@
 - [x] ✅ **X10-96 v0.4.19-beta 公私双仓库同步发版（2026-10-09 晨）**：用户拍板「公开+私有全部直接出 v0.4.19-beta 发版」。
   - **公开版内容**：X10-95 录制批次修复（优雅停止/托盘状态/保存目录，commit 7cf5868）首次进入 Release 渠道；本提交只做版本号 bump（package.json / tauri.conf.json / Cargo.toml / Cargo.lock / README / docs/compatibility-matrix.md 4 处 / site/index.html 21 处 / site/compatibility.html 6 处）+ `docs/releases/v0.4.19-beta.md` 发版说明。README 伴侣 App 口径由 0.3.0 更正为实际 0.3.2（build.gradle.kts versionName）。
   - **私有版同步**：MirrorDock-tools 同样 bump 0.4.19 + 发版说明（含 X10-94 点击器说明），tag 同名 `v0.4.19-beta`。
-  - **发版证据**：待 CI 完成后回填（run id / 资产数 / latest.json 四平台签名）。
+  - **发版证据（已核验，2026-10-09 07:35）**：tag `v0.4.19-beta` 已推远端、commit `86bd5b5`；CI run `37857794012` **success**；Release id `407339807` **draft=False、30 资产全齐**（7 安装包 + 伴侣 APK `MirrorDock-companion-0.4.19.apk` 4.29MB + 4 SHA256SUMS + 8 SBOM + updater 归档与签名）；`latest.json` **version=0.4.19**、pub_date=2026-10-08T23:24:55Z、四平台签名全非空（darwin-aarch64/darwin-x86_64/linux-x86_64/windows-x86_64 全 OK）。
