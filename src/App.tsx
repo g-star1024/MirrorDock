@@ -96,12 +96,20 @@ function findConnectedDevice(devices: Device[] | undefined, serial: string): Dev
       device.connections.some((connection) => connection.serial === serial),
   );
 }
+
+// X10-84：把「adb serial / 会话 serial / 无线端点」解析成桌面模式偏好的稳定键。
+// 有 physical_serial 用它（USB 与无线一致，重连不变）；解析不到则原样返回
+// （可能是已下线设备的历史 pref 键，保持可读）。这是 desktopPrefs 全链路唯一的键口径。
+export function desktopPrefKeyFor(devices: Device[] | undefined, serial: string | null): string | null {
+  if (!serial) return null;
+  const device = findConnectedDevice(devices, serial);
+  return device?.physical_serial ?? serial;
+}
 export function relativeTime(seconds: number) {
   if (!seconds) return "使用时间未知";
   const diff = Date.now() / 1000 - seconds;
   if (diff < 60) return "刚刚使用";
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前使用`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前使用`;
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前使用`;  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前使用`;
   const days = Math.floor(diff / 86400);
   return days === 1 ? "昨天使用" : `${days} 天前使用`;
 }
@@ -299,6 +307,12 @@ export type DesktopPrefDevice = {
   streaming: boolean;
   /** 该设备是否已有独立的桌面模式配置（用于列表上的"已配置"标记） */
   configured: boolean;
+  /**
+   * 桌面模式偏好的稳定键（X10-84）：physical_serial（ro.serialno），USB 与无线一致。
+   * 无线端点（ip:port / adb-xxx._adb-tls-connect._tcp）重连后会变，绝不能当 pref 键；
+   * 没有 physical_serial（未授权/离线残留）时退回 serial。
+   */
+  pref_key: string;
 };
 
 export function buildDesktopPrefDevices(input: {
@@ -347,13 +361,20 @@ export function buildDesktopPrefDevices(input: {
     });
   }
   const sessionSet = new Set(sessionSerials);
-  return [...byPhysical.values()].map((device) => ({
-    serial: device.serial,
-    label: labels[device.serial] ?? device.label,
-    state: device.state,
-    streaming: sessionSet.has(device.serial),
-    configured: Boolean(prefs[device.serial]),
-  }));
+  return [...byPhysical.values()].map((device) => {
+    // X10-84：pref 键一律用稳定 physical_serial；没有它才退回当前 serial。
+    // 无线端点会变，若用 serial 当键，启动时（adb serial）与设置时（归并键）
+    // 会对不上，desktop_app 丢失、--start-app 不下发（用户实测白屏根因）。
+    const prefKey = device.physical_serial ?? device.serial;
+    return {
+      serial: device.serial,
+      label: labels[device.serial] ?? device.label,
+      state: device.state,
+      streaming: sessionSet.has(device.serial) || device.connections.some((c) => sessionSet.has(c.serial)),
+      configured: Boolean(prefs[prefKey]),
+      pref_key: prefKey,
+    };
+  });
 }
 
 export function readDesktopPrefs(): Record<string, DesktopPref> {
@@ -955,6 +976,34 @@ function App() {
     });
   }
 
+  // X10-84：旧版本把 pref 存到了「无线端点 / adb serial」键下（随端点变化），
+  // 导致启动时查空、--start-app 丢失。这里在设备列表就绪后做一次性迁移：
+  // 凡是能映射到某台设备 physical_serial 的旧键，归并到稳定 physical_serial 键。
+  useEffect(() => {
+    const devices = check?.devices;
+    if (!devices || devices.length === 0) return;
+    setDesktopPrefs((prev) => {
+      let changed = false;
+      const next: Record<string, DesktopPref> = { ...prev };
+      for (const key of Object.keys(prev)) {
+        const stable = desktopPrefKeyFor(devices, key);
+        if (stable && stable !== key) {
+          // 目标键已有配置时保留目标（更新的设置优先），只删除旧键。
+          if (!(stable in next)) next[stable] = prev[key];
+          delete next[key];
+          changed = true;
+        }
+      }
+      if (changed) {
+        try { localStorage.setItem("mirrordock.desktopPrefs", JSON.stringify(next)); }
+        catch { /* 迁移保存失败不影响本次会话。 */ }
+      }
+      return changed ? next : prev;
+    });
+    // 仅在设备列表首次出现非空时迁移一次；desktopPrefs 由本 effect 内部函数式更新。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [check?.devices]);
+
   // 恢复默认设置时，各设备的桌面模式偏好一并清空——「默认」应意味着全部回到出厂值。
   function resetAllOptions() {
     updateOptions(defaultOptions);
@@ -999,8 +1048,9 @@ function App() {
     setApplyNotice(null);
     const targetSerial = settingsTargetSerial ?? session?.serial ?? null;
     // X10-71：桌面模式开关与虚拟屏应用按设备叠加——改其他设置时不会把这台
-    // 设备的桌面模式偏好冲掉，反之亦然。
-    const effective = composeOptionsWithDesktop(next, targetSerial ? desktopPrefs[targetSerial] ?? null : null);
+    // 设备的桌面模式偏好冲掉，反之亦然。X10-84：键统一为 physical_serial。
+    const prefKey = desktopPrefKeyFor(check?.devices, targetSerial);
+    const effective = composeOptionsWithDesktop(next, prefKey ? desktopPrefs[prefKey] ?? null : null);
     try {
       const result = await invoke<SessionUpdate>("update_session_options", {
         options: effective,
@@ -1253,7 +1303,9 @@ function App() {
     setApplyNotice(null);
     try {
       // X10-71：这台设备自己的桌面模式偏好（若有）叠加在全局设置之上。
-      const effective = composeOptionsWithDesktop(options, desktopPrefs[serial] ?? null);
+      // X10-84：pref 键统一为 physical_serial——serial 是无线端点会变，直接当键会查空。
+      const prefKey = desktopPrefKeyFor(check?.devices, serial);
+      const effective = composeOptionsWithDesktop(options, prefKey ? desktopPrefs[prefKey] ?? null : null);
       await invoke("start_mirroring", {
         serial,
         options: effective,
@@ -1877,7 +1929,9 @@ function App() {
     prefs: desktopPrefs,
   });
   const settingsDesktopTarget = desktopTargetSerial ?? sessionSerial ?? readySerial ?? null;
-  const targetDesktopPref = settingsDesktopTarget ? desktopPrefs[settingsDesktopTarget] ?? null : null;
+  // X10-84：读取这台设备的 pref 时统一换算成稳定 physical_serial 键。
+  const settingsDesktopPrefKey = desktopPrefKeyFor(check?.devices, settingsDesktopTarget);
+  const targetDesktopPref = settingsDesktopPrefKey ? desktopPrefs[settingsDesktopPrefKey] ?? null : null;
   // 有设备归属时，缺省值取全局 options（首次进入该设备的编辑态），此后一律以
   // 该设备自己的 pref 为准 —— 打开这台设备的桌面模式不会连带改到别的设备。
   const shownDesktopMode = targetDesktopPref ? targetDesktopPref.desktop_mode : options.desktop_mode;
@@ -3223,11 +3277,11 @@ function App() {
                       <select
                         className="setting-control"
                         aria-label="桌面模式设置目标设备"
-                        value={settingsDesktopTarget ?? ""}
+                        value={settingsDesktopPrefKey ?? ""}
                         onChange={e => setDesktopTargetSerial(e.target.value || null)}
                       >
                         {desktopPrefDevices.map((device) => (
-                          <option key={device.serial} value={device.serial}>
+                          <option key={device.pref_key} value={device.pref_key}>
                             {device.label}（{device.state === "ready" ? "已就绪" : device.state === "unauthorized" ? "未授权" : device.state === "offline" ? "离线" : "未知"}{device.streaming ? " · 镜像中" : ""}{device.configured ? " · 已设置桌面模式" : ""}）
                           </option>
                         ))}
@@ -3235,15 +3289,15 @@ function App() {
                     </div>
                     <div className="device-pref-list" role="list" aria-label="各设备桌面模式状态">
                       {desktopPrefDevices.map((device) => {
-                        const pref = desktopPrefs[device.serial];
+                        const pref = desktopPrefs[device.pref_key];
                         const on = pref ? pref.desktop_mode : options.desktop_mode;
                         return (
                           <button
                             type="button"
                             role="listitem"
-                            key={device.serial}
-                            className={`device-pref-item${device.serial === settingsDesktopTarget ? " active" : ""}`}
-                            onClick={() => setDesktopTargetSerial(device.serial)}
+                            key={device.pref_key}
+                            className={`device-pref-item${device.pref_key === settingsDesktopPrefKey ? " active" : ""}`}
+                            onClick={() => setDesktopTargetSerial(device.pref_key)}
                           >
                             <span className="device-pref-name">
                               {device.label}
@@ -3276,7 +3330,8 @@ function App() {
                     const checked = e.target.checked;
                     if (settingsDesktopTarget) {
                       // 这台设备自己的桌面模式偏好，不影响其他设备与全局默认。
-                      updateDesktopPref(settingsDesktopTarget, { desktop_mode: checked });
+                      // X10-84：写入键统一为 physical_serial。
+                      if (settingsDesktopPrefKey) updateDesktopPref(settingsDesktopPrefKey, { desktop_mode: checked });
                       if (checked && options.camera_source) updateOptions({ ...options, camera_source: false });
                     } else {
                       updateOptions({ ...options, desktop_mode: checked, camera_source: checked ? false : options.camera_source });
@@ -3302,7 +3357,7 @@ function App() {
                       onChange={e => {
                         const pkg = e.target.value.trim();
                         const next = pkg ? pkg : null;
-                        if (settingsDesktopTarget) updateDesktopPref(settingsDesktopTarget, { desktop_mode: true, desktop_app: next });
+                        if (settingsDesktopTarget && settingsDesktopPrefKey) updateDesktopPref(settingsDesktopPrefKey, { desktop_mode: true, desktop_app: next });
                         else updateOptions({ ...options, desktop_app: next });
                       }}
                     />

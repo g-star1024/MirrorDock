@@ -476,9 +476,24 @@ describe("buildDesktopPrefDevices", () => {
     const devices = buildDesktopPrefDevices({
       adbDevices: [adbDevice("usb-1", "PHYS1", "ready", "Pixel 8")],
       sessionSerials: ["usb-1"],
-      prefs: { "usb-1": { desktop_mode: true, desktop_app: null } },
+      // X10-84：pref 键统一为 physical_serial；这里存到 PHYS1 才会被识别为已配置。
+      prefs: { PHYS1: { desktop_mode: true, desktop_app: null } },
     });
-    expect(devices[0]).toMatchObject({ streaming: true, configured: true });
+    expect(devices[0]).toMatchObject({ streaming: true, configured: true, pref_key: "PHYS1" });
+  });
+
+  it("uses_physical_serial_as_pref_key_regardless_of_endpoint", () => {
+    // X10-84 回归：无线端点（adb-xxx._adb-tls-connect._tcp）会变，
+    // 但 pref 必须按稳定 physical_serial 命中——这是「选了应用仍白屏」的根因修复。
+    const wireless = adbDevice("adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp", "qc8d8tonbmmzm7qs", "ready", "Redmi");
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [wireless],
+      sessionSerials: ["adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp"],
+      prefs: { qc8d8tonbmmzm7qs: { desktop_mode: true, desktop_app: "com.netease.dhxy.qihoo" } },
+    });
+    expect(devices[0].pref_key).toBe("qc8d8tonbmmzm7qs");
+    expect(devices[0].configured).toBe(true);
+    expect(devices[0].streaming).toBe(true);
   });
 
   it("returns_empty_when_no_device_is_known", () => {
