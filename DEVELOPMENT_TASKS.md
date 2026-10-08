@@ -718,6 +718,7 @@
   - **未验证面（已闭环，2026-10-08 真机验证通过）**：真机「从托盘点连接设备 → 进入桌面模式并带上 `--start-app=<用户配的应用>`」已由用户实测确认没问题；迁移 effect 已把 localStorage 里的大话西游配置写进后端 `desktop-prefs.json`。
   - **教训（与 X10-83 同源）**：这是**第二次**「同一偏好，一处改另一处不生效」——X10-83 是前端两处键口径不一致，X10-90 是**前后端两个持久域**。凡是「按设备存的偏好」，只要有一个入口（托盘/快捷键/伴侣端/未来的自动重连）不经过前端 webview，就必须存在后端能读的地方。**判断标准：新加入口时先问「它读得到 localStorage 吗」，读不到就不能把状态只放 webview。**
 - **版本**：X10-90，版本 0.4.16 → **0.4.17**。
+- **v0.4.17-beta 发版证据（已核验，2026-10-08 15:00）**：tag `v0.4.17-beta` 已推远端、commit `d53610a`；CI run `37739066537` **success**，7 job 全绿（验证/四平台打包/伴侣 APK/发布）；Release **draft=False、30 资产全齐**（四平台 dmg/exe/msi/AppImage/deb/rpm + 对应 .sig + latest.json + SHA256SUMS×4 + sbom-cargo/npm×8 + `MirrorDock-companion-0.4.17.apk`）；`latest.json` **version=0.4.17**、四平台签名全非空（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）。真机「托盘连接设备→桌面模式」已由用户实测通过。
 
 
   - **CI 波折与发版证据（已核验）**：首次 run `37284280561` 仅 macos-x64「构建安装包」失败（exit 1 无注解，raw log 需 admin 403）——**未盲猜**，按 10-03 教训先建能力（X10-82：build.yml 构建步骤 tee + 失败上传 `build-log-<label>` artifact，commit `7c43f9e`），重推 tag 重跑。重跑 run `37287371051` **success**，Release id `403545372`，**30 资产全齐**；`latest.json` version=0.4.13、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.13.apk` 在列。Mac 已换装 0.4.13（旧版备份 `/Applications/MirrorDock.app.old-0.4.12`），图标已核验。site/index.html 已同步。**需用户重启客户端 + 重启镜像会话生效**（Dock 图标跟随先注册进程）。
