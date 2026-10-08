@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "mirrordock"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.2.17",
