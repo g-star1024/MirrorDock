@@ -705,6 +705,12 @@
 - [x] ✅ **X10-88 设备自定义备注名（2026-10-08；用户报「同型号手机显示一样的设备名，支持自定义备注」）**
   - **修法**：新增 `readDeviceNicknames`/`writeDeviceNickname`/`deviceDisplayName`——备注以稳定 physical_serial 为键存 `localStorage.mirrordock.deviceNicknames`；`displayLabels` 包一层「备注覆盖型号标签」；设备卡名称旁加 ✎ 编辑按钮（hover 显现）+ 内联编辑框（Enter/保存、Esc 取消、清除回落型号名）。回归测试 `device nicknames (X10-88)` 2 条。
 - **版本**：以上 X10-84~88 五项，版本 0.4.14 → **0.4.15**。
+- [x] ✅ **X10-89 Mac 本地启动卡死——0.4.15 回归根因修复（2026-10-08；用户报「mac 本地启动卡死了」）**
+  - **根因（sample 采样实证，非猜测）**：卡死时 `sample` 主进程 1671 帧全卡在 `nanosleep`/`__semwait_signal`——主线程在处理 tauri URI scheme（IPC）时跑了一个 `try_wait + sleep(30ms)` 忙等循环。源自我 X10-84 加的 `output_with_timeout`：tauri 同步命令**跑在主线程**，`check_adb_devices` 一次 `adb devices` + 逐台 `getprop`，adb 慢时主线程忙等最多 8s；前端启动连发多命令全排队 → 整窗冻结。**本意防 Windows 卡死的超时机制，因放错线程在 Mac 上制造了卡死。**
+  - **修法（方案 1，用户拍板）**：① `output_with_timeout` 重写为「子线程跑 `spawn+wait_with_output` + channel 传 Output + 调用线程单次 `recv_timeout(8s)`」——主线程 park 不烧 CPU；② `check_adb_devices`/`device_lock_report`/`probe_pin_pad_state` 三个高频轮询命令改 `async fn`（tauri 2 async 命令体跑工作线程池，主线程/IPC 立即释放）；③ 抽出 `check_adb_devices_sync` 供 async 命令与内部复用；④ 保留 X10-84 事件驱动 watcher 与 X10-85~88 全部 UI 成果。`mirror_sessions` 只读内存不跑 adb，未动。
+  - **v0.4.15 发版链已熔断**：远端 tag `v0.4.15-beta` 已删、Release 未生成、CI run 跑完无 tag 可发布。
+  - **验证**：`cargo check` / `clippy` 0 warning / `cargo test --lib` 194 passed。**本次必须本地打包 + Mac 实机验证启动不卡后才发版**（0.4.15 未验启动即发版的教训）。
+  - **教训**：给「跑在主线程的同步命令」加超时时，**绝不能在该线程里 sleep 轮询**——超时等待必须放进独立线程或把命令改 async。sample/Instruments 采样比日志更能定位主线程卡死。
 
   - **CI 波折与发版证据（已核验）**：首次 run `37284280561` 仅 macos-x64「构建安装包」失败（exit 1 无注解，raw log 需 admin 403）——**未盲猜**，按 10-03 教训先建能力（X10-82：build.yml 构建步骤 tee + 失败上传 `build-log-<label>` artifact，commit `7c43f9e`），重推 tag 重跑。重跑 run `37287371051` **success**，Release id `403545372`，**30 资产全齐**；`latest.json` version=0.4.13、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.13.apk` 在列。Mac 已换装 0.4.13（旧版备份 `/Applications/MirrorDock.app.old-0.4.12`），图标已核验。site/index.html 已同步。**需用户重启客户端 + 重启镜像会话生效**（Dock 图标跟随先注册进程）。
 - - [x] ✅ **X10-80 桌面模式虚拟屏白屏根因定性 + 落地核验（2026-10-03 19:30；用户报「切 2560 白屏，切回 1920 依旧」）**

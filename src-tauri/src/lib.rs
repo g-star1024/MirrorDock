@@ -803,29 +803,36 @@ impl SystemAdbRuntime {
     /// 带超时执行 adb：Windows 上 adb 对掉线/未授权设备可能长时间不返回，
     /// 无超时会把 Tauri 命令线程占死 → 前端「未响应」（X10-84）。
     /// 超过 `ADB_CALL_TIMEOUT` 即强杀子进程并按超时错误返回，由上层按「设备暂时不可用」处理。
+    /// 带超时执行 adb 并取回完整输出。
+    ///
+    /// 不能在调用线程里 `try_wait + sleep` 轮询：tauri 同步命令跑在主线程，
+    /// 忙等循环会把 UI 冻住（0.4.15 实测 Mac 启动即卡死的回归根因）。
+    /// 这里把整条 `spawn + wait_with_output` 放进独立线程，调用线程只做
+    /// 一次 `recv_timeout` 阻塞等待——主线程被 park（不烧 CPU），超时即返回。
+    /// 超时的子进程由子线程负责 kill 回收，主线程不碰。
     fn output_with_timeout<S: AsRef<std::ffi::OsStr>>(
         args: &[S],
     ) -> Result<std::process::Output, std::io::Error> {
-        let mut child = quiet_command(adb_binary())
-            .args(args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null())
-            .spawn()?;
-        let deadline = std::time::Instant::now() + ADB_CALL_TIMEOUT;
-        loop {
-            match child.try_wait()? {
-                Some(_) => return child.wait_with_output(),
-                None if std::time::Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "adb 调用超时（设备可能掉线或未授权）",
-                    ));
-                }
-                None => std::thread::sleep(Duration::from_millis(30)),
-            }
+        let owned: Vec<std::ffi::OsString> = args.iter().map(|a| a.as_ref().to_os_string()).collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = quiet_command(adb_binary())
+                .args(&owned)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .stdin(std::process::Stdio::null())
+                .spawn()
+                .and_then(|child| child.wait_with_output());
+            // 发送失败只意味着调用线程已超时离开，丢弃即可。
+            let _ = tx.send(result);
+        });
+        match rx.recv_timeout(ADB_CALL_TIMEOUT) {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "adb 调用超时（设备可能掉线或未授权）",
+            )),
         }
     }
 }
@@ -5138,11 +5145,24 @@ fn probe_device_capabilities_with(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn check_adb_devices(
-    runtimes: State<AppRuntimes>,
-    sessions: State<SessionStore>,
-    log: State<DiagnosticsLog>,
+async fn check_adb_devices(
+    runtimes: State<'_, AppRuntimes>,
+    sessions: State<'_, SessionStore>,
+    log: State<'_, DiagnosticsLog>,
     // 轮询调用传 Some(true)：只回传设备状态，不写诊断日志，避免每几秒刷爆诊断缓冲。
+    silent: Option<bool>,
+) -> Result<AdbCheck, AppError> {
+    // X10-89：改 async 后命令体跑在 tauri 工作线程，主线程/IPC 立即释放。
+    // 内部 adb 调用（已带 ADB_CALL_TIMEOUT 子线程超时）即使慢，也只占工作线程，
+    // 不再冻结 UI（0.4.15 把同步忙等放主线程导致 Mac 启动卡死的回归修复）。
+    Ok(check_adb_devices_sync(&runtimes, &sessions, &log, silent))
+}
+
+/// `check_adb_devices` 的同步实现，抽出来供 async 命令与内部复用。
+fn check_adb_devices_sync(
+    runtimes: &AppRuntimes,
+    sessions: &SessionStore,
+    log: &DiagnosticsLog,
     silent: Option<bool>,
 ) -> AdbCheck {
     let scrcpy_available = runtimes.mirror.is_available();
@@ -6401,10 +6421,11 @@ fn open_keyboard_settings(runtimes: State<AppRuntimes>, serial: String) -> Resul
 }
 
 #[tauri::command]
-fn device_lock_report(
-    runtimes: State<AppRuntimes>,
+async fn device_lock_report(
+    runtimes: State<'_, AppRuntimes>,
     serial: String,
 ) -> Result<DeviceLockReport, AppError> {
+    // X10-89：async 使命令体跑在 tauri 工作线程，adb 调用（dumpsys power）不再阻塞主线程。
     lock_report_with(&runtimes, serial)
 }
 
@@ -6414,10 +6435,11 @@ fn device_lock_report(
 /// 只读状态与字节数，不保存、不回传任何屏幕像素。前端据此在锁屏面板显示
 /// 「请在手机上输入密码解锁」的提示，密码页退出后自动消失。
 #[tauri::command]
-fn probe_pin_pad_state(
-    runtimes: State<AppRuntimes>,
+async fn probe_pin_pad_state(
+    runtimes: State<'_, AppRuntimes>,
     serial: String,
 ) -> Result<PinPadProbe, AppError> {
+    // X10-89：async 使命令体跑在 tauri 工作线程，adb 调用（screencap/dumpsys）不再阻塞主线程。
     pin_pad_probe_with(&runtimes, serial)
 }
 
