@@ -21,6 +21,11 @@ const PROCESS_REAP_TIMEOUT: Duration = Duration::from_millis(1000);
 /// 超时按失败处理，回退到 `pm list packages`（X10-71）。
 const LIST_APPS_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// 单次 adb 子进程调用的最长等待时间（X10-84）。
+/// Windows 上 adb 对掉线/未授权设备可能长时间不返回，必须兜底超时，
+/// 否则 Tauri 命令线程被占死 → 前端「未响应」。
+const ADB_CALL_TIMEOUT: Duration = Duration::from_secs(8);
+
 /// MVP 只承诺 Android 8.0（API 26）及以上的画面与控制。
 const MIN_SDK_FOR_MIRRORING: u32 = 26;
 
@@ -768,7 +773,7 @@ impl SystemAdbRuntime {
     /// 临时 `String`，无法借用成 `&str` 塞进 `&[&str]`。与其在调用点
     /// `leak` 或克隆一份，不如让这条路径显式拥有参数。
     fn run_owned(args: &[String]) -> Result<(), std::io::Error> {
-        let output = quiet_command(adb_binary()).args(args).output()?;
+        let output = Self::output_with_timeout(args)?;
         if output.status.success() {
             Ok(())
         } else {
@@ -777,7 +782,7 @@ impl SystemAdbRuntime {
     }
 
     fn run(args: &[&str]) -> Result<(), std::io::Error> {
-        let output = quiet_command(adb_binary()).args(args).output()?;
+        let output = Self::output_with_timeout(args)?;
         if output.status.success() {
             Ok(())
         } else {
@@ -787,18 +792,47 @@ impl SystemAdbRuntime {
 
     /// 读取 `adb` 的 stdout。同样使用固定参数直接调用，不做任何 shell 拼接或插值。
     fn capture(args: &[&str]) -> Result<String, std::io::Error> {
-        let output = quiet_command(adb_binary()).args(args).output()?;
+        let output = Self::output_with_timeout(args)?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
             Err(std::io::Error::other("adb returned a failing status"))
         }
     }
+
+    /// 带超时执行 adb：Windows 上 adb 对掉线/未授权设备可能长时间不返回，
+    /// 无超时会把 Tauri 命令线程占死 → 前端「未响应」（X10-84）。
+    /// 超过 `ADB_CALL_TIMEOUT` 即强杀子进程并按超时错误返回，由上层按「设备暂时不可用」处理。
+    fn output_with_timeout<S: AsRef<std::ffi::OsStr>>(
+        args: &[S],
+    ) -> Result<std::process::Output, std::io::Error> {
+        let mut child = quiet_command(adb_binary())
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null())
+            .spawn()?;
+        let deadline = std::time::Instant::now() + ADB_CALL_TIMEOUT;
+        loop {
+            match child.try_wait()? {
+                Some(_) => return child.wait_with_output(),
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "adb 调用超时（设备可能掉线或未授权）",
+                    ));
+                }
+                None => std::thread::sleep(Duration::from_millis(30)),
+            }
+        }
+    }
 }
 
 impl AdbRuntime for SystemAdbRuntime {
     fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error> {
-        let output = quiet_command(adb_binary()).args(["devices", "-l"]).output()?;
+        let output = Self::output_with_timeout(&["devices", "-l"])?;
         if output.status.success() {
             Ok(parse_adb_devices(&String::from_utf8_lossy(&output.stdout)))
         } else {
@@ -808,9 +842,7 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn device_properties(&self, serial: &str) -> Result<String, std::io::Error> {
         // 固定参数直接调用：serial 作为单个 argv 传入，不做任何 shell 拼接或插值。
-        let output = quiet_command(adb_binary())
-            .args(["-s", serial, "shell", "getprop"])
-            .output()?;
+        let output = Self::output_with_timeout(&["-s", serial, "shell", "getprop"])?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
@@ -7415,6 +7447,38 @@ pub fn run() {
             // 上次运行若因崩溃残留了「临时切换的输入源」账本，这里恢复原输入法。
             if let Ok(path) = input_source_backup_path(app.handle()) {
                 restore_persisted_input_source(app.handle(), &path);
+            }
+            // X10-84：后端设备状态 watcher——替代前端高频轮询 check_adb_devices。
+            // 前端不再定时 invoke，而是订阅 devices-changed 事件；watcher 仅在设备
+            // 集合变化时 emit，无变化只静默循环（adb 调用已带 ADB_CALL_TIMEOUT 超时，
+            // 卡死兜底在上层，不再拖死 UI）。
+            {
+                let watch_handle = app.handle().clone();
+                let runtimes = AppRuntimes::system();
+                std::thread::spawn(move || {
+                    let mut last_fingerprint = String::new();
+                    loop {
+                        let devices = match runtimes.adb.list_devices() {
+                            Ok(devices) => devices,
+                            Err(_) => {
+                                std::thread::sleep(Duration::from_secs(3));
+                                continue;
+                            }
+                        };
+                        // 指纹只含序列号+状态：设备插拔/授权变化即触发，普通属性不扰动。
+                        let mut fingerprint: Vec<String> = devices
+                            .iter()
+                            .map(|device| format!("{}:{:?}", device.serial, device.state))
+                            .collect();
+                        fingerprint.sort();
+                        let fingerprint = fingerprint.join("|");
+                        if fingerprint != last_fingerprint {
+                            last_fingerprint = fingerprint;
+                            let _ = watch_handle.emit("devices-changed", ());
+                        }
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                });
             }
             // 伴侣端上行事件转发（X10-60/X10-66）：发送区新文件 / 崩溃堆栈 /
             // 手机通知 → 前端。通知内容只进前端内存（不落盘、不进日志）。

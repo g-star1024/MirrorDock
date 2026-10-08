@@ -688,6 +688,24 @@
   - **根因（对照实验实证）**：scrcpy 用**二进制同目录的 `scrcpy.png`** 设置窗口/Dock 图标（AppIcon.icns 不是生效渠道；killall Dock 前后截图对照：替换 png 后 Dock 图标由机器人翻转为 MirrorDock 圆环）。10-03 手动 `cp icon.png → resources/scrcpy/scrcpy.png` 后，`pnpm tauri build` 的 `beforeBuildCommand` 跑 `scripts/prepare-runtime.sh`，其 `rm -rf resources/scrcpy/*` + 从 `.tools/` 全量复制把图标**覆盖回官方机器人图**——本地构建的 0.4.12 带病出厂，CI 构建反而正常（无 .tools，走「已准备好」分支）。
   - **修法**：`prepare-runtime.sh` 两个分支（全量同步 / 已准备好）都追加 `ensure_app_icon()`——用 `src-tauri/icons/icon.png` 强制覆盖 `$DEST/scrcpy.png`，单一事实源，本地构建永不再回退。
   - **教训**：被 gitignore 的资源目录 + 构建时自动重组 = 手动补的文件必然被吃掉；修资源必须修**生成器**，不能修产物。
+- [x] ✅ **X10-84 Windows 频繁「未响应」卡死——后端异步化 + 事件驱动替代前端轮询（2026-10-08；用户报「Windows 上总卡死、运行不流畅，看看怎么优化」，拍板方案 3 彻底解决）**
+  - **根因（代码走查 + 截图实证）**：用户两张截图都是「无镜像会话的纯界面」就 `(未响应)`——非镜像渲染问题，是主进程被阻塞。前端每 1-2s 轮询 `check_adb_devices`（连接页）+ `probe_pin_pad_state` + `device_lock_report`（5s 各一次）；后端 49 个 Tauri 命令全同步，内部 `Command::output()` 阻塞等 adb 子进程退出，**无超时**。Windows 上 adb 对掉线/未授权设备 `devices -l`、`shell getprop` 常长时间不返回 → 命令线程占满 → 后续 invoke 全排队 → UI 冻结。Mac 上 adb 返回快不显现，Windows 被放大成整窗未响应。
+  - **修法（方案 3：彻底）**：① `SystemAdbRuntime::output_with_timeout()`——所有 adb 调用统一 `ADB_CALL_TIMEOUT=8s` 兜底（try_wait 轮询 + 超时强杀，TimedOut 错误上层按「设备暂时不可用」处理），`run`/`run_owned`/`capture`/`list_devices`/`device_properties` 全走它；② 后端设备 watcher——`.setup` 里起常驻线程，每 2s `list_devices()`，仅设备集合（serial+state 指纹）变化时 `emit("devices-changed")`；③ 前端连接页 5s `setInterval` 轮询**删除**，改为订阅 `devices-changed` 事件 + 首屏主动拉一次；④ `probe_pin_pad_state` / `device_lock_report` 轮询 5s→8s 降频。
+  - **验证**：`cargo check` / `cargo clippy` 0 warning / `cargo test --lib` 194 passed；`pnpm tsc --noEmit` 0 error；`pnpm vitest run` 77→80 passed。
+  - **未验证面（如实标记）**：Windows 真机的卡死消除效果需用户在 Windows 上实测确认（沙箱无 Windows）；超时阈值 8s 是经验值，若 Windows adb 正常调用就接近此值可能误杀，待真机反馈调优。
+- [x] ✅ **X10-85 首页连接模块去掉「最近使用过的设备」展示（2026-10-08；用户拍板）**
+  - **修法**：首页移除最近设备列表 UI（含收藏排序 / 重新连接 / 移除记录按钮），仅保留 `recentMessage` 操作反馈条。后端 `list_recent_devices` 等命令**保留**——无线重连、设备记录仍依赖该数据，仅移除 UI 展示层。清理 `recentDevices` state、`forgetRecentDevice`/`clearRecentDevices` 死代码。
+- [x] ✅ **X10-86 自绘下拉框替换原生 select（2026-10-08；用户报「设置里的下拉框跟整体客户端不搭」+ 截图）**
+  - **根因**：原生 `<select>` 各平台渲染差异大（Windows 灰底黑框系统样式），与轻主题圆角设计不搭。
+  - **修法**：新增 `src/AppSelect.tsx`——button + 浮层列表自绘下拉（点击展开/点选即合/Esc 关/点外关/↑↓高亮/Enter 选中，含 `listbox`/`option` ARIA）；`App.css` 加 `.app-select*` 样式（白底 10px 圆角、`#2e6be6` 聚焦环、旋转 caret、选中 ✓）。替换全部 6 处原生 select：应用目标设备 / 画质 / 帧率上限 / 显示方向 / 快捷键修饰键 / 桌面模式目标设备。更新 `rotation_defaults_to_following` 测试断言（原生 value → 自绘 button 文案）。
+- [x] ✅ **X10-87 设备识别合并修复——别名归一化 + pref 归并（2026-10-08；用户报「只连过 2 台设备，却显示给好多设备开过桌面模式」+ 截图 5 条）**
+  - **根因**：历史 pref 以「无线端点（`192.168.0.165:xxxxx`）/ mDNS 端点（`adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp`）/ 短物理 id（`79j7kn9tkjt8rwss`）」等不同键各自残留，X10-84 迁移只能反查**当前在线**设备，离线旧端点键仍并列显示多行。
+  - **修法**：新增 `normalizeDeviceIdentityKey()`——`adb-<physical>-<随机>._adb-tls-connect._tcp` 直接提取物理 id；`desktopPrefKeyFor` 在设备离线时回落归一化；迁移 effect 从「仅设备首次非空跑一次」改为「设备列表每次变化都重跑 + 归一化双管齐下」，同一物理设备多键合并为一条；`buildDesktopPrefDevices` 的 pref 补充循环先归一化再去重。回归测试 `merges_mdns_endpoint_and_short_physical_id_into_one_row`。
+  - **边界（如实标记）**：`ip:port` 形态端点不含物理 id，本地无法归并——靠设备上线时反查 physical 后清掉；彻底清干净需设备连一次。
+- [x] ✅ **X10-88 设备自定义备注名（2026-10-08；用户报「同型号手机显示一样的设备名，支持自定义备注」）**
+  - **修法**：新增 `readDeviceNicknames`/`writeDeviceNickname`/`deviceDisplayName`——备注以稳定 physical_serial 为键存 `localStorage.mirrordock.deviceNicknames`；`displayLabels` 包一层「备注覆盖型号标签」；设备卡名称旁加 ✎ 编辑按钮（hover 显现）+ 内联编辑框（Enter/保存、Esc 取消、清除回落型号名）。回归测试 `device nicknames (X10-88)` 2 条。
+- **版本**：以上 X10-84~88 五项，版本 0.4.14 → **0.4.15**。
+
   - **CI 波折与发版证据（已核验）**：首次 run `37284280561` 仅 macos-x64「构建安装包」失败（exit 1 无注解，raw log 需 admin 403）——**未盲猜**，按 10-03 教训先建能力（X10-82：build.yml 构建步骤 tee + 失败上传 `build-log-<label>` artifact，commit `7c43f9e`），重推 tag 重跑。重跑 run `37287371051` **success**，Release id `403545372`，**30 资产全齐**；`latest.json` version=0.4.13、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.13.apk` 在列。Mac 已换装 0.4.13（旧版备份 `/Applications/MirrorDock.app.old-0.4.12`），图标已核验。site/index.html 已同步。**需用户重启客户端 + 重启镜像会话生效**（Dock 图标跟随先注册进程）。
 - - [x] ✅ **X10-80 桌面模式虚拟屏白屏根因定性 + 落地核验（2026-10-03 19:30；用户报「切 2560 白屏，切回 1920 依旧」）**
   - **根因（全链路实证，非推断）**：白屏与画质无关。逐层排除：设备编码器在 1080×2400@16Mbps 正常出流（screenrecord 实测 level 5.1）；手动 scrcpy 1920/2560 普通镜像画面清晰（真窗口截图为证）；bundle 完整、签名有效。**真正的根因**：用户设备开了桌面模式 + `--start-app=com.netease.dhxy.qihoo`（大话西游），虚拟屏创建成功（dumpsys 实证 id=84 状态 ON，系统设置可完整渲染其上），但**网易系游戏的 SDK 跳板 Activity（ProtocolLauncher）在虚拟屏跑完即被移出**（WindowManager removeChildTask 实锤），真游戏 Activity 从未出现，MIUI SmartPower 把进程移入后台休眠 ⇒ 虚拟屏无内容 ⇒ 流传输的内容本身就是白的。切画质只是触发会话重启，纯属"背锅"。

@@ -47,6 +47,7 @@ import App, {
   lockTag,
   notificationTime,
   readDesktopPrefs,
+  readDeviceNicknames,
   readOptions,
   readShortcuts,
   recordingFileName,
@@ -55,6 +56,7 @@ import App, {
   sessionShortcutKeys,
   sessionStatus,
   supportText,
+  writeDeviceNickname,
   type DeviceCapabilities,
   type DeviceLockReport,
   type MirrorSession,
@@ -500,6 +502,38 @@ describe("buildDesktopPrefDevices", () => {
     // 空列表是"回落全局默认"的唯一合法条件，UI 依赖它决定是否显示设备清单。
     expect(buildDesktopPrefDevices({ adbDevices: [] })).toEqual([]);
   });
+
+  it("merges_mdns_endpoint_and_short_physical_id_into_one_row", () => {
+    // X10-87 回归：用户只连过 2 台设备，桌面模式列表却显示 5 条——
+    // 同一物理设备的 mDNS 端点（adb-xxx-..._tcp）与短物理 id 被当成两台。
+    // 归一化后必须合并为一行。
+    const devices = buildDesktopPrefDevices({
+      adbDevices: [],
+      prefs: {
+        "79j7kn9tkjt8rwss": { desktop_mode: true, desktop_app: null },
+        "adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp": { desktop_mode: true, desktop_app: null },
+      },
+    });
+    // 两个键同属一台物理设备 → 只应有一行。
+    expect(devices).toHaveLength(1);
+    expect(devices[0].pref_key).toBe("79j7kn9tkjt8rwss");
+  });
+});
+
+describe("device nicknames (X10-88)", () => {
+  it("stores_and_clears_nicknames_by_physical_key", () => {
+    localStorage.removeItem("mirrordock.deviceNicknames");
+    let nicknames = writeDeviceNickname("PHYS1", "我的主力机");
+    expect(nicknames["PHYS1"]).toBe("我的主力机");
+    // 空串 = 清除备注，回落到型号名。
+    nicknames = writeDeviceNickname("PHYS1", "   ");
+    expect(nicknames["PHYS1"]).toBeUndefined();
+  });
+
+  it("reads_back_persisted_nicknames", () => {
+    localStorage.setItem("mirrordock.deviceNicknames", JSON.stringify({ PHYS2: "备用机" }));
+    expect(readDeviceNicknames()["PHYS2"]).toBe("备用机");
+  });
 });
 
 describe("App rendering", () => {
@@ -747,9 +781,9 @@ describe("shortcuts and rotation", () => {
 
   it("rotation_defaults_to_following_the_device_instead_of_locking", async () => {
     render(<App />);
-    const rotationSelect = await screen.findByLabelText(/显示方向/);
-    expect(rotationSelect).toHaveValue("0");
-    // 「自动（跟随手机）」必须是默认选项，锁定角度只能由用户显式选择。
+    // X10-86 后是自绘下拉（button + 浮层），无原生 value；断言默认选中项文案。
+    const rotationSelect = await screen.findByRole("button", { name: /显示方向/ });
+    // 「自动（跟随手机）」必须是默认选中项，锁定角度只能由用户显式选择。
     expect(rotationSelect).toHaveTextContent("自动（跟随手机）");
   });
 });

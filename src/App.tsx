@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { AppSelect } from "./AppSelect";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -103,7 +104,52 @@ function findConnectedDevice(devices: Device[] | undefined, serial: string): Dev
 export function desktopPrefKeyFor(devices: Device[] | undefined, serial: string | null): string | null {
   if (!serial) return null;
   const device = findConnectedDevice(devices, serial);
-  return device?.physical_serial ?? serial;
+  if (device?.physical_serial) return device.physical_serial;
+  return normalizeDeviceIdentityKey(serial);
+}
+
+// X10-87：把「adb 无线端点 / mDNS 端点」归一化成物理序列号。
+// 形态：`adb-<physical>-<随机>._adb-tls-connect._tcp` → `<physical>`；
+// `192.168.x.x:port` 这类 ip:port 端点不含物理 id，无法本地归并（留给设备在线时反查）。
+// 其他（短物理 id / USB serial / 型号名）原样返回。
+export function normalizeDeviceIdentityKey(key: string): string {
+  const mdns = key.match(/^adb-([a-z0-9]+)-[a-z0-9]+\._adb-tls-connect\._tcp$/i);
+  if (mdns) return mdns[1];
+  return key;
+}
+
+// X10-88：设备自定义备注。键用稳定 physical_serial（与桌面模式 pref 同口径），
+// 无线/USB 端点怎么变都指向同一条备注。空串视为「清除备注」，回落到型号名。
+const DEVICE_NICKNAMES_KEY = "mirrordock.deviceNicknames";
+export function readDeviceNicknames(): Record<string, string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(DEVICE_NICKNAMES_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result: Record<string, string> = {};
+    for (const [key, nickname] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof nickname === "string" && nickname.trim()) result[key] = nickname.trim();
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+export function writeDeviceNickname(key: string, nickname: string): Record<string, string> {
+  const current = readDeviceNicknames();
+  const trimmed = nickname.trim();
+  if (trimmed) current[key] = trimmed;
+  else delete current[key];
+  try { localStorage.setItem(DEVICE_NICKNAMES_KEY, JSON.stringify(current)); } catch { /* 存储不可用时本次会话仍生效 */ }
+  return current;
+}
+// 设备显示名 = 自定义备注 > （同名去重后的）型号标签。备注以 physical_serial 为键。
+export function deviceDisplayName(
+  device: { serial: string; label: string; physical_serial: string | null },
+  nicknames: Record<string, string>,
+  fallbackLabel: string,
+): string {
+  const key = device.physical_serial ?? device.serial;
+  return nicknames[key] ?? fallbackLabel;
 }
 export function relativeTime(seconds: number) {
   if (!seconds) return "使用时间未知";
@@ -349,14 +395,17 @@ export function buildDesktopPrefDevices(input: {
     });
   }
   // 已有偏好的设备若不在 adb 列表也补进来（配置持久化在本地，设备可能长期未插）。
+  // X10-87：pref 键先归一化——同一物理设备的 mDNS 端点/短物理 id 归并为一行，
+  // 避免「adb-xxx-..._tcp」和「xxx」并列出现两条（用户实测一台设备显示多条）。
   for (const serial of Object.keys(prefs)) {
-    if (bySerial.has(serial)) continue;
-    if (byPhysical.has(serial)) continue;
-    byPhysical.set(serial, {
-      serial,
-      label: labels[serial] ?? serial,
+    const normalizedKey = normalizeDeviceIdentityKey(serial);
+    if (bySerial.has(normalizedKey)) continue;
+    if (byPhysical.has(normalizedKey)) continue;
+    byPhysical.set(normalizedKey, {
+      serial: normalizedKey,
+      label: labels[normalizedKey] ?? labels[serial] ?? normalizedKey,
       state: "offline",
-      physical_serial: null,
+      physical_serial: normalizedKey,
       connections: [],
     });
   }
@@ -630,7 +679,6 @@ function App() {
   // 全局快捷键组合：用户可在设置页修改，本机持久化。
   const [shortcuts, setShortcuts] = useState<ShortcutSettings>(readShortcuts);
   const [trustedDevices, setTrustedDevices] = useState<TrustedWirelessDevice[]>([]);
-  const [recentDevices, setRecentDevices] = useState<RecentDevice[]>([]);
   const [recentMessage, setRecentMessage] = useState<string | null>(null);
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
@@ -745,6 +793,11 @@ function App() {
       return [];
     }
   });
+  // X10-88：设备自定义备注（physical_serial → 备注名）。避免同型号手机显示一样。
+  const [deviceNicknames, setDeviceNicknames] = useState<Record<string, string>>(() => readDeviceNicknames());
+  // 正在编辑备注的设备键 + 草稿；null 表示没有打开编辑框。
+  const [nicknameEditing, setNicknameEditing] = useState<string | null>(null);
+  const [nicknameDraft, setNicknameDraft] = useState("");
   // 按设备结束镜像（X10-27 复测反馈）：记录正在结束的会话归属，
   // 让每台设备自己的「结束」按钮显示各自的进行中状态，而不是全局一把抓。
   const [stoppingSerial, setStoppingSerial] = useState<string | null>(null);
@@ -836,7 +889,7 @@ function App() {
       } catch {
         // 读不到（设备离线等）保持现状，不闪烁。
       }
-    }, 5000);
+    }, 8000);
     return () => {
       disposed = true;
       window.clearInterval(timer);
@@ -976,19 +1029,23 @@ function App() {
     });
   }
 
-  // X10-84：旧版本把 pref 存到了「无线端点 / adb serial」键下（随端点变化），
-  // 导致启动时查空、--start-app 丢失。这里在设备列表就绪后做一次性迁移：
-  // 凡是能映射到某台设备 physical_serial 的旧键，归并到稳定 physical_serial 键。
+  // X10-84 + X10-87：pref 键统一迁移到稳定 physical_serial。两个来源：
+  //  ① 设备在线时反查：无线端点/adb serial → physical_serial（desktopPrefKeyFor）；
+  //  ② 离线归一化：adb-<physical>-..._tcp 端点直接提取物理 id（normalizeDeviceIdentityKey）。
+  // 同一物理设备的多个历史键（端点/ip/型号名）合并为一条，值保留「最近设置」——
+  // 由于无法判断新旧，保留目标键已有值，仅清掉重复旧键，避免列表出现多行（用户实测
+  // 一台设备显示 5 条桌面模式记录）。
   useEffect(() => {
     const devices = check?.devices;
-    if (!devices || devices.length === 0) return;
     setDesktopPrefs((prev) => {
       let changed = false;
       const next: Record<string, DesktopPref> = { ...prev };
       for (const key of Object.keys(prev)) {
-        const stable = desktopPrefKeyFor(devices, key);
+        // 设备在线时优先反查真实 physical；离线则用归一化规则。
+        const stable = (devices && devices.length > 0)
+          ? desktopPrefKeyFor(devices, key)
+          : normalizeDeviceIdentityKey(key);
         if (stable && stable !== key) {
-          // 目标键已有配置时保留目标（更新的设置优先），只删除旧键。
           if (!(stable in next)) next[stable] = prev[key];
           delete next[key];
           changed = true;
@@ -1000,7 +1057,7 @@ function App() {
       }
       return changed ? next : prev;
     });
-    // 仅在设备列表首次出现非空时迁移一次；desktopPrefs 由本 effect 内部函数式更新。
+    // 设备列表每次变化都重跑一次：设备上线时能反查出更多旧端点 → 继续归并。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [check?.devices]);
 
@@ -1158,24 +1215,28 @@ function App() {
     void refreshEntitlement();
   }, []);
 
-  // 设备列表自动轮询：无线设备（尤其同 Wi-Fi 自动重连、或手机端已配对的连接回连）
-  // 常在本客户端的显式连接流程之外出现，不轮询就只有手动点「重新检查」才看得到。
-  // 走 silent=true，只刷新界面、不写诊断日志。
+  // X10-84：设备列表由后端 watcher 事件驱动（devices-changed），不再前端高频轮询。
+  // 后端每 2s 探一次、仅在设备集合变化时 emit；首次挂载仍主动拉一次保证首屏有数据。
+  // 手动「重新检查」入口保留。adb 调用已在后端带超时兜底（X10-84），卡死不再拖死 UI。
   useEffect(() => {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     if (!hasTauri) return;
     let disposed = false;
-    const timer = window.setInterval(async () => {
-      try {
-        const next = await invoke<AdbCheck>("check_adb_devices", { silent: true });
-        if (!disposed) setCheck(next);
-      } catch {
-        // 轮询失败保持上一次结果，不闪烁、不打断。
-      }
-    }, 5000);
+    let unlisten: (() => void) | null = null;
+    const pull = () => {
+      invoke<AdbCheck>("check_adb_devices", { silent: true })
+        .then((next) => { if (!disposed) setCheck(next); })
+        .catch(() => { /* 失败保持上一次结果，不闪烁、不打断 */ });
+    };
+    pull(); // 首屏数据
+    void listen("devices-changed", pull)
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      if (unlisten) unlisten();
     };
   }, []);
 
@@ -1222,35 +1283,13 @@ function App() {
     }
   }
 
+  // X10-85：首页不再展示最近设备列表，但数据仍在后端记录（供无线重连）。
+  // refreshRecentDevices 仅用于启动镜像后让后端完成记录写入，UI 不消费返回值。
   async function refreshRecentDevices() {
     try {
-      setRecentDevices(await invoke<RecentDevice[]>("list_recent_devices"));
+      await invoke<RecentDevice[]>("list_recent_devices");
     } catch (error) {
-      setRecentDevices([]);
       setRecentMessage(errorMessage(error, "无法读取本机最近使用的设备记录。"));
-    }
-  }
-
-  // 只移除这条本地记录：不断开连接、不忘记无线配对、不撤销手机上的调试授权。
-  async function forgetRecentDevice(serial: string) {
-    setRecentMessage(null);
-    try {
-      setRecentDevices(await invoke<RecentDevice[]>("forget_recent_device", { serial }));
-      setRecentMessage("已从本机的最近使用记录中移除。");
-    } catch (error) {
-      setRecentMessage(errorMessage(error, "无法移除这条记录。"));
-    }
-  }
-
-  // 一键清空全部最近使用记录（物理删除，落盘空列表）。同样只影响本地记录本身。
-  async function clearRecentDevices() {
-    setRecentMessage(null);
-    try {
-      await invoke("clear_recent_devices");
-      setRecentDevices([]);
-      setRecentMessage("已清空全部最近使用记录。之后再次镜像会重新记入用过的设备。");
-    } catch (error) {
-      setRecentMessage(errorMessage(error, "无法清空最近设备记录。"));
     }
   }
 
@@ -1882,7 +1921,16 @@ function App() {
   const readyDevices = check?.devices.filter((device) => device.state === "ready") ?? [];
   const readyDevice = readyDevices.find((device) => device.serial === selectedSerial) ?? readyDevices[0];
   // 同型号多台设备重名时追加 -1、-2 后缀，便于区分（基于全部设备统一编号）。
-  const displayLabels = buildDisplayLabels(check?.devices ?? []);
+  const baseLabels = buildDisplayLabels(check?.devices ?? []);
+  // X10-88：自定义备注覆盖型号标签——有备注的设备全端显示备注名。
+  const displayLabels = (() => {
+    const merged: Record<string, string> = { ...baseLabels };
+    for (const device of check?.devices ?? []) {
+      const key = device.physical_serial ?? device.serial;
+      if (deviceNicknames[key]) merged[device.serial] = deviceNicknames[key];
+    }
+    return merged;
+  })();
   const scrcpyReady = check?.scrcpy_available ?? false;
   const readySerial = readyDevice?.serial ?? null;
   // 快捷键处理器读取的最新 serial。
@@ -2235,7 +2283,7 @@ function App() {
           .then((value) => { if (!disposed) setLockReports((prev) => ({ ...prev, [serial]: value })); })
           .catch(() => { /* 保持上一次结果 */ });
       }
-    }, 5000);
+    }, 8000);
     return () => { disposed = true; window.clearInterval(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readySerialsKey]);
@@ -2461,7 +2509,65 @@ function App() {
                             {displayLabels[device.serial] ?? device.label}
                             {badge && <span className="conn-badge inline">{badge}</span>}
                             {lockStamp && <span className="conn-badge inline lock-badge">{lockTag(lockStamp)}</span>}
+                            {/* X10-88：自定义备注编辑（铅笔按钮）。备注以 physical_serial 为键。 */}
+                            <button
+                              type="button"
+                              className="nickname-edit-btn"
+                              aria-label={`备注 ${displayLabels[device.serial] ?? device.label}`}
+                              title="自定义备注名（区分同型号设备）"
+                              onClick={() => {
+                                const key = device.physical_serial ?? device.serial;
+                                setNicknameEditing(key);
+                                setNicknameDraft(deviceNicknames[key] ?? "");
+                              }}
+                            >
+                              ✎
+                            </button>
                           </strong>
+                          {nicknameEditing === (device.physical_serial ?? device.serial) && (
+                            <div className="nickname-editor">
+                              <input
+                                type="text"
+                                value={nicknameDraft}
+                                placeholder={device.label}
+                                aria-label="设备备注名"
+                                onChange={(e) => setNicknameDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    const key = device.physical_serial ?? device.serial;
+                                    setDeviceNicknames(writeDeviceNickname(key, nicknameDraft));
+                                    setNicknameEditing(null);
+                                  } else if (e.key === "Escape") {
+                                    setNicknameEditing(null);
+                                  }
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => {
+                                  const key = device.physical_serial ?? device.serial;
+                                  setDeviceNicknames(writeDeviceNickname(key, nicknameDraft));
+                                  setNicknameEditing(null);
+                                }}
+                              >
+                                保存
+                              </button>
+                              {deviceNicknames[device.physical_serial ?? device.serial] && (
+                                <button
+                                  type="button"
+                                  className="text-button danger"
+                                  onClick={() => {
+                                    const key = device.physical_serial ?? device.serial;
+                                    setDeviceNicknames(writeDeviceNickname(key, ""));
+                                    setNicknameEditing(null);
+                                  }}
+                                >
+                                  清除
+                                </button>
+                              )}
+                            </div>
+                          )}
                           <p>
                             {owned
                               ? own.phase === "connecting"
@@ -2596,57 +2702,11 @@ function App() {
                 </div>
               )}
 
-              {/* 列表清空后仍要显示反馈，否则移除最后一条记录会静默消失，用户不知道操作是否生效。 */}
-              {(recentDevices.length > 0 || recentMessage) && (
-                <div className="recent-devices" aria-label="最近使用过的设备">
-                  {recentDevices.length > 0 && (
-                    <div className="recent-head">
-                      <strong>最近使用过的设备</strong>
-                      <button className="text-button danger" type="button" onClick={() => void clearRecentDevices()}>
-                        清空记录
-                      </button>
-                    </div>
-                  )}
-                  {/* X10-68：收藏的设备置顶显示，其余按最近使用顺序。 */}
-                  {[...recentDevices]
-                    .sort((a, b) => Number(favoriteDevices.includes(a.serial)) - Number(favoriteDevices.includes(b.serial)))
-                    .map((device) => {
-                    const connected = findConnectedDevice(check?.devices, device.serial);
-                    const favorite = favoriteDevices.includes(device.serial);
-                    return (
-                      <div className={`recent-device${favorite ? " favorite" : ""}`} key={device.serial}>
-                        <div className="recent-device-info">
-                          <strong>{favorite ? "★ " : ""}{device.label}</strong>
-                          <p>
-                            {relativeTime(device.last_used_at)} · {connected ? stateCopy[connected.state].label : "当前未连接"}
-                          </p>
-                        </div>
-                        <span>
-                          <button
-                            className="text-button"
-                            type="button"
-                            aria-label={favorite ? `取消收藏 ${device.label}` : `收藏 ${device.label}`}
-                            title={favorite ? "取消收藏" : "收藏（置顶显示）"}
-                            onClick={() => toggleFavoriteDevice(device.serial)}
-                          >
-                            {favorite ? "★ 已收藏" : "☆ 收藏"}
-                          </button>
-                          {connected ? (
-                            // 已连接的设备在上面的设备卡片里有唯一操作入口，
-                            // 这里只呈现状态与「移除记录」，不再重复放开始/结束按钮。
-                            <span className="recent-hint">{stateCopy[connected.state].label}</span>
-                          ) : looksLikeWirelessEndpoint(device.serial) ? (
-                            <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
-                          ) : (
-                            <span className="recent-hint">请用数据线重新连接</span>
-                          )}
-                          <button className="text-button danger" type="button" onClick={() => void forgetRecentDevice(device.serial)}>移除记录</button>
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {recentDevices.length > 0 && <p className="recent-note">记录只保存在本机，移除不影响连接与授权。</p>}
-                  {recentMessage && <p className="recent-note" role="status">{recentMessage}</p>}
+              {/* X10-85：首页不再展示「最近使用过的设备」列表（用户拍板）。最近设备
+                  数据仍在后端记录（供无线重连等内部逻辑），仅移除 UI 展示。 */}
+              {recentMessage && (
+                <div className="recent-devices" aria-label="设备记录操作反馈">
+                  <p className="recent-note" role="status">{recentMessage}</p>
                 </div>
               )}
             </section>
@@ -3108,18 +3168,15 @@ function App() {
                       <span className="setting-name">应用到哪台设备</span>
                       <span className="setting-desc">多台设备镜像中：改动只作用于这里选中的一台，其他设备不受影响。</span>
                     </div>
-                    <select
-                      className="setting-control"
-                      aria-label="设置应用目标设备"
+                    <AppSelect
+                      ariaLabel="设置应用目标设备"
                       value={settingsTargetSerial ?? session?.serial ?? ""}
-                      onChange={e => setSettingsTargetSerial(e.target.value)}
-                    >
-                      {activeSessionList.map((item) => (
-                        <option key={item.serial} value={item.serial}>
-                          {check?.devices.find((device) => device.serial === item.serial)?.label ?? item.serial}
-                        </option>
-                      ))}
-                    </select>
+                      options={activeSessionList.map((item) => ({
+                        value: item.serial,
+                        label: check?.devices.find((device) => device.serial === item.serial)?.label ?? item.serial,
+                      }))}
+                      onChange={(next) => setSettingsTargetSerial(next)}
+                    />
                   </div>
                 )}
                 <div className="setting-row">
@@ -3127,21 +3184,33 @@ function App() {
                     <span className="setting-name">画质</span>
                     <span className="setting-desc">分辨率与码率越高越清晰，对电脑与手机性能要求也越高。</span>
                   </div>
-                  <select className="setting-control" value={options.quality} onChange={e => updateOptions({...options, quality: e.target.value as SessionOptions["quality"]})}>
-                    <option value="smooth">流畅 · 1024 / 2 Mbps</option><option value="balanced">均衡 · 1920 / 8 Mbps</option><option value="sharp">清晰 · 2560 / 16 Mbps</option>
-                  </select>
+                  <AppSelect
+                    ariaLabel="画质"
+                    value={options.quality}
+                    options={[
+                      { value: "smooth", label: "流畅 · 1024 / 2 Mbps" },
+                      { value: "balanced", label: "均衡 · 1920 / 8 Mbps" },
+                      { value: "sharp", label: "清晰 · 2560 / 16 Mbps" },
+                    ]}
+                    onChange={(next) => updateOptions({...options, quality: next as SessionOptions["quality"]})}
+                  />
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">帧率上限</span>
                     <span className="setting-desc">默认跟随设备帧率。老手机发烫卡顿时选 30，长会话省电选 24。</span>
                   </div>
-                  <select className="setting-control" aria-label="帧率上限" value={options.max_fps ?? 0} onChange={e => updateOptions({...options, max_fps: Number(e.target.value) === 0 ? null : Number(e.target.value)})}>
-                    <option value={0}>跟随设备（不限）</option>
-                    <option value={60}>最高 60 帧</option>
-                    <option value={30}>最高 30 帧</option>
-                    <option value={24}>最高 24 帧（最省电）</option>
-                  </select>
+                  <AppSelect
+                    ariaLabel="帧率上限"
+                    value={String(options.max_fps ?? 0)}
+                    options={[
+                      { value: "0", label: "跟随设备（不限）" },
+                      { value: "60", label: "最高 60 帧" },
+                      { value: "30", label: "最高 30 帧" },
+                      { value: "24", label: "最高 24 帧（最省电）" },
+                    ]}
+                    onChange={(next) => updateOptions({...options, max_fps: Number(next) === 0 ? null : Number(next)})}
+                  />
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
@@ -3155,12 +3224,17 @@ function App() {
                     <span className="setting-name">显示方向</span>
                     <span className="setting-desc">「自动」跟随手机旋转，打开横屏游戏会自动转为横屏。</span>
                   </div>
-                  <select className="setting-control" aria-label="显示方向" value={options.rotation} onChange={e => updateOptions({...options, rotation: Number(e.target.value)})}>
-                    <option value={0}>自动（跟随手机）</option>
-                    <option value={90}>锁定 90°</option>
-                    <option value={180}>锁定 180°</option>
-                    <option value={270}>锁定 270°</option>
-                  </select>
+                  <AppSelect
+                    ariaLabel="显示方向"
+                    value={String(options.rotation)}
+                    options={[
+                      { value: "0", label: "自动（跟随手机）" },
+                      { value: "90", label: "锁定 90°" },
+                      { value: "180", label: "锁定 180°" },
+                      { value: "270", label: "锁定 270°" },
+                    ]}
+                    onChange={(next) => updateOptions({...options, rotation: Number(next)})}
+                  />
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
@@ -3233,15 +3307,20 @@ function App() {
                     <span className="setting-name">镜像窗口快捷键修饰键</span>
                     <span className="setting-desc">窗口内组合键的修饰键，如 +H 主屏幕、+B 返回、+O 熄屏（镜像继续）。</span>
                   </div>
-                  <select className="setting-control" value={options.shortcut_mod ?? ""} onChange={e => updateOptions({...options, shortcut_mod: e.target.value || null})}>
-                    <option value="">默认（左 Alt / 左 Super）</option>
-                    <option value="lctrl">左 Ctrl</option>
-                    <option value="rctrl">右 Ctrl</option>
-                    <option value="lalt">左 Alt</option>
-                    <option value="ralt">右 Alt</option>
-                    <option value="lsuper">左 Super（Win / ⌘）</option>
-                    <option value="rsuper">右 Super</option>
-                  </select>
+                  <AppSelect
+                    ariaLabel="镜像窗口快捷键修饰键"
+                    value={options.shortcut_mod ?? ""}
+                    options={[
+                      { value: "", label: "默认（左 Alt / 左 Super）" },
+                      { value: "lctrl", label: "左 Ctrl" },
+                      { value: "rctrl", label: "右 Ctrl" },
+                      { value: "lalt", label: "左 Alt" },
+                      { value: "ralt", label: "右 Alt" },
+                      { value: "lsuper", label: "左 Super（Win / ⌘）" },
+                      { value: "rsuper", label: "右 Super" },
+                    ]}
+                    onChange={(next) => updateOptions({...options, shortcut_mod: next || null})}
+                  />
                 </div>
                 <p className="setting-note">窗口内建快捷键：+H 主屏幕、+B 返回、+S 最近任务、+N 通知栏、+P 电源、+O 熄屏（镜像继续）、+↑/↓ 音量、+F 全屏、+Q 退出。</p>
                 <p className="setting-note">受保护内容（支付、密码页）系统会屏蔽为黑屏；会话进行中的全局快捷键（无需切回本窗口）可在下方「全局快捷键」中自定义。</p>
@@ -3274,18 +3353,15 @@ function App() {
                           下面两项只作用于这里选中的设备。已连接的手机会排在前面；没有插上的、但以前设置过的设备也会列出，方便随时调整。
                         </span>
                       </div>
-                      <select
-                        className="setting-control"
-                        aria-label="桌面模式设置目标设备"
+                      <AppSelect
+                        ariaLabel="桌面模式设置目标设备"
                         value={settingsDesktopPrefKey ?? ""}
-                        onChange={e => setDesktopTargetSerial(e.target.value || null)}
-                      >
-                        {desktopPrefDevices.map((device) => (
-                          <option key={device.pref_key} value={device.pref_key}>
-                            {device.label}（{device.state === "ready" ? "已就绪" : device.state === "unauthorized" ? "未授权" : device.state === "offline" ? "离线" : "未知"}{device.streaming ? " · 镜像中" : ""}{device.configured ? " · 已设置桌面模式" : ""}）
-                          </option>
-                        ))}
-                      </select>
+                        options={desktopPrefDevices.map((device) => ({
+                          value: device.pref_key,
+                          label: `${device.label}（${device.state === "ready" ? "已就绪" : device.state === "unauthorized" ? "未授权" : device.state === "offline" ? "离线" : "未知"}${device.streaming ? " · 镜像中" : ""}${device.configured ? " · 已设置桌面模式" : ""}）`,
+                        }))}
+                        onChange={(next) => setDesktopTargetSerial(next || null)}
+                      />
                     </div>
                     <div className="device-pref-list" role="list" aria-label="各设备桌面模式状态">
                       {desktopPrefDevices.map((device) => {
