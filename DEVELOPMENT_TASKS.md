@@ -843,3 +843,8 @@
 - [ ] 目标桌面系统和设备矩阵完成，未支持组合明确降级。
 - [ ] 本地优先、用户可见/可撤销、安全/DRM 边界和三渠道合规均经验证。
 - [ ] 发行物具备签名、SBOM、NOTICE、许可证清单、漏洞结果、更新和回滚方案。
+
+- [x] ✅ **X10-96 v0.4.19-beta 公私双仓库同步发版（2026-10-09 晨）**：用户拍板「公开+私有全部直接出 v0.4.19-beta 发版」。
+  - **公开版内容**：X10-95 录制批次修复（优雅停止/托盘状态/保存目录，commit 7cf5868）首次进入 Release 渠道；本提交只做版本号 bump（package.json / tauri.conf.json / Cargo.toml / Cargo.lock / README / docs/compatibility-matrix.md 4 处 / site/index.html 21 处 / site/compatibility.html 6 处）+ `docs/releases/v0.4.19-beta.md` 发版说明。README 伴侣 App 口径由 0.3.0 更正为实际 0.3.2（build.gradle.kts versionName）。
+  - **私有版同步**：MirrorDock-tools 同样 bump 0.4.19 + 发版说明（含 X10-94 点击器说明），tag 同名 `v0.4.19-beta`。
+  - **发版证据**：待 CI 完成后回填（run id / 资产数 / latest.json 四平台签名）。
