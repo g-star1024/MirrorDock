@@ -1202,9 +1202,9 @@ function App() {
         setApplyNotice("录制是专业版功能，激活后即可使用。");
         return;
       }
-      const next = { ...current.options, record: !current.options.record };
-      if (current.sessionActive) void applyOptionsUpdate(next);
-      else updateOptions(next);
+      // X10-92：快捷键直接触发双通道录制启停，不再改动 record 设置项、不重启显示窗口。
+      if (current.sessionActive) void toggleRecording();
+      else setApplyNotice("请先开始镜像，再使用录制快捷键。");
     };
     const rotate = () => {
       const current = shortcutsRef.current;
@@ -1510,6 +1510,35 @@ function App() {
       await revealItemInDir(screenshot.path);
     } catch (error) {
       setScreenshotError(errorMessage(error, "无法打开截图所在的文件夹。"));
+    }
+  }
+
+  // X10-92（方案甲）：开始/结束录制。走独立录制通道（start_recording/stop_recording），
+  // 显示窗口全程不重启。何时录、录多久完全由用户决定——这与设置项「启用屏幕录制功能」
+  // （仅作能力开关）解耦。文件名沿用既有时间戳格式，与旧行为一致。
+  async function toggleRecording() {
+    if (!proEdition) {
+      setRecordingError("录制是专业版功能，激活后即可使用。");
+      return;
+    }
+    setRecordingBusy(true);
+    setRecordingError(null);
+    try {
+      if (recording?.active) {
+        const stopped = await invoke<Recording | null>("stop_recording", {});
+        if (stopped) setRecording(stopped);
+        else setRecording(null);
+      } else {
+        const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+        const started = await invoke<Recording>("start_recording", {
+          fileName: `mirrordock-record-${stamp}.mp4`,
+        });
+        setRecording(started);
+      }
+    } catch (error) {
+      setRecordingError(errorMessage(error, recording?.active ? "无法结束录制。" : "无法开始录制。"));
+    } finally {
+      setRecordingBusy(false);
     }
   }
 
@@ -2784,6 +2813,17 @@ function App() {
                 </div>
                 <div className="capability-panel recording-panel" aria-live="polite">
                   <strong>录像</strong>
+                  {/* X10-92：手动启停，不重启镜像窗口。 */}
+                  <p>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={recordingBusy || !proEdition}
+                      onClick={() => void toggleRecording()}
+                    >
+                      {recording?.active ? "结束录制" : "开始录制"}
+                    </button>
+                  </p>
                   {recording ? (
                     <div className="screenshot-result">
                       <p className="capability-summary">
@@ -2794,10 +2834,10 @@ function App() {
                         <button className="text-button" type="button" onClick={() => void revealRecording()}>在文件夹中显示</button>
                         <button className="text-button danger" type="button" disabled={recordingBusy || recording.active} onClick={() => void removeRecording()}>删除这段录像</button>
                       </span>
-                      {recording.active && <p className="screenshot-path">录像正在写入，结束镜像后才会定型；录制中无法删除。</p>}
+                      {recording.active && <p className="screenshot-path">录像正在写入，点「结束录制」后定型；录制中无法删除。镜像窗口不会因录制而中断。</p>}
                     </div>
                   ) : (
-                    <p className="capability-pending">在「设置」打开「录制这一会话的画面」后开始镜像；文件保存在「视频 / MirrorDock」，结束镜像即结束录制，可直接播放。</p>
+                    <p className="capability-pending">镜像开启后随时点「开始录制」；何时录、录多久由你决定，画面不会中断。文件保存在「视频 / MirrorDock」，结束录制即定型可播放。</p>
                   )}
                   {recordingError && <p className="capability-pending" role="alert">{recordingError}</p>}
                 </div>
@@ -3302,10 +3342,10 @@ function App() {
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">
-                    <span className="setting-name">录制这一会话的画面</span>
-                    <span className="setting-desc">MP4 保存在本机视频目录。{!proEdition && "专业版功能，在下方「版本与授权」激活后可用"}</span>
+                    <span className="setting-name">启用视频录制</span>
+                    <span className="setting-desc">勾选则开启录制功能；何时开始、何时结束由你在「工具」页或快捷键（{shortcuts.record}）决定，镜像画面不会中断。MP4 保存在本机视频目录。{!proEdition && "专业版功能，在下方「版本与授权」激活后可用"}</span>
                   </div>
-                  <label className="setting-toggle"><input type="checkbox" aria-label="录制这一会话的画面" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})} /></label>
+                  <label className="setting-toggle"><input type="checkbox" aria-label="启用视频录制" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})} /></label>
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">

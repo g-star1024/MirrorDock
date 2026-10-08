@@ -705,6 +705,53 @@ describe("App rendering", () => {
     ).toBeInTheDocument();
   });
 
+  it("start_recording_uses_a_dedicated_command_and_never_restarts_the_display", async () => {
+    // X10-92 反向验证：点「开始录制」必须走 start_recording（独立通道），
+    // 绝不能调 update_session_options/start_mirroring（那会重启显示窗口）。
+    const started: string[][] = [];
+    invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      switch (cmd) {
+        case "check_adb_devices":
+          return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+        case "mirror_sessions":
+        case "mirror_session":
+          return Promise.resolve(
+            cmd === "mirror_sessions"
+              ? [{ phase: "streaming", serial: "phone", first_frame: "reached", error: null }]
+              : { phase: "streaming", serial: "phone", first_frame: "reached", error: null },
+          );
+        case "entitlement_status":
+          return Promise.resolve({ edition: "pro", key_id: "k", expires_at: null });
+        case "current_recording":
+          return Promise.resolve(null);
+        case "list_device_files":
+          return Promise.resolve([]);
+        case "start_recording":
+          started.push([cmd, String(args?.fileName ?? "")]);
+          return Promise.resolve({
+            file_name: "mirrordock-record-x.mp4",
+            path: "/v/MirrorDock/mirrordock-record-x.mp4",
+            active: true,
+          });
+        default:
+          return baseInvoke(cmd);
+      }
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /工具/ }));
+    const btn = await screen.findByRole("button", { name: "开始录制" });
+    // entitlement 轮询是异步的：等 Pro 生效、按钮可点后再触发。
+    await waitFor(() => expect(btn).toBeEnabled());
+    fireEvent.click(btn);
+    await screen.findByText(/正在录制：/);
+
+    expect(started.length).toBe(1);
+    const forbidden = invokeMock.mock.calls.filter(([cmd]) =>
+      cmd === "update_session_options" || cmd === "start_mirroring",
+    );
+    expect(forbidden, "开始录制绝不得重启显示窗口").toHaveLength(0);
+  });
+
   it("explains_when_the_mirror_runtime_itself_is_missing", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "check_adb_devices") {
@@ -735,7 +782,7 @@ describe("entitlement", () => {
   it("free_edition_shows_activation_ui_and_locks_recording_switch", async () => {
     render(<App />);
     expect(await screen.findByText("当前版本：免费版")).toBeInTheDocument();
-    const recordBox = screen.getByRole("checkbox", { name: /录制这一会话的画面/ });
+    const recordBox = screen.getByRole("checkbox", { name: /启用视频录制/ });
     expect(recordBox).toBeDisabled();
     expect(screen.getByText(/专业版功能，在下方「版本与授权」激活后可用/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "激活专业版" })).toBeDisabled();
@@ -759,7 +806,7 @@ describe("entitlement", () => {
     // 激活后呈现专业版状态与撤销入口，录制开关恢复可用。
     expect(await screen.findByText("当前版本：专业版（许可证 2026-001，永久有效）")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "撤销本机授权" })).toBeEnabled();
-    expect(screen.getByRole("checkbox", { name: /录制这一会话的画面/ })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: /启用视频录制/ })).toBeEnabled();
   });
 
   it("activation_failure_shows_backend_message_without_echoing_key", async () => {

@@ -720,6 +720,20 @@
 - **版本**：X10-90，版本 0.4.16 → **0.4.17**。
 - **v0.4.17-beta 发版证据（已核验，2026-10-08 15:00）**：tag `v0.4.17-beta` 已推远端、commit `d53610a`；CI run `37739066537` **success**，7 job 全绿（验证/四平台打包/伴侣 APK/发布）；Release **draft=False、30 资产全齐**（四平台 dmg/exe/msi/AppImage/deb/rpm + 对应 .sig + latest.json + SHA256SUMS×4 + sbom-cargo/npm×8 + `MirrorDock-companion-0.4.17.apk`）；`latest.json` **version=0.4.17**、四平台签名全非空（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）。真机「托盘连接设备→桌面模式」已由用户实测通过。
 
+- [x] ✅ **X10-92 录制改双通道：手动启停、不重启镜像窗口（2026-10-08；用户 4 项需求之 1/2/3：①设置项改名「启用视频录制」仅作能力开关、②手动启停录制且画面不中断、③截图/录制/停止快捷键）**
+  - **决策（用户拍板路径 2 + 方案甲）**：scrcpy 4.1 的 `--record` 只能在进程启动时传入、运行中无法动态启停——「不重启镜像的录制」原生做不到。调研外部录制工具（OBS/ffmpeg）后确认：视频流被 scrcpy 端到端独占，外部工具拿不到（macOS/Win）或拿到就接管显示（v4l2 仅 Linux）。**路径 2 双通道**是唯一同时满足「显示不中断 + 运行中启停 + 录设备原始码流 + 全平台」的方案：显示走一条 scrcpy（不带录制），点「开始录制」另起一条 `--no-playback --no-window --no-control` 的独立录制进程，点「结束录制」优雅停它定型 MP4。
+  - **方案甲（录制与设置彻底解耦）**：设置项 `record` 仅作「能力开关」，开始镜像**不再自动录**；录制 100% 由用户手动触发。`start_mirroring`/`update_session_options` 一律忽略 record、显示进程永不带 `--record`。
+  - **后端**：`SessionOptions::record_arguments()`（录制专用参数：保留视频源/音频，剔除窗口/输入类，强制 no-playback/no-window/no-control）；`MirrorRuntime::start_recorder()`（复用 spawn 逻辑起独立录制进程）；`SessionState.record_process`（与显示 `process` 并存）；命令 `start_recording`/`stop_recording`；显示会话结束自动停录制进程（不留孤儿）；「是否录制中」判定改由 `record_process`；`tray_record_toggle` 切双通道。
+  - **前端**：设置项改名「启用视频录制」+ 文案说明「何时开始/结束由你决定、画面不中断」；工具页录像面板加「开始录制/结束录制」按钮（`toggleRecording` 走 start_recording/stop_recording）；快捷键 `shortcuts.record` 改调 toggleRecording（不再动 record 设置项、不重启显示）。
+  - **反向验证**：后端 `the_recording_path_goes_to_a_separate_recorder_never_the_display_process`（开始镜像即使 record=true 也绝不把录制塞进显示进程）+ `starting_recording_uses_a_separate_channel_and_never_restarts_the_display`（开录不重启显示进程）；前端 `start_recording_uses_a_dedicated_command_and_never_restarts_the_display`（点开始录制必须调 start_recording、绝不调 update_session_options/start_mirroring）。质量门：后端 198 passed + clippy 0 warning、前端 82 passed + pnpm build 通过。
+  - **未验证面（如实标记）**：「同一 serial 同时跑显示 + 录制两条 scrcpy（设备端双路编码）是否稳定、低端机是否掉帧」需真机实测；手机端当前因医院网络隔离离线，待恢复后验证。双路编码会让手机 CPU/带宽翻倍，已在错误恢复建议里提示「降低画质或改用数据线」。
+  - **教训**：scrcpy 的能力边界（录制只能启动时传、窗口是原生不可注入）决定了交互设计的上限——**先查官方文档确认能力边界，再承诺交互**，不要先答应了再发现做不到。
+- **版本**：X10-92（+ X10-91 pairing IP 关联），版本 0.4.17 → **0.4.18**。
+
+- [ ] ⏳ **X10-93 截图/录制/停止快捷键（部分完成）**：快捷键基建已存在（`shortcuts.screenshot/record/rotate`，全局注册，设置页可改组合）。X10-92 已把录制快捷键切到双通道 toggleRecording。**说明**：快捷键放在 MirrorDock 主窗口 + 全局（macOS 需辅助功能授权），**无法塞进 scrcpy 镜像窗口标题栏**（scrcpy 原生窗口，外部无法注入按钮）——已向用户说明。待真机验证快捷键在窗口聚焦 scrcpy 时是否触发。
+
+- [ ] ⏳ **X10-94 键盘映射 / 鼠标模拟点击器评估（待用户拍板）**：用户要「镜像上层鼠标自动模拟点击器：加点位、按点位顺序点击、循环、设循环次数」。**⚠️ 与 AGENTS.md 红线冲突**：第 13 行「No unattended general-purpose control」——按点位自动循环点击本质是无人值守的自动化通用控制（游戏挂机/脚本点击典型形态）。scrcpy 原生支持的是**用户实时操作的**鼠标点击=触摸、键盘输入、MOD+快捷键（有真人值守）；而「录制点位后自动循环点」是机器代替人持续操作。**需用户拍板**：(a) 不做（守红线）；(b) 做但加约束（需镜像窗口前台聚焦、单次手动触发一轮不循环、明显 UI 提示、排除金融/支付/游戏反作弊场景）；(c) 全做（违反红线，不推荐）。技术路径若做：scrcpy 控制通道 inject touch 或 `adb shell input tap x y`（后者延迟高、需坐标系换算镜像窗口→设备分辨率）。已如实上报，等用户决策。
+
 
   - **CI 波折与发版证据（已核验）**：首次 run `37284280561` 仅 macos-x64「构建安装包」失败（exit 1 无注解，raw log 需 admin 403）——**未盲猜**，按 10-03 教训先建能力（X10-82：build.yml 构建步骤 tee + 失败上传 `build-log-<label>` artifact，commit `7c43f9e`），重推 tag 重跑。重跑 run `37287371051` **success**，Release id `403545372`，**30 资产全齐**；`latest.json` version=0.4.13、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.13.apk` 在列。Mac 已换装 0.4.13（旧版备份 `/Applications/MirrorDock.app.old-0.4.12`），图标已核验。site/index.html 已同步。**需用户重启客户端 + 重启镜像会话生效**（Dock 图标跟随先注册进程）。
 - - [x] ✅ **X10-80 桌面模式虚拟屏白屏根因定性 + 落地核验（2026-10-03 19:30；用户报「切 2560 白屏，切回 1920 依旧」）**

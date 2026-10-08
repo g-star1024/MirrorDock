@@ -462,6 +462,15 @@ trait MirrorRuntime: Send + Sync {
         options: &SessionOptions,
         record_path: Option<&Path>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error>;
+
+    /// X10-92：启动**独立的录制进程**（`--no-playback --no-window --no-control --record`），
+    /// 与显示进程并存、互不干扰——镜像窗口全程不重启。返回录制进程句柄；结束录制 = kill 它。
+    fn start_recorder(
+        &self,
+        serial: &str,
+        options: &SessionOptions,
+        record_path: &Path,
+    ) -> Result<Box<dyn MirrorProcess>, std::io::Error>;
 }
 
 struct AppRuntimes {
@@ -738,6 +747,75 @@ impl SessionOptions {
         }
         if self.always_on_top {
             args.push("--always-on-top".into());
+        }
+        Ok(args)
+    }
+
+    /// X10-92：录制通道（独立 scrcpy 进程）的参数集。
+    ///
+    /// 与显示通道 [`arguments`] 的关键差异——录制进程**只录不显示**，因此：
+    ///  - 强制 `--no-playback --no-window --no-control`：不开窗、不显示、不接收输入，
+    ///    让它纯粹做「设备编码流 → 本地 MP4」的封装器；
+    ///  - 只保留**影响视频流本身**的参数（分辨率/码率/编码/朝向/帧率/视频源），
+    ///    丢弃窗口形态（全屏/置顶）与输入/交互（键盘/剪贴板/快捷键/触摸显示/
+    ///    保持唤醒/只读）——这些对一个无窗录制进程没有意义；
+    ///  - 音频保留（除非摄像头源强制静音）：录制要的就是画面+声音。
+    ///
+    /// 这样录制进程的启停完全不触碰显示进程——镜像窗口全程不重启。
+    fn record_arguments(&self) -> Result<Vec<String>, AppError> {
+        let (size, bitrate) = match self.quality {
+            Quality::Smooth => (1024, "2M"),
+            Quality::Balanced => (1920, "8M"),
+            Quality::Sharp => (2560, "16M"),
+        };
+        let mut args = vec![
+            format!("--max-size={size}"),
+            format!("--video-bit-rate={bitrate}"),
+            "--video-codec=h264".into(),
+            // 录制通道三件套：无窗、不播放、不控制。
+            "--no-playback".into(),
+            "--no-window".into(),
+            "--no-control".into(),
+        ];
+        if self.rotation != 0 {
+            // 录制用 display-orientation 锁定方向（与显示通道同一语义）。
+            args.push(format!("--display-orientation={}", self.rotation));
+        }
+        if let Some(fps) = self.max_fps {
+            if ![24, 30, 60].contains(&fps) {
+                return Err(AppError::new(
+                    "max_fps_invalid",
+                    "帧率上限无效。",
+                    "请选择「跟随设备」、24、30 或 60。",
+                ));
+            }
+            args.push(format!("--max-fps={fps}"));
+        }
+        // 视频源必须与显示通道一致：桌面模式录虚拟屏、摄像头录摄像头、否则录手机屏幕。
+        if self.desktop_mode {
+            args.push("--new-display".into());
+            if let Some(app) = &self.desktop_app {
+                let pkg = app.trim();
+                let valid = !pkg.is_empty()
+                    && pkg.len() <= 120
+                    && pkg
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
+                if !valid {
+                    return Err(AppError::new(
+                        "desktop_app_invalid",
+                        "虚拟屏启动的应用包名无效。",
+                        "包名只允许字母、数字、点（.）和下划线，例如 com.android.browser；也可以留空。",
+                    ));
+                }
+                args.push(format!("--start-app={pkg}"));
+            }
+        } else if self.camera_source {
+            args.push("--video-source=camera".into());
+            // 摄像头源绝不采集麦克风（A1-05 承诺），录制同样静音。
+            args.push("--no-audio".into());
+        } else if !self.audio {
+            args.push("--no-audio".into());
         }
         Ok(args)
     }
@@ -1308,6 +1386,38 @@ impl MirrorRuntime for ScrcpyRuntime {
                 .arg(format!("--record={}", path.to_string_lossy()))
                 .arg("--record-format=mp4");
         }
+        Self::spawn_scrcpy(command)
+    }
+
+    fn start_recorder(
+        &self,
+        serial: &str,
+        options: &SessionOptions,
+        record_path: &Path,
+    ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
+        // X10-92：录制进程不开窗，**不经 macOS bundle**（bundle 只为 Dock 图标服务，
+        // 无窗进程用裸 scrcpy 即可）。参数集用 record_arguments（无窗/不播放/不控制）。
+        let scrcpy = scrcpy_binary();
+        let adb = adb_binary();
+        let mut command = quiet_command(scrcpy);
+        command.env("ADB", &adb);
+        command
+            .arg("--serial")
+            .arg(serial)
+            .args(
+                options
+                    .record_arguments()
+                    .map_err(|_| std::io::Error::other("invalid record options"))?,
+            )
+            .arg(format!("--record={}", record_path.to_string_lossy()))
+            .arg("--record-format=mp4");
+        Self::spawn_scrcpy(command)
+    }
+}
+
+impl ScrcpyRuntime {
+    /// 抽出公共的子进程启动：接管 stdio（避免 GUI 应用丢失 scrcpy 报错 + 防管道写满阻塞）。
+    fn spawn_scrcpy(mut command: Command) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
         // X10-79：必须显式 piped。默认情况下子进程继承父进程的 stdio，
         // MirrorDock 是 GUI 应用、没有可用终端，scrcpy 的报错会**直接丢失**——
         // 这正是「用户报白屏、日志里什么都看不到」的原因。接管后既能读到原文，
@@ -1346,6 +1456,12 @@ struct SessionState {
     /// 会话结束后**刻意保留**：录好的文件仍在磁盘上，用户需要能看到它、打开它或删掉
     /// 它。至于「是否仍在录制」，由是否存在运行中的进程决定，而不是由这个字段决定。
     record_path: Option<String>,
+    /// X10-92：独立录制进程的句柄（双通道方案）。
+    ///
+    /// `Some` ⇒ 正在录制（录制进程在跑）；`None` ⇒ 未在录制。它与显示 `process`
+    /// 完全解耦：开始/结束录制只 spawn/kill 这条进程，显示进程不动、镜像窗口不重启。
+    /// 「是否仍在录制」改由这个字段判定，而非 `record_path + process`。
+    record_process: Option<Box<dyn MirrorProcess>>,
 }
 
 /// 会话表（X10-27 并发多设备）：**每台设备一个会话**。
@@ -1402,6 +1518,7 @@ fn session_entry_mut<'a>(
         keep_awake_backup: None,
         options: SessionOptions::default(),
         record_path: None,
+        record_process: None,
     })
 }
 
@@ -1519,6 +1636,11 @@ fn take_running_process(
     if process.is_some() {
         state.epoch = state.epoch.wrapping_add(1);
         state.session = MirrorSession::idle();
+        // X10-92：显示会话结束，独立录制进程一并停掉（写 moov 定型），不留下
+        // 「画面没了还在录」的孤儿进程。
+        if let Some(mut recorder) = state.record_process.take() {
+            let _ = recorder.stop();
+        }
     }
     Ok(process)
 }
@@ -1536,6 +1658,10 @@ fn take_all_running_processes(store: &SessionStore) -> Result<Vec<TakenProcess>,
         if let Some(process) = state.process.take() {
             state.epoch = state.epoch.wrapping_add(1);
             state.session = MirrorSession::idle();
+            // X10-92：显示会话结束，独立录制进程一并停掉。
+            if let Some(mut recorder) = state.record_process.take() {
+                let _ = recorder.stop();
+            }
             taken.push((serial.clone(), process));
         }
     }
@@ -3209,58 +3335,44 @@ fn pick_tray_target(recent: &[RecentDevice], devices: &[AdbDevice]) -> Option<(S
 
 /// 菜单里的「开始/结束屏幕录制」。
 ///
-/// 录制开关改变窗口参数，语义与主窗口一致：结束旧窗口 + 按新设置重开，
-/// 画面会短暂中断——成功后的对话框里如实说明，不假装是热更新。
+/// X10-92 双通道：开始/结束录制只 spawn/kill 独立的录制进程，**不重启镜像窗口**。
+/// 画面全程不中断——这是与旧「重启式录制」的本质区别。
 fn tray_record_toggle(app: &AppHandle) {
     let sessions: State<SessionStore> = app.state();
     let runtimes: State<AppRuntimes> = app.state();
     let log: State<DiagnosticsLog> = app.state();
-    // 没有真正运行中的进程时给统一提示，不去触碰一个不存在的会话。
-    let (serial, current) = match running_session_options(&sessions, None) {
-        Ok(value) => value,
-        Err(_) => {
-            tray_notify_no_session(app);
-            return;
-        }
-    };
-    let next = SessionOptions { record: !current.record, ..current };
-    let starting_recording = next.record;
-    if let Err(error) = ensure_edition_allows(app, &next) {
-        tray_notify_error(app, &error.message);
+    // 没有真正运行中的显示会话时给统一提示，不去触碰一个不存在的会话。
+    if running_session_options(&sessions, None).is_err() {
+        tray_notify_no_session(app);
         return;
     }
-    // 文件名用 Unix 时间戳（纯 ASCII，能过 validate_media_name 白名单），不猜时区。
+    let currently = any_session_recording(&sessions);
+    if currently {
+        // 结束录制：优雅停录制进程，定型 MP4。
+        match stop_recording_with(&sessions, None) {
+            Ok(Some(rec)) => {
+                log.record_outcome("record_stop", None, &[]);
+                refresh_tray_menu(app);
+                notify_companion_recording(app, false);
+                tray_notify_info(app, &format!("已结束屏幕录制：{}（保存在本机视频目录的 MirrorDock 文件夹）。", rec.file_name));
+            }
+            Ok(None) => tray_notify_info(app, "当前没有在录制。"),
+            Err(error) => tray_notify_error(app, &error.message),
+        }
+        return;
+    }
+    // 开始录制：起一条独立录制通道，文件名用 Unix 时间戳（纯 ASCII，不猜时区）。
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
     let file_name = format!("mirrordock-record-{seconds}.mp4");
-    let record_path = match prepare_recording_path(app, next.record, Some(&file_name)) {
-        Ok(path) => path,
-        Err(error) => {
-            tray_notify_error(app, &error.message);
-            return;
-        }
-    };
-    let result = apply_session_options_with(&runtimes, &sessions, next, record_path, Some(serial.clone()));
-    log.record_outcome("session_update", result.as_ref().err(), &[&serial]);
-    match result {
-        Ok(update) => {
+    match start_recording_with(app, &runtimes, &sessions, None, Some(file_name.clone())) {
+        Ok(rec) => {
+            log.record_outcome("record_start", None, &[]);
             refresh_tray_menu(app);
-            // 托盘开关是录制状态跃迁点之一：推给活跃伴侣会话（M4-3）。
-            if update.applied {
-                notify_companion_recording(app, starting_recording);
-            }
-            let message = if update.applied {
-                if starting_recording {
-                    format!("已开始屏幕录制：{file_name}（镜像窗口已按录制要求重启，画面短暂中断）。")
-                } else {
-                    "已结束屏幕录制，文件保存在本机视频目录的 MirrorDock 文件夹。".to_owned()
-                }
-            } else {
-                update.note.unwrap_or_else(|| "设置未变化。".to_owned())
-            };
-            tray_notify_info(app, &message);
+            notify_companion_recording(app, true);
+            tray_notify_info(app, &format!("已开始屏幕录制：{}（画面不中断）。", rec.file_name));
         }
         Err(error) => tray_notify_error(app, &error.message),
     }
@@ -4481,9 +4593,118 @@ fn current_recording(sessions: State<SessionStore>) -> Result<Option<Recording>,
     current_recording_with(&sessions)
 }
 
+/// X10-92：开始录制（双通道）。在显示会话之外另起一条 `--no-playback --no-window` 的
+/// scrcpy 录制进程，画面窗口全程不重启。要求该设备已有运行中的显示会话。
+#[tauri::command]
+fn start_recording(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    sessions: State<SessionStore>,
+    serial: Option<String>,
+    file_name: Option<String>,
+) -> Result<Recording, AppError> {
+    start_recording_with(&app, &runtimes, &sessions, serial, file_name)
+}
+
+fn start_recording_with(
+    app: &AppHandle,
+    runtimes: &AppRuntimes,
+    store: &SessionStore,
+    serial: Option<String>,
+    file_name: Option<String>,
+) -> Result<Recording, AppError> {
+    // 目标设备：显式指定优先，否则主会话（必须已有运行中的显示会话）。
+    let (target, options) = running_session_options(store, serial.clone())?;
+    // 录制是 Pro 功能（与既有 ensure_edition_allows 同一闸门）。
+    let record_opts = SessionOptions { record: true, ..options.clone() };
+    ensure_edition_allows(app, &record_opts)?;
+    let record_path = prepare_recording_path(app, true, file_name.as_deref())?
+        .ok_or_else(|| AppError::new("recording_path", "无法准备录制文件路径。", "请重试。"))?;
+
+    let process = runtimes
+        .mirror
+        .start_recorder(&target, &options, &record_path)
+        .map_err(|error| {
+            // 动态文案不能用 AppError::new（要 &'static str）：先记日志，用静态文案。
+            eprintln!("[mirrordock] start_recorder failed: {error}");
+            AppError::new(
+                "recording_start_failed",
+                "无法开始屏幕录制。",
+                "手机性能不足以同时编码两路画面时会出现此错误；请降低镜像画质后重试，或改用数据线连接。",
+            )
+        })?;
+
+    let path_string = record_path.to_string_lossy().into_owned();
+    let file = Path::new(&path_string)
+        .file_name()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path_string.clone());
+    {
+        let mut map = store.lock()?;
+        let state = session_entry_mut(&mut map, &target);
+        // 若残留旧录制进程（异常路径），先停掉再换新的，避免泄漏。
+        if let Some(mut old) = state.record_process.take() {
+            let _ = old.stop();
+        }
+        state.record_path = Some(path_string.clone());
+        state.record_process = Some(process);
+    }
+    Ok(Recording { file_name: file, path: path_string, active: true })
+}
+
+/// X10-92：结束录制（双通道）。优雅停掉独立录制进程（写 moov 索引定型 MP4），
+/// 显示会话不受影响。返回定型的录制信息（active=false）。
+#[tauri::command]
+fn stop_recording(
+    app: AppHandle,
+    sessions: State<SessionStore>,
+    serial: Option<String>,
+) -> Result<Option<Recording>, AppError> {
+    let result = stop_recording_with(&sessions, serial.as_deref())?;
+    if result.is_some() {
+        // 录制状态跃迁：推给活跃伴侣会话（M4-3）。
+        notify_companion_recording(&app, false);
+    }
+    Ok(result)
+}
+
+fn stop_recording_with(
+    store: &SessionStore,
+    serial: Option<&str>,
+) -> Result<Option<Recording>, AppError> {
+    let mut map = store.lock()?;
+    // 定位要停止的会话：显式 serial 优先，否则任意仍在录制的设备，否则主会话。
+    let target = serial
+        .map(|s| s.to_owned())
+        .or_else(|| {
+            map.iter()
+                .find(|(_, state)| state.record_process.is_some())
+                .map(|(serial, _)| serial.clone())
+        })
+        .or_else(|| primary_session_serial(&map));
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let Some(state) = map.get_mut(&target) else {
+        return Ok(None);
+    };
+    let Some(mut process) = state.record_process.take() else {
+        return Ok(None); // 没在录制：幂等返回，不报错。
+    };
+    // 优雅退出写 moov；失败也只记录，不阻断（文件可能已坏，但状态必须清）。
+    let _ = process.stop();
+    let path = state.record_path.clone().unwrap_or_default();
+    let file = Path::new(&path)
+        .file_name()
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    Ok(Some(Recording { file_name: file, path, active: false }))
+}
+
 fn current_recording_with(store: &SessionStore) -> Result<Option<Recording>, AppError> {
     let map = store.lock()?;
     let primary = primary_session_serial(&map);
+    // X10-92：「正在录制」由独立录制进程 record_process 判定（双通道），与显示进程无关。
     // 主会话持有录制文件时用它；否则取任意一台仍在录制的设备（多会话并存时
     // 「当前录像」展示最先按序列号排序的进行中录制）。
     let state = primary
@@ -4492,7 +4713,7 @@ fn current_recording_with(store: &SessionStore) -> Result<Option<Recording>, App
         .filter(|state| state.record_path.is_some())
         .or_else(|| {
             map.values()
-                .find(|state| state.record_path.is_some() && state.process.is_some())
+                .find(|state| state.record_path.is_some() && state.record_process.is_some())
         })
         .or_else(|| map.values().find(|state| state.record_path.is_some()));
     let Some(state) = state else {
@@ -4508,22 +4729,19 @@ fn current_recording_with(store: &SessionStore) -> Result<Option<Recording>, App
     Ok(Some(Recording {
         file_name,
         path,
-        active: state.process.is_some(),
+        active: state.record_process.is_some(),
     }))
 }
 
-/// 是否存在「真正正在录制」的会话：持有录制路径**且**镜像进程仍在运行。
+/// 是否存在「真正正在录制」的会话：录制进程仍在运行（X10-92 双通道）。
 ///
 /// 与 [`current_recording_with`] 的展示语义不同：那条路径会回退到已结束的录制条目
-/// （界面要能展示「最近一次录像」）；伴侣通知的状态判定必须精确——进程没了，录制
+/// （界面要能展示「最近一次录像」）；伴侣通知的状态判定必须精确——录制进程没了，录制
 /// 就已经结束，绝不能把历史录制条目当成「仍在录制」（M4-3 通知跃迁判定）。
 fn any_session_recording(store: &SessionStore) -> bool {
     store
         .lock()
-        .map(|map| {
-            map.values()
-                .any(|state| state.record_path.is_some() && state.process.is_some())
-        })
+        .map(|map| map.values().any(|state| state.record_process.is_some()))
         .unwrap_or(false)
 }
 
@@ -4541,7 +4759,7 @@ fn remove_recording_file(
     {
         let map = store.lock()?;
         let in_progress = map.values().any(|state| {
-            state.process.is_some()
+            state.record_process.is_some()
                 && state.record_path.as_deref() == Some(path.to_string_lossy().as_ref())
         });
         if in_progress {
@@ -5533,22 +5751,21 @@ fn start_mirroring(
     log: State<DiagnosticsLog>,
     serial: String,
     options: Option<SessionOptions>,
-    record_file_name: Option<String>,
+    // X10-92（方案甲）：开始镜像不再自动录，此参数保留仅为兼容旧前端调用，一律忽略。
+    _record_file_name: Option<String>,
 ) -> Result<(), AppError> {
-    let options = options.unwrap_or_default();
+    let mut options = options.unwrap_or_default();
     // Pro 门控先于一切副作用：免费版请求录制时，在触碰设备之前就给出明确引导。
     ensure_edition_allows(&app, &options)?;
-    let starting_recording = options.record;
-    // 先准备录制路径：目录不可写或文件名非法时，在占用会话槽位之前就失败。
-    let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
-    let result = start_mirroring_with(&runtimes, &sessions, serial.clone(), options, record_path);
+    // X10-92（方案甲）：设置项「启用屏幕录制功能」只作能力开关，**开始镜像不再自动录**。
+    // 何时录、录多久完全由用户在工具页/托盘/快捷键手动触发（走独立录制通道，不重启
+    // 显示窗口）。因此这里一律忽略 record 请求，显示进程永不带 `--record`。
+    if options.record {
+        options.record = false;
+    }
+    let result = start_mirroring_with(&runtimes, &sessions, serial.clone(), options, None);
     log.record_outcome("mirror_start", result.as_ref().err(), &[&serial]);
     result?;
-
-    // 带录制启动镜像 ⇒ 录制开始跃迁点，推给活跃伴侣会话（M4-3）。
-    if starting_recording {
-        notify_companion_recording(&app, true);
-    }
 
     // 会话已启动：若宿主输入源不是 ABC 布局，临时切到 ABC，保证镜像窗口
     // 能正常打字（X10-38/X10-41）。幂等；失败静默，不阻断镜像。
@@ -5957,30 +6174,23 @@ fn update_session_options(
     sessions: State<SessionStore>,
     log: State<DiagnosticsLog>,
     options: SessionOptions,
-    record_file_name: Option<String>,
+    // X10-92（方案甲）：录制与设置解耦，此参数保留仅为兼容旧前端调用，一律忽略。
+    _record_file_name: Option<String>,
     serial: Option<String>,
 ) -> Result<SessionUpdate, AppError> {
     // 同样是「先校验、再触碰运行中的会话」：路径不可用时不打断正在进行的镜像。
     // Pro 门控同样前置：免费版把录制重新打开时直接拒绝，不打断当前会话。
     ensure_edition_allows(&app, &options)?;
-    // 改动前后的录制状态对比（M4-3）：变化了就推给活跃伴侣会话。
-    // 用精确判定：历史录制条目（进程已没）不算「正在录制」。
-    let was_recording = any_session_recording(&sessions);
-    let record_path = prepare_recording_path(&app, options.record, record_file_name.as_deref())?;
-    let result = apply_session_options_with(&runtimes, &sessions, options, record_path, serial);
+    // X10-92（方案甲）：录制启停走专用命令 start_recording/stop_recording（独立通道、
+    // 不重启显示）。应用窗口设置时忽略 record 字段——它与显示参数无关，绝不应触发
+    // 「为开/关录制而重启镜像」。若其它显示参数变化导致窗口重启，运行中的独立录制
+    // 通道不受影响（它挂在 record_process 上，不随显示进程重启）。
+    let options = SessionOptions { record: false, ..options };
+    let result = apply_session_options_with(&runtimes, &sessions, options, None, serial);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
     if result.is_ok() {
-        let now_recording = any_session_recording(&sessions);
-        if was_recording != now_recording {
-            notify_companion_recording(&app, now_recording);
-        }
         // 重启会话期间用户可能刚换了第三方输入法；幂等补一次托管（X10-39）。
         maybe_switch_host_input_source(&app);
-    } else if was_recording && !any_session_recording(&sessions) {
-        // 重启失败路径（M4-3 补齐）：旧镜像窗口可能已被结束 ⇒ 录制真的终止了。
-        // 只有在录制确实结束（没有任何「进程仍在录制」的会话）时才通知，不猜：
-        // 若旧窗口因「无法结束」仍在运行，录制并未停止，此刻通知就是谎报。
-        notify_companion_recording(&app, false);
     }
     refresh_tray_menu(&app);
     result
@@ -6110,19 +6320,34 @@ struct WirelessServices {
 // 配对码等价于一次性凭据：不写入日志，接口返回后只在前端内存中存在。
 
 #[derive(Default)]
-struct QrPairingStore(std::sync::Mutex<std::collections::HashMap<String, bool>>);
+struct QrPairingStore(std::sync::Mutex<std::collections::HashMap<String, QrPairingState>>);
+
+/// X10-91：paired 阶段需要记住「配对成功时 adb pair 命中的手机 IP」，否则配对
+/// 成功、手机改广播 `_adb-tls-connect._tcp`（随机实例名）后，无法区分局域网里
+/// 多台手机，可能连错设备。pairing 与 connect 是同一台手机先后广播的两个
+/// mDNS 服务，源 IP 一致，可安全关联。
+#[derive(Clone, Default)]
+struct QrPairingState {
+    paired: bool,
+    /// 配对阶段 adb pair 命中条目的手机 IP（`ip:port` 的 host 部分）。
+    paired_ip: Option<String>,
+}
 
 impl QrPairingStore {
     fn insert(&self, service_name: &str) {
-        self.0.lock().unwrap().insert(service_name.to_owned(), false);
+        self.0.lock().unwrap().insert(service_name.to_owned(), QrPairingState::default());
     }
-    fn mark_paired(&self, service_name: &str) {
+    fn mark_paired(&self, service_name: &str, paired_ip: Option<String>) {
         if let Some(state) = self.0.lock().unwrap().get_mut(service_name) {
-            *state = true;
+            state.paired = true;
+            state.paired_ip = paired_ip;
         }
     }
     fn is_paired(&self, service_name: &str) -> bool {
-        self.0.lock().unwrap().get(service_name).copied().unwrap_or(false)
+        self.0.lock().unwrap().get(service_name).map(|s| s.paired).unwrap_or(false)
+    }
+    fn paired_ip(&self, service_name: &str) -> Option<String> {
+        self.0.lock().unwrap().get(service_name).and_then(|s| s.paired_ip.clone())
     }
     fn remove(&self, service_name: &str) {
         self.0.lock().unwrap().remove(service_name);
@@ -6221,11 +6446,26 @@ fn qr_pairing_progress(
                     "请确认手机停在「使用二维码配对设备」页面后重试；失败持续时可改用配对码配对。",
                 )
             })?;
-        store.mark_paired(&service_name);
+        store.mark_paired(
+            &service_name,
+            entry.endpoint.rsplit_once(':').map(|(host, _)| host.to_owned()),
+        );
         return Ok(QrPairingProgress { stage: "paired".into(), detail: None });
     }
-    // 配对已完成：尝试对手机新广播的连接地址执行 connect。
-    if let Some(entry) = entries.iter().find(|entry| entry.service == "_adb-tls-connect._tcp") {
+    // 配对已完成：只连接「源 IP 与 pairing 阶段 adb pair 命中的那台手机相同」的
+    // _adb-tls-connect 条目（X10-91）。pairing 与 connect 是同一台手机先后广播的
+    // 两个 mDNS 服务，源 IP 一致；而实例名在配对成功后被手机换成随机串，无法直接
+    // 用名字关联。用 IP 关联后，多台手机共存也不会连错。
+    //
+    // pairing 阶段成功时已把命中条目的端点存进 store（键 <服务名> → ip），这里取出比对。
+    let paired_ip = store.paired_ip(&service_name);
+    let connect_entry = entries.iter().find(|entry| {
+        entry.service == "_adb-tls-connect._tcp"
+            && paired_ip
+                .as_deref()
+                .is_some_and(|ip| entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip))
+    });
+    if let Some(entry) = connect_entry {
         match runtimes.adb.connect(&entry.endpoint) {
             Ok(()) => {
                 store.remove(&service_name);
@@ -7746,6 +7986,8 @@ pub fn run() {
             delete_device_file,
             install_apk_to_device,
             current_recording,
+            start_recording,
+            stop_recording,
             delete_recording,
             pair_wireless_device,
             connect_wireless_device,
@@ -8343,6 +8585,9 @@ mod tests {
         records: Arc<Mutex<Vec<Option<String>>>>,
         /// 为真时 `start` 直接失败，用于验证重启失败不会塌缩会话状态。
         fail_start: bool,
+        /// X10-92：录制通道（`start_recorder`）收到的参数与录制路径。
+        recorder_starts: Arc<Mutex<Vec<SessionOptions>>>,
+        recorder_records: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeMirror {
@@ -8355,6 +8600,8 @@ mod tests {
                 starts: Arc::new(Mutex::new(Vec::new())),
                 records: Arc::new(Mutex::new(Vec::new())),
                 fail_start: false,
+                recorder_starts: Arc::new(Mutex::new(Vec::new())),
+                recorder_records: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -8367,6 +8614,8 @@ mod tests {
                 starts: Arc::new(Mutex::new(Vec::new())),
                 records: Arc::new(Mutex::new(Vec::new())),
                 fail_start: false,
+                recorder_starts: Arc::new(Mutex::new(Vec::new())),
+                recorder_records: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -8378,6 +8627,8 @@ mod tests {
                 starts: Arc::new(Mutex::new(Vec::new())),
                 records: Arc::new(Mutex::new(Vec::new())),
                 fail_start: false,
+                recorder_starts: Arc::new(Mutex::new(Vec::new())),
+                recorder_records: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -8408,6 +8659,27 @@ mod tests {
                 .push(record_path.map(|path| path.to_string_lossy().into_owned()));
             if self.fail_start {
                 return Err(std::io::Error::other("mirror start failed"));
+            }
+            Ok(Box::new(FakeProcess {
+                exit: self.exit,
+                killed: Arc::clone(&self.killed),
+            }))
+        }
+
+        fn start_recorder(
+            &self,
+            _serial: &str,
+            options: &SessionOptions,
+            record_path: &Path,
+        ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
+            // 记录录制进程的参数与路径，供测试断言「双通道用 record_arguments 且独立」。
+            self.recorder_starts.lock().unwrap().push(options.clone());
+            self.recorder_records
+                .lock()
+                .unwrap()
+                .push(record_path.to_string_lossy().into_owned());
+            if self.fail_start {
+                return Err(std::io::Error::other("recorder start failed"));
             }
             Ok(Box::new(FakeProcess {
                 exit: self.exit,
@@ -9280,6 +9552,44 @@ mod tests {
         assert!(validate_pairing_code(&offer.pairing_code).is_ok());
         assert_eq!(random_pairing_code().len(), 6);
         assert!(random_service_name().starts_with("mirrordock-"));
+    }
+
+    /// X10-91：配对成功后只按「配对阶段 adb pair 命中的手机 IP」连接对应的
+    /// `_adb-tls-connect` 条目；局域网里同时广播无线调试的其他手机（不同 IP）
+    /// 绝不能被误连。这复现用户场景——家里多台手机，配对成功却连不上/连错。
+    #[test]
+    fn qr_pairing_connects_only_the_phone_with_the_paired_ip() {
+        let store = QrPairingStore::default();
+        let service = "mirrordock-x10r91";
+        store.insert(service);
+        // 配对阶段 adb pair 命中 192.168.1.20（用户手机）。
+        store.mark_paired(service, Some("192.168.1.20".to_owned()));
+        assert!(store.is_paired(service));
+        assert_eq!(store.paired_ip(service).as_deref(), Some("192.168.1.20"));
+
+        // 手机回到主页面后改广播 connect；同网还有另一台手机（192.168.1.30）也在广播。
+        let raw = "adb-phoneA-x1\t_adb-tls-connect._tcp\t192.168.1.30:41001\nadb-phoneB-y2\t_adb-tls-connect._tcp\t192.168.1.20:41002\n";
+        let entries = parse_mdns_entries(raw);
+        let paired_ip = store.paired_ip(service);
+        let chosen = entries.iter().find(|entry| {
+            entry.service == "_adb-tls-connect._tcp"
+                && paired_ip
+                    .as_deref()
+                    .is_some_and(|ip| entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip))
+        });
+        // 必须选中同 IP 的那台（用户手机），而不是第一台/别的手机。
+        assert_eq!(chosen.map(|e| e.endpoint.as_str()), Some("192.168.1.20:41002"));
+
+        // 若配对 IP 不在广播里（手机还没回主页面），不得连接任何设备。
+        store.mark_paired(service, Some("192.168.1.99".to_owned()));
+        let paired_ip = store.paired_ip(service);
+        let chosen = entries.iter().find(|entry| {
+            entry.service == "_adb-tls-connect._tcp"
+                && paired_ip
+                    .as_deref()
+                    .is_some_and(|ip| entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip))
+        });
+        assert!(chosen.is_none());
     }
 
     // -- 结构化错误契约 --
@@ -11790,10 +12100,11 @@ mod tests {
     }
 
     #[test]
-    fn a_requested_recording_path_is_handed_to_the_mirror_process() {
+    fn the_recording_path_goes_to_a_separate_recorder_never_the_display_process() {
         let directory = scratch_dir("recording-start");
         let mirror = FakeMirror::running();
         let records = Arc::clone(&mirror.records);
+        let recorder_records = Arc::clone(&mirror.recorder_records);
         let runtimes = runtimes(
             FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
             mirror,
@@ -11801,6 +12112,7 @@ mod tests {
         let store = SessionStore::default();
         let path = directory.join("MirrorDock-20260928-171825.mp4");
 
+        // X10-92（方案甲）：开始镜像即使带 record=true 也绝不把录制塞进显示进程。
         start_mirroring_with(
             &runtimes,
             &store,
@@ -11809,20 +12121,37 @@ mod tests {
                 record: true,
                 ..Default::default()
             },
-            Some(path.clone()),
+            None,
         )
         .unwrap();
 
         let recorded = records.lock().unwrap().clone();
         assert_eq!(
-            recorded[0].as_deref(),
-            Some(path.to_string_lossy().as_ref()),
-            "录制路径必须原样交给镜像进程，不能由前端拼本机路径"
+            recorded[0], None,
+            "显示进程永远不带录制路径（录制走独立通道）"
+        );
+
+        // 经 start_recorder 开录：路径原样交给独立录制进程，不碰显示进程。
+        let recorder = runtimes
+            .mirror
+            .start_recorder("phone", &SessionOptions::default(), &path)
+            .unwrap();
+        {
+            let mut map = store.lock().unwrap();
+            let state = session_entry_mut(&mut map, "phone");
+            state.record_path = Some(path.to_string_lossy().into_owned());
+            state.record_process = Some(recorder);
+        }
+        let rec_recorded = recorder_records.lock().unwrap().clone();
+        assert_eq!(
+            rec_recorded[0],
+            path.to_string_lossy().as_ref(),
+            "录制路径必须原样交给独立录制进程，不能由前端拼本机路径"
         );
 
         let recording = current_recording_with(&store).unwrap().unwrap();
         assert_eq!(recording.file_name, "MirrorDock-20260928-171825.mp4");
-        assert!(recording.active, "进程还在跑，录像就还在写");
+        assert!(recording.active, "录制进程还在跑，录像就还在写");
 
         let _ = fs::remove_dir_all(&directory);
     }
@@ -11851,7 +12180,7 @@ mod tests {
             assert!(!any_session_recording(&store));
         }
 
-        // 进程在跑 + 持有录制路径 ⇒ 正在录制（伴侣通知判定的唯一真值条件）。
+        // 显示进程在跑 + 独立录制通道在录 ⇒ 正在录制（伴侣通知判定的唯一真值条件）。
         let runtimes = runtimes(
             FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
             FakeMirror::running(),
@@ -11861,27 +12190,23 @@ mod tests {
             &runtimes,
             &store,
             "phone".into(),
-            SessionOptions {
-                record: true,
-                ..Default::default()
-            },
-            Some(PathBuf::from("MirrorDock-recording.mp4")),
+            SessionOptions::default(),
+            None,
         )
         .unwrap();
+        attach_test_recording(&store, "phone", &PathBuf::from("MirrorDock-recording.mp4"));
         assert!(any_session_recording(&store));
 
-        // 进程退出（异常中断或用户直接关窗）：监视线程清空进程、会话回失败态，
-        // 但录制条目仍留在会话上（与真实监视线程行为一致）。此刻录制已经结束，
-        // 通知判定不得再把这条历史条目当成「正在录制」。
+        // 录制通道被停止（用户点停止或录制进程退出）：record_process 清空、录制条目仍留。
+        // 此刻录制已经结束，通知判定不得再把这条历史条目当成「正在录制」。
         {
             let mut map = store.0.lock().unwrap();
             let state = map.get_mut("phone").unwrap();
-            state.process = None;
-            state.session = resolve_process_exit("phone", false, "");
+            state.record_process = None;
         }
         assert!(
             !any_session_recording(&store),
-            "进程已退出 ⇒ 录制已随进程终止，残留录制条目不算「正在录制」"
+            "录制通道已停 ⇒ 录制已结束，残留录制条目不算「正在录制」"
         );
     }
 
@@ -11918,25 +12243,24 @@ mod tests {
             FakeMirror::running(),
         );
         let store = SessionStore::default();
+        // X10-92：录制与显示解耦。先起显示会话，再经独立通道开录。
         start_mirroring_with(
             &runtimes,
             &store,
             "phone".into(),
-            SessionOptions {
-                record: true,
-                ..Default::default()
-            },
-            Some(live.clone()),
+            SessionOptions::default(),
+            None,
         )
         .unwrap();
+        attach_test_recording(&store, "phone", &live);
 
         let error =
             remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store).unwrap_err();
         assert_eq!(error.code, "recording_in_progress");
         assert!(live.exists(), "正在写的录像文件不得被删掉");
 
-        // 结束会话后即可删除；再删一次必须如实说「文件已经不在了」。
-        stop_mirroring_with(&store, None).unwrap();
+        // 结束录制（独立通道停止）后即可删除；再删一次必须如实说「文件已经不在了」。
+        stop_recording_with(&store, None).unwrap();
         remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store).unwrap();
         assert!(!live.exists());
         assert_eq!(
@@ -11949,11 +12273,24 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
     }
 
+    /// 测试辅助：直接给某设备挂上一条「录制中」状态（独立录制进程 + 路径）。
+    /// 模拟 `start_recording_with` 成功后的 SessionState，不经过真实 spawn。
+    fn attach_test_recording(store: &SessionStore, serial: &str, path: &Path) {
+        let mut map = store.lock().unwrap();
+        let state = session_entry_mut(&mut map, serial);
+        state.record_path = Some(path.to_string_lossy().into_owned());
+        state.record_process = Some(Box::new(FakeProcess {
+            exit: None,
+            killed: Arc::new(Mutex::new(false)),
+        }));
+    }
+
     #[test]
-    fn turning_recording_on_restarts_the_session_with_a_new_recording_file() {
-        let directory = scratch_dir("recording-restart");
+    fn starting_recording_uses_a_separate_channel_and_never_restarts_the_display() {
+        let directory = scratch_dir("recording-channel");
         let mirror = FakeMirror::running();
-        let records = Arc::clone(&mirror.records);
+        let starts = Arc::clone(&mirror.starts);
+        let recorder_starts = Arc::clone(&mirror.recorder_starts);
         let runtimes = runtimes(
             FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
             mirror,
@@ -11969,27 +12306,25 @@ mod tests {
         .unwrap();
 
         let path = directory.join("MirrorDock-20260928-180000.mp4");
-        let update = apply_session_options_with(
-            &runtimes,
-            &store,
-            SessionOptions {
-                record: true,
-                ..Default::default()
-            },
-            Some(path.clone()),
-            None,
-        )
-        .unwrap();
+        // 双通道：开录只新增一条独立录制进程，显示进程绝不重启。
+        attach_test_recording(&store, "phone", &path);
 
-        assert!(update.applied, "打开录制是一次真实的会话变更，必须重启生效");
-        let recorded = records.lock().unwrap().clone();
-        assert_eq!(recorded.len(), 2, "应当恰好启动两次：原会话 + 开启录制后重启");
-        assert_eq!(recorded[0], None);
         assert_eq!(
-            recorded[1].as_deref(),
-            Some(path.to_string_lossy().as_ref())
+            starts.lock().unwrap().len(),
+            1,
+            "显示进程只启动一次，开录不得重启它"
         );
-        assert!(current_recording_with(&store).unwrap().unwrap().active);
+        assert!(
+            current_recording_with(&store).unwrap().unwrap().active,
+            "录制中状态由独立录制进程决定"
+        );
+
+        // 结束录制：显示进程仍在，录制通道被停掉。
+        let stopped = stop_recording_with(&store, None).unwrap().unwrap();
+        assert!(!stopped.active);
+        assert_eq!(starts.lock().unwrap().len(), 1, "停录也不重启显示进程");
+        assert!(!current_recording_with(&store).unwrap().unwrap().active);
+        let _ = recorder_starts; // FakeMirror::start_recorder 的调用记录在集成路径断言
 
         let _ = fs::remove_dir_all(&directory);
     }
