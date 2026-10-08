@@ -218,7 +218,16 @@ type WirelessServices = { pairing: string[]; connect: string[] };
 
 // 应用级设置（后端持久化到 app-settings.json）：只影响客户端自身行为
 // （窗口、图标、断线自动重连），与镜像会话参数（SessionOptions）严格分开。
-export type AppSettingsView = { hide_dock_icon: boolean; auto_reconnect: boolean };
+export type AppSettingsView = { hide_dock_icon: boolean; auto_reconnect: boolean; recording_dir?: string | null };
+
+// 归一化后端返回的通用设置：布尔给默认、recording_dir 透传（null=用系统默认目录）。
+function normalizeAppSettings(s: Partial<AppSettingsView>): AppSettingsView {
+  return {
+    hide_dock_icon: s.hide_dock_icon === true,
+    auto_reconnect: s.auto_reconnect !== false,
+    recording_dir: typeof s.recording_dir === "string" && s.recording_dir.length > 0 ? s.recording_dir : null,
+  };
+}
 // 平台判断：只有 macOS 提供「隐藏 Dock 图标」。做成纯函数方便测试。
 export function isMacPlatform(userAgent: string): boolean {
   return /Macintosh|Mac OS X/.test(userAgent);
@@ -908,8 +917,8 @@ function App() {
     void (async () => {
       try {
         const settings = await invoke<Partial<AppSettingsView>>("get_app_settings");
-        if (!disposed) setAppSettings({ hide_dock_icon: settings.hide_dock_icon === true, auto_reconnect: settings.auto_reconnect !== false });
-      } catch { if (!disposed) setAppSettings({ hide_dock_icon: false, auto_reconnect: true }); }
+        if (!disposed) setAppSettings(normalizeAppSettings(settings));
+      } catch { if (!disposed) setAppSettings(normalizeAppSettings({})); }
       try {
         const enabled = await invoke<unknown>("plugin:autostart|is_enabled");
         if (!disposed) setAutostartEnabled(enabled === true);
@@ -941,7 +950,7 @@ function App() {
     setGeneralNotice(null);
     try {
       const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, hide_dock_icon: hide } });
-      setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true, auto_reconnect: saved.auto_reconnect !== false });
+      setAppSettings(normalizeAppSettings(saved));
       setGeneralNotice(hide ? "已隐藏 Dock 图标，从屏幕顶部菜单栏图标使用 MirrorDock。" : "已恢复 Dock 图标。");
     } catch (error) {
       setAppSettings(previous);
@@ -955,11 +964,50 @@ function App() {
     setGeneralNotice(null);
     try {
       const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, auto_reconnect: enabled } });
-      setAppSettings({ hide_dock_icon: saved.hide_dock_icon === true, auto_reconnect: saved.auto_reconnect !== false });
+      setAppSettings(normalizeAppSettings(saved));
       setGeneralNotice(enabled ? "已开启断线自动重连：无线掉线或数据线被拔掉后，会等待连接恢复并自动重建镜像（最多 15 分钟）。" : "已关闭自动重连：断开后需要手动重新连接。");
     } catch (error) {
       setAppSettings(previous);
       setGeneralNotice(errorMessage(error, "无法修改自动重连设置。"));
+    }
+  }
+
+  // X10-95：选择录像保存文件夹。不选（取消）保持现状；选了立即持久化到后端。
+  async function chooseRecordingDir() {
+    setGeneralNotice(null);
+    let picked: string | null = null;
+    try {
+      const result = await openFilePicker({ directory: true, multiple: false, title: "选择录像保存文件夹" });
+      picked = typeof result === "string" ? result : null;
+    } catch (error) {
+      setGeneralNotice(errorMessage(error, "无法打开文件夹选择。"));
+      return;
+    }
+    if (!picked) return; // 用户取消
+    const previous = appSettings;
+    setAppSettings({ ...appSettings, recording_dir: picked });
+    try {
+      const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, recording_dir: picked } });
+      setAppSettings(normalizeAppSettings(saved));
+      setGeneralNotice(`录像将保存到：${picked}`);
+    } catch (error) {
+      setAppSettings(previous);
+      setGeneralNotice(errorMessage(error, "无法使用这个录像保存位置。"));
+    }
+  }
+
+  // 恢复默认录像目录（视频目录/MirrorDock）。
+  async function resetRecordingDir() {
+    const previous = appSettings;
+    setAppSettings({ ...appSettings, recording_dir: null });
+    setGeneralNotice(null);
+    try {
+      const saved = await invoke<Partial<AppSettingsView>>("set_app_settings", { settings: { ...appSettings, recording_dir: null } });
+      setAppSettings(normalizeAppSettings(saved));
+      setGeneralNotice("已恢复默认录像保存位置（本机视频目录下的 MirrorDock 文件夹）。");
+    } catch (error) {
+      setAppSettings(previous);
+      setGeneralNotice(errorMessage(error, "无法恢复默认录像位置。"));
     }
   }
   // 检查更新（X10-47）：check → 发现新版则下载安装（验签由后端 updater 完成）→ 重启。
@@ -3346,6 +3394,16 @@ function App() {
                     <span className="setting-desc">勾选则开启录制功能；何时开始、何时结束由你在「工具」页或快捷键（{shortcuts.record}）决定，镜像画面不会中断。MP4 保存在本机视频目录。{!proEdition && "专业版功能，在下方「版本与授权」激活后可用"}</span>
                   </div>
                   <label className="setting-toggle"><input type="checkbox" aria-label="启用视频录制" checked={options.record} disabled={!proEdition} onChange={e => updateOptions({...options, record: e.target.checked})} /></label>
+                </div>
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">录像保存位置</span>
+                    <span className="setting-desc">{appSettings.recording_dir ? `当前：${appSettings.recording_dir}` : "默认保存在本机视频目录下的 MirrorDock 文件夹。"}</span>
+                  </div>
+                  <div className="setting-actions">
+                    <button className="text-button" type="button" aria-label="选择录像保存文件夹" onClick={() => void chooseRecordingDir()}>选择文件夹</button>
+                    {appSettings.recording_dir && <button className="text-button" type="button" aria-label="恢复默认录像位置" onClick={() => void resetRecordingDir()}>恢复默认</button>}
+                  </div>
                 </div>
                 <div className="setting-row">
                   <div className="setting-info">

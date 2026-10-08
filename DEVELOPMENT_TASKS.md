@@ -735,6 +735,14 @@
 
 - [x] ✅ **X10-94 键盘映射 / 鼠标模拟点击器——用户已拍板：移入私有仓库（2026-10-08 晚）**：用户要「镜像上层鼠标模拟点击器：加点位、按点位顺序点击、循环、设循环次数」。**⚠️ 与 AGENTS.md 红线冲突**（第 13 行 No unattended general-purpose control）。**用户最终拍板**：①自动循环挂机**不做**（无论公私仓库都不做）；②接受「**有人值守、单次触发、不自动循环**」边界——手动点一次「执行一轮」，轮内循环次数由用户手动设定，跑完即停；③**排除金融/支付/带反作弊的应用**（前台检测屏蔽名单）；④该功能**不进公开版**，单独发布到**私有仓库 `github.com/g-star1024/MirrorDock-tools`**（基于公开版 v0.4.18 基线）。技术路径：`adb shell input tap x y`（固定参数直接进程调用，无 shell 拼接）+ 坐标越界保护 + 执行状态可见可撤销。**公开版仓库不含任何模拟点击代码，本台账仅记录决策；实现与证据见私有仓库。**
 
+- [x] ✅ **X10-95 录制功能真机问题批次修复（2026-10-09 凌晨）**：用户真机报 5 个录制问题，逐一定位修复。
+  - **问题5 黑屏 + 问题3「No such file」（同根）**：录制出来的 MP4 全黑/无法播放，前端「在文件夹中显示」报 `No such file or directory (os error 2)`。**根因（真机实证）**：Tauri/Rust spawn 的子进程继承「忽略 SIGINT」，`SystemMirrorProcess::stop()` 却发 SIGTERM——scrcpy 4.1 不响应 SIGTERM（X10-79 已知）→ 等满 3s 超时 → SIGKILL 强杀 → **moov 索引永远写不进 MP4**（`ffprobe` 实证 `moov atom not found`），文件损坏即黑屏/无法播放。**修法**：①`spawn_scrcpy` 在 Unix `pre_exec` 把 SIGINT/SIGTERM/SIGHUP 重置为 `SIG_DFL`（让 scrcpy 自己的信号处理器能接管）；②`SystemMirrorProcess` 加 `is_recorder` 标记，`stop()` 对录制进程优先发 **SIGINT**（显示进程维持 SIGTERM 原路径）。**真机验证**：SIGINT 后 1.5s 优雅退出、日志打出 `Recording complete`、产出 MP4 `ffprobe` 完好（h264 864x1920 + opus，duration 正常）。新增测试 `a_recorder_is_stopped_with_sigint_so_the_recording_finalizes`（探针进程忽略 SIGTERM、仅 SIGINT 退出，验证发的是 SIGINT）。
+  - **问题2 托盘菜单卡「开始屏幕录制」**：`build_tray_menu` 的 `recording` 判定用旧的 `options.record`（单通道重启式遗留），X10-92 改双通道后显示进程永远不带 record → 永远显示「开始」。**修法**：改用 `record_process.is_some()` 判定；并给 `start_recording`/`stop_recording` 命令补 `refresh_tray_menu`（原仅托盘入口刷新，客户端按钮入口不刷）。
+  - **问题4 录像保存目录不可设置**：新增 `AppSettings.recording_dir: Option<String>`（绝对路径，set 时校验绝对路径+可创建可写，空串=默认），`recording_dir()` 优先读自定义、失效回退系统默认。前端设置页加「录像保存位置」行（dialog 选文件夹 + 显示当前路径 + 恢复默认）。
+  - **问题1 首次录制镜像闪退重启**：**待真机复现确认**。强假设：桌面模式 `--new-display` 虚拟屏与显示进程冲突，或录制进程 spawn 即崩牵连。**本批核心修复（优雅停）可能已覆盖部分场景**——需用户用含本修复的新版实测确认是否复现，若仍复现抓 scrcpy 输出定位。
+  - **质量门（全绿）**：后端 cargo test **199 passed**（198+1）+ clippy **0 warning**；前端 vitest **82 passed** + pnpm build 绿。
+  - **未验证面（如实标记）**：问题1 闪退根因未真机复现确认；Windows 平台无 SIGINT 对应物，录制停止仍强杀可能缺 moov（平台差异，待 Windows 真机定方案）。
+
 
   - **CI 波折与发版证据（已核验）**：首次 run `37284280561` 仅 macos-x64「构建安装包」失败（exit 1 无注解，raw log 需 admin 403）——**未盲猜**，按 10-03 教训先建能力（X10-82：build.yml 构建步骤 tee + 失败上传 `build-log-<label>` artifact，commit `7c43f9e`），重推 tag 重跑。重跑 run `37287371051` **success**，Release id `403545372`，**30 资产全齐**；`latest.json` version=0.4.13、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.13.apk` 在列。Mac 已换装 0.4.13（旧版备份 `/Applications/MirrorDock.app.old-0.4.12`），图标已核验。site/index.html 已同步。**需用户重启客户端 + 重启镜像会话生效**（Dock 图标跟随先注册进程）。
 - - [x] ✅ **X10-80 桌面模式虚拟屏白屏根因定性 + 落地核验（2026-10-03 19:30；用户报「切 2560 白屏，切回 1920 依旧」）**

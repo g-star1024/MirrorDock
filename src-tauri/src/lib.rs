@@ -1237,6 +1237,9 @@ struct SystemMirrorProcess {
     child: Child,
     /// scrcpy 的 stdout/stderr 汇聚到这里，供失败时给出真实原因（X10-79）。
     output: Arc<ScrcpyOutputSink>,
+    /// X10-95：是否录制进程。录制进程停止时必须走 SIGINT（写 moov 索引定型 MP4），
+    /// 而显示进程维持 SIGTERM→SIGKILL 的既有路径。
+    is_recorder: bool,
 }
 
 impl SystemMirrorProcess {
@@ -1298,8 +1301,18 @@ impl MirrorProcess for SystemMirrorProcess {
         }
         #[cfg(unix)]
         {
-            // SAFETY: kill 只向本子进程的 pid 发送 SIGTERM，不触碰其它进程。
-            let sent = unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+            // X10-95：录制进程与显示进程用不同的「优雅停止」信号。
+            //
+            // - **录制进程（is_recorder=true）发 SIGINT**。scrcpy 的录制收尾
+            //   （flush 剩余 packet + 写 moov 索引定型 MP4）只在收到 SIGINT 走
+            //   正常退出路径时执行；发 SIGTERM 它不认，最终 SIGKILL 会让 MP4 缺
+            //   moov 变砖——这就是「录出来全黑屏/无法播放」的根因。配合 spawn 时
+            //   的 pre_exec 信号重置，SIGINT 能真正送达，实测约 1.5s 优雅退出。
+            // - **显示进程（false）维持 SIGTERM**。scrcpy 4.1 对显示会话本就
+            //   不响应 SIGTERM（X10-79 实测），会走下方超时强杀，行为不变。
+            let stop_signal = if self.is_recorder { libc::SIGINT } else { libc::SIGTERM };
+            // SAFETY: kill 只向本子进程的 pid 发信号，不触碰其它进程。
+            let sent = unsafe { libc::kill(self.child.id() as libc::pid_t, stop_signal) };
             if sent != 0 {
                 // 发送失败最常见的原因是进程恰好自行退出；能 reap 就视为已结束。
                 if self.try_wait().is_some() {
@@ -1307,14 +1320,10 @@ impl MirrorProcess for SystemMirrorProcess {
                 }
                 return Err(std::io::Error::last_os_error());
             }
-            // X10-79：scrcpy 4.1 **不响应 SIGTERM**（真机实测：连发 6 秒仍在运行，
-            // 只能靠 SIGKILL 结束）。原来的 3 秒等待因此永远走不到头，
-            // 每次「切换画质 / 结束会话」都会耗满 3 秒再强杀；强杀会跳过
-            // scrcpy 的清理流程（设备端 server 与 adb 隧道的收尾），在紧跟着
-            // 启动新会话时容易出现画面出不来。
-            //
-            // 现在显式先等 SIGTERM，若它不生效就直接升级为 SIGKILL——不再把
-            // 3 秒当成「scrcpy 会优雅退出」的赌注。
+            // X10-79：显示会话的 scrcpy 4.1 **不响应 SIGTERM**（真机实测：连发 6 秒
+            // 仍在运行，只能靠 SIGKILL 结束）；录制会话的 SIGINT 通常 1.5s 内退出。
+            // 统一等 PROCESS_GRACEFUL_TIMEOUT，超时再升级 SIGKILL——不再把
+            // 整个等待当成「scrcpy 一定会优雅退出」的赌注。
             let graceful = std::time::Instant::now() + PROCESS_GRACEFUL_TIMEOUT;
             while std::time::Instant::now() < graceful {
                 if self.try_wait().is_some() {
@@ -1327,7 +1336,7 @@ impl MirrorProcess for SystemMirrorProcess {
         }
         #[cfg(not(unix))]
         {
-            // Windows 没有 SIGTERM 对应物：TerminateProcess 立即结束进程，
+            // Windows 没有 SIGINT/SIGTERM 对应物：TerminateProcess 立即结束进程，
             // 录制中的 MP4 可能缺 moov 索引。该平台差异如实记录，待 Windows
             // 真机验证后决定是否引入平台特定的优雅退出手段。
             self.kill()?;
@@ -1386,7 +1395,7 @@ impl MirrorRuntime for ScrcpyRuntime {
                 .arg(format!("--record={}", path.to_string_lossy()))
                 .arg("--record-format=mp4");
         }
-        Self::spawn_scrcpy(command)
+        Self::spawn_scrcpy(command, false)
     }
 
     fn start_recorder(
@@ -1411,13 +1420,18 @@ impl MirrorRuntime for ScrcpyRuntime {
             )
             .arg(format!("--record={}", record_path.to_string_lossy()))
             .arg("--record-format=mp4");
-        Self::spawn_scrcpy(command)
+        Self::spawn_scrcpy(command, true)
     }
 }
 
 impl ScrcpyRuntime {
     /// 抽出公共的子进程启动：接管 stdio（避免 GUI 应用丢失 scrcpy 报错 + 防管道写满阻塞）。
-    fn spawn_scrcpy(mut command: Command) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
+    ///
+    /// X10-95：Unix 下在 `pre_exec` 把 SIGINT/SIGTERM 重置为 SIG_DFL。
+    /// Tauri/桌面环境 spawn 的子进程会继承「忽略 SIGINT」，而 scrcpy 的录制收尾
+    /// （写 moov 索引）只在收到 SIGINT 走正常退出路径时执行——不重置的话，
+    /// 后续 `stop()` 发 SIGINT 会被进程无视，最终只能 SIGKILL，MP4 缺 moov 变砖。
+    fn spawn_scrcpy(mut command: Command, is_recorder: bool) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
         // X10-79：必须显式 piped。默认情况下子进程继承父进程的 stdio，
         // MirrorDock 是 GUI 应用、没有可用终端，scrcpy 的报错会**直接丢失**——
         // 这正是「用户报白屏、日志里什么都看不到」的原因。接管后既能读到原文，
@@ -1425,9 +1439,24 @@ impl ScrcpyRuntime {
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
         command.stdin(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: pre_exec 里只做 async-signal-safe 的 signal() 重置，不分配内存、
+            // 不碰锁、不调任何非信号安全函数。把可能被父进程忽略的信号恢复默认，
+            // 让 scrcpy 自己的信号处理器能正常接管 SIGINT。
+            unsafe {
+                command.pre_exec(|| {
+                    libc::signal(libc::SIGINT, libc::SIG_DFL);
+                    libc::signal(libc::SIGTERM, libc::SIG_DFL);
+                    libc::signal(libc::SIGHUP, libc::SIG_DFL);
+                    Ok(())
+                });
+            }
+        }
         let mut child = command.spawn()?;
         let output = SystemMirrorProcess::capture_output(&mut child);
-        Ok(Box::new(SystemMirrorProcess { child, output }))
+        Ok(Box::new(SystemMirrorProcess { child, output, is_recorder }))
     }
 }
 
@@ -2276,11 +2305,16 @@ struct AppSettings {
     /// 默认开启：无线掉线（尤其手机熄屏后整台下网）是无线场景第一痛点，
     /// 用户点亮手机的那一刻应当直接回到镜像，而不是再手动连一遍。
     auto_reconnect: bool,
+    /// X10-95：录像保存目录（绝对路径）。`None` 用系统默认（视频目录/MirrorDock）。
+    /// 用户可在设置里改成任意可写文件夹；非法/不可写路径在保存时拒绝，
+    /// 录制时若目录已失效回退默认（不因为目录丢了就录不成）。
+    #[serde(default)]
+    recording_dir: Option<String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { hide_dock_icon: false, auto_reconnect: true }
+        Self { hide_dock_icon: false, auto_reconnect: true, recording_dir: None }
     }
 }
 
@@ -2384,9 +2418,38 @@ fn get_app_settings(app: AppHandle) -> Result<AppSettings, AppError> {
 fn set_app_settings(app: AppHandle, settings: AppSettings) -> Result<AppSettings, AppError> {
     // macOS 之外不允许打开隐藏 Dock（前端也不展示该选项；这里再兜一层底，
     // 防止手改 JSON 后在 Windows/Linux 上出现「勾了但没有任何效果」的假开关）。
+    // X10-95：录像目录校验——非空必须是绝对路径，且能创建/可写，否则拒存并如实报错。
+    let recording_dir = match settings.recording_dir.as_deref() {
+        None => None,
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None // 空串等价于「用默认」
+            } else {
+                let candidate = PathBuf::from(trimmed);
+                if !candidate.is_absolute() {
+                    return Err(AppError::new(
+                        "recording_dir_invalid",
+                        "录像保存位置无效。",
+                        "请选择一个文件夹（需要完整路径）。",
+                    ));
+                }
+                // 试着把目录建出来，建不出来就是不可写/无权限，拒存。
+                if fs::create_dir_all(&candidate).is_err() {
+                    return Err(AppError::new(
+                        "recording_dir_unwritable",
+                        "无法使用这个录像保存位置。",
+                        "请换一个可写的文件夹。",
+                    ));
+                }
+                Some(trimmed.to_owned())
+            }
+        }
+    };
     let settings = AppSettings {
         hide_dock_icon: cfg!(target_os = "macos") && settings.hide_dock_icon,
         auto_reconnect: settings.auto_reconnect,
+        recording_dir,
     };
     apply_dock_icon_policy(&app, &settings);
     save_app_settings(&app_settings_path(&app)?, &settings)?;
@@ -3054,9 +3117,10 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     let (active, recording, running) = match sessions.lock() {
         Ok(map) => {
             let active = any_session_active(&map);
-            let recording = map
-                .values()
-                .any(|state| state.process.is_some() && state.options.record);
+            // X10-92 双通道：录制状态由独立录制进程 record_process 判定。
+            // 旧判定 `options.record` 是单通道重启式遗留——双通道下显示进程
+            // 永远不带 record，读它会导致菜单永远停在「开始屏幕录制」（X10-95 修复）。
+            let recording = map.values().any(|state| state.record_process.is_some());
             // 逐会话条目：只列真正持有镜像进程的设备（历史账本条目不算）。
             let running: Vec<String> = map
                 .iter()
@@ -4561,6 +4625,16 @@ fn recording_dir_unavailable_error() -> AppError {
 }
 
 fn recording_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    // X10-95：用户自定义目录优先；未设置或目录失效回退系统默认（视频目录/MirrorDock）。
+    // 自定义目录必须是绝对路径——相对路径会被前端误传成不可预期的位置，直接拒用。
+    if let Ok(settings) = app_settings_path(app).map(|p| load_app_settings(&p)) {
+        if let Some(custom) = settings.recording_dir.as_deref() {
+            let candidate = PathBuf::from(custom);
+            if candidate.is_absolute() {
+                return Ok(candidate);
+            }
+        }
+    }
     app.path()
         .video_dir()
         .or_else(|_| app.path().app_data_dir())
@@ -4603,7 +4677,10 @@ fn start_recording(
     serial: Option<String>,
     file_name: Option<String>,
 ) -> Result<Recording, AppError> {
-    start_recording_with(&app, &runtimes, &sessions, serial, file_name)
+    let result = start_recording_with(&app, &runtimes, &sessions, serial, file_name)?;
+    // X10-95：录制状态跃迁后刷新托盘菜单（开始→「结束屏幕录制」）。
+    refresh_tray_menu(&app);
+    Ok(result)
 }
 
 fn start_recording_with(
@@ -4662,6 +4739,8 @@ fn stop_recording(
 ) -> Result<Option<Recording>, AppError> {
     let result = stop_recording_with(&sessions, serial.as_deref())?;
     if result.is_some() {
+        // X10-95：录制状态跃迁后刷新托盘菜单（结束→「开始屏幕录制」）。
+        refresh_tray_menu(&app);
         // 录制状态跃迁：推给活跃伴侣会话（M4-3）。
         notify_companion_recording(&app, false);
     }
@@ -9784,6 +9863,7 @@ mod tests {
         let mut process = SystemMirrorProcess {
             child,
             output: std::sync::Arc::new(ScrcpyOutputSink::default()),
+            is_recorder: false,
         };
 
         let started = std::time::Instant::now();
@@ -9817,6 +9897,7 @@ mod tests {
         let mut process = SystemMirrorProcess {
             child,
             output: std::sync::Arc::new(ScrcpyOutputSink::default()),
+            is_recorder: false,
         };
 
         let started = std::time::Instant::now();
@@ -9829,6 +9910,45 @@ mod tests {
         assert!(
             started.elapsed() < PROCESS_GRACEFUL_TIMEOUT + PROCESS_REAP_TIMEOUT,
             "强杀之后应当很快回收，不应长时间挂起"
+        );
+        assert!(process.try_wait().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recorder_is_stopped_with_sigint_so_the_recording_finalizes() {
+        // X10-95：录制进程必须收到 SIGINT（而非 SIGTERM），且要在宽限期内退出——
+        // 这是 MP4 写出 moov 索引、不变砖的前提。用一个「忽略 SIGTERM、
+        // 只在收到 SIGINT 时退出」的探针进程验证 stop 发的是 SIGINT。
+        use std::io::BufRead;
+        let mut child = Command::new("python3")
+            .arg("-c")
+            .arg(concat!(
+                "import signal, time, sys;",
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN);",  // 若发 SIGTERM 会卡住
+                "signal.signal(signal.SIGINT, lambda s,f: sys.exit(0));",  // SIGINT 才退出
+                "print('ready', flush=True);",
+                "time.sleep(30)"
+            ))
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        assert!(ready.contains("ready"), "探针未就绪：{ready}");
+        let mut process = SystemMirrorProcess {
+            child,
+            output: std::sync::Arc::new(ScrcpyOutputSink::default()),
+            is_recorder: true, // 录制进程语义
+        };
+
+        let started = std::time::Instant::now();
+        process.stop().unwrap();
+
+        // SIGINT 被探针捕获后立即退出——远小于宽限期；若误发 SIGTERM 会卡满超时。
+        assert!(
+            started.elapsed() < PROCESS_GRACEFUL_TIMEOUT,
+            "录制进程应当被 SIGINT 迅速停止（走了 SIGTERM 才会卡满超时）"
         );
         assert!(process.try_wait().is_some());
     }
@@ -11417,7 +11537,7 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
         let path = directory.join("app-settings.json");
 
-        let enabled = AppSettings { hide_dock_icon: true, auto_reconnect: true };
+        let enabled = AppSettings { hide_dock_icon: true, auto_reconnect: true, recording_dir: None };
         save_app_settings(&path, &enabled).unwrap();
         assert_eq!(load_app_settings(&path), enabled);
 

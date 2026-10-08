@@ -189,6 +189,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .setting-toggle { flex: 0 0 auto; display: flex; align-items: center; }
 .setting-toggle input, .setting-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: #2e6be6; }
 .setting-row select.setting-control { flex: 0 0 auto; max-width: 62%; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 1px solid #d4dae4; border-radius: 8px; background: #fff; }
+/* 录像保存位置等「设置行右侧放按钮」的容器（X10-95）。 */
+.setting-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; }
 
 /* 自绘下拉框（X10-86）：替换原生 select，统一客户端视觉语言。 */
 .app-select { position: relative; flex: 0 0 auto; max-width: 62%; min-width: 190px; }
