@@ -1,23 +1,23 @@
 {
-  "version": "0.4.14",
-  "notes": "MirrorDock v0.4.14-beta",
-  "pub_date": "2026-10-08T03:34:31Z",
+  "version": "0.4.16",
+  "notes": "MirrorDock v0.4.16-beta",
+  "pub_date": "2026-10-08T05:36:02Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXhmR1FKTW4zSExnRHZQK2NvZkc0S0ZnRGw3YmlFQ1BhdTF1cnppalhrYzBGSmVJWkI4NUNXNDdpdzdoSzVIeWdGYWdGVVVJVU5jYysxNENFUDc1VndNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDMwMjE5CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE0CmpOV0k0RlNWVUF0dWhBSko1eXA4bFRQZTdKT2Yzc3pCN2s5Y3lFNFFrL1B2TVg5K0NrdzMrR1ZtN3FqemJ4OVpESWRsQXVySHVsQTQyMjBlUVh3dUNBPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.14-beta/MirrorDock_0.4.14_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTU1dWZRVjI3RzNYcjlGQjdTTnVjS1NLSjlLN1cvNkI4K25FSXFXR3d1Y0JMdVQ3RXFiVENTSnlQcFg2cVhzdUZtaXF6NFBxOVkxTjJnb0JFbFBvWlE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDM3NDk1CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE2Cit4U0ZIcVhuUnAxWWFlTlpGem5GVGV2NEhVcEVVU1FpSTFINEFQMW1oeHo1ODBGV0M0aVh0a3h2bmJrVzRpY1ZjZ1BRVnEyMEJ5b3R0VXFwTTQwL0FBPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.16-beta/MirrorDock_0.4.16_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXpTUE40dmtzbXQ0ZXMyMzlod21FaHJEZDJHREZsRnNSVTVrQnN3WFh5a1ZUK1pncGNOajR1OUIwQ3VCR2tYVDlseVZpTlNST0hybk9xTE85UjBFZUFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDMwMzQ2CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE0CnV2ME5jcFp5enl2WXQvbVhQZkVwVVlodXFtNjBzRFAvczdJQkNzL1FuellETFUvbUhwU2J6TXpNUGdZZXFSWktqQ0VtSyt3QjF1SEI2WTY5QjNxNkJRPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.14-beta/MirrorDock_0.4.14_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXlTcktzQTlRMmJyd0pEUXBOTDhuWGRCMWljUHRIR0hGTkhubDltMXY4Tkxsd0JvcTFvV21uMGtVOGF3RXFLSzFnYUlaa2V1YlduTkFVTzlzQzVrOWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDM3NTgxCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE2CkZYcVZlZTQ1MEtja1VoRndWM1MxQTN6M1JvZDloYXdTVXhrVk1ZcWUrdG53MW5lK3hGZ25sa0RNanpPeENOSXFMbFNrK2JGRzdWVm15REVLNVE4T0RRPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.16-beta/MirrorDock_0.4.16_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaStMS241Y0dJT3NXMGkrc1FJVHduOFZRdUlPODlGbVBYRWY4ZUV0MTFlZnJ4cGY1S3pabXdaUDNrZEhxVG5wMGU4QmYvajJtbE5KUVltMGpVeCtzYWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDMwNDAxCWZpbGU6TWlycm9yRG9ja18wLjQuMTRfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMTQKUjlkNWZidnZPelJlSDkxMUllR29qNWNNamxyUGtKYjhzUWtiQkIvbVdNQjlnUDVSWjViNkY1K29hUStvQlI2Q0Z0UDZDbW5RTE5nTXJXck83dnFNREE9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.14-beta/MirrorDock_0.4.14_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXdJdUpzdDJQRzV4Yyt0UUtuUG5keTJtL25IenFUY1VmUFhjVFAzakdKSGNLS3BDVWd0YS9RL3FXeUxQV1pWZWhxTjltUXQwZjN3Y05IdUc1MGs5eUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDM3NzEyCWZpbGU6TWlycm9yRG9ja18wLjQuMTZfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMTYKcno3UFZSaTRIQjJrSnlzUFdZY2VDb0hjTmNDNG83aGRMMzluTU4vUHdkVS9Qa21FbnJrUWF2dW40U3d6RTFadExVUEUrL0hCejRVSWpGMC9nc1ZZQVE9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.16-beta/MirrorDock_0.4.16_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXl5WnZ4cUZ5NExOY09FVGRMLzdDWENHcllXTjhPbHE2TEVQczAvZ0VaMmVKWHFzYThPU25sVW0zbXdIalpQek5mL09BdVZZWlBkN2hlWDZNUU96a1FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDMwMDc1CWZpbGU6TWlycm9yRG9ja18wLjQuMTRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4xNAplN3RPUlEzUHQrTkpSUVhDb1BrUVRDUDV6VkIwMmVjSXNzTVRwRkFRRC9qc1FoUUVNckVQQ2Y0c0E2VC9hVS95dUVoRUsvcmFSKzhMSVhqZDh1WWpDUT09Cg==",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.14-beta/MirrorDock_0.4.14_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTBSSk9HTjRhTC8ydVVjOEs1WmI2cjV1MFVXTDlIOUZhc01uMEdyTE9RdXdVQmZlOFF6ZElBczVtQ0JjTVYza3BpcFkySThFWis4THFZWmVsbmJBdVFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDM3NjkwCWZpbGU6TWlycm9yRG9ja18wLjQuMTZfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4xNgpZcm9USHUrbkMvUm5QcGNZTDFqMmRhbyt1cmx2U2VtVCtWbTFsczgyaUpuaHA3S25pVHdnN0dXSTBjQmdtbXBvTXRXYzhMRzA0T0dib3AzV2E2TVFBdz09Cg==",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.16-beta/MirrorDock_0.4.16_x64-setup.exe"
     }
   }
 }
