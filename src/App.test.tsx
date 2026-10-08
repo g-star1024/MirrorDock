@@ -573,6 +573,41 @@ describe("App rendering", () => {
     expect(screen.queryByRole("list", { name: "各设备桌面模式状态" })).not.toBeInTheDocument();
   });
 
+  // X10-90 反向验证：桌面模式偏好必须落到**后端持久层**，不再写 localStorage——
+  // 否则托盘「连接设备」这条 Rust 路径读不到，从托盘启动仍是普通镜像（用户实测）。
+  it("persists_desktop_pref_to_backend_not_localstorage", async () => {
+    const device = testDevice("usb-only", "Xiaomi M2104K10AC", "ready");
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [device] }));
+      }
+      if (cmd === "get_desktop_prefs") return Promise.resolve({});
+      if (cmd === "set_desktop_prefs") return Promise.resolve(null);
+      // 打开桌面模式会渲染应用 datalist，需要一份（可空的）已安装应用清单。
+      if (cmd === "list_device_apps") return Promise.resolve([]);
+      return baseInvoke(cmd);
+    });
+    render(<App />);
+
+    const toggle = await screen.findByRole("checkbox", { name: "桌面模式（独立虚拟屏幕）" });
+    // 挂载拉取后清空调用记录，只关注「翻转开关」这一次动作。
+    invokeMock.mockClear();
+    localStorage.removeItem("mirrordock.desktopPrefs");
+    fireEvent.click(toggle);
+
+    // 键 = 这台设备的 physical_serial（testDevice 的 physical_serial 见夹具）。
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "set_desktop_prefs");
+      expect(call).toBeDefined();
+    });
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "set_desktop_prefs");
+    const prefs = (call?.[1] as { prefs: Record<string, { desktop_mode: boolean }> }).prefs;
+    const prefKey = device.physical_serial ?? device.serial;
+    expect(prefs[prefKey]?.desktop_mode).toBe(true);
+    // 关键断言：不再写 localStorage——它是唯一的真相来源必须在后端。
+    expect(localStorage.getItem("mirrordock.desktopPrefs")).toBeNull();
+  });
+
   it("diagnostics_panel_previews_before_export_and_never_lists_secrets", async () => {
     invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "diagnostics_preview") {

@@ -1014,7 +1014,9 @@ function App() {
   }
 
   // X10-71：按设备保存桌面模式偏好；只影响这台设备，其他设备与全局默认不动。
-  const [desktopPrefs, setDesktopPrefs] = useState<Record<string, DesktopPref>>(readDesktopPrefs);
+  // X10-90：数据源从前端 localStorage 迁到后端 app data（托盘等任意入口都能读），
+  // localStorage 只作迁移来源，迁移成功后清除。
+  const [desktopPrefs, setDesktopPrefs] = useState<Record<string, DesktopPref>>({});
   // X10-72：桌面模式模块的编辑目标独立于「镜像窗口」那张卡的目标，理由见
   // settingsTargetSerial 的重置 effect 注释——未插线的设备也要能提前配好。
   const [desktopTargetSerial, setDesktopTargetSerial] = useState<string | null>(null);
@@ -1023,11 +1025,47 @@ function App() {
       const base = prev[serial] ?? { desktop_mode: options.desktop_mode, desktop_app: options.desktop_app };
       const next = { ...base, ...patch };
       const nextPrefs = { ...prev, [serial]: next };
-      try { localStorage.setItem("mirrordock.desktopPrefs", JSON.stringify(nextPrefs)); }
-      catch { /* 保存失败只影响下次启动，本次会话仍然生效。 */ }
+      // X10-90：写后端持久化；失败如实提示，不假装保存成功。
+      invoke("set_desktop_prefs", { prefs: nextPrefs }).catch((error: unknown) => {
+        setSettingsNotice(errorMessage(error, "桌面模式配置无法保存，本次会话仍可使用。"));
+      });
       return nextPrefs;
     });
   }
+
+  // X10-90：挂载时把桌面模式偏好从 localStorage 迁到后端，再从后端拉取。
+  // 一次性（空依赖）：后端是唯一持久层；迁移成功后清掉 localStorage，避免下次重复迁。
+  // localStorage 里保留的数据结构 = Record<key, {desktop_mode, desktop_app}>（readDesktopPrefs
+  // 已做校验），直接透传给后端即可；后端写盘时会再做一次键归一化。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const legacy = readDesktopPrefs();
+      const hasLegacy = Object.keys(legacy).length > 0;
+      if (hasLegacy) {
+        try {
+          await invoke("set_desktop_prefs", { prefs: legacy });
+          try { localStorage.removeItem("mirrordock.desktopPrefs"); } catch { /* 存储不可用则下次再迁 */ }
+        } catch (error) {
+          // 迁移失败：本次仍用 localStorage 的值兜底，不清 localStorage（下次启动重迁）。
+          if (!cancelled) {
+            setDesktopPrefs(legacy);
+            setSettingsNotice(errorMessage(error, "桌面模式配置迁移失败，本次沿用本机原有配置。"));
+          }
+          return;
+        }
+      }
+      try {
+        const prefs = await invoke<Record<string, DesktopPref>>("get_desktop_prefs");
+        if (!cancelled) setDesktopPrefs(prefs);
+      } catch (error) {
+        if (!cancelled) {
+          setSettingsNotice(errorMessage(error, "无法读取桌面模式配置。"));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // X10-84 + X10-87：pref 键统一迁移到稳定 physical_serial。两个来源：
   //  ① 设备在线时反查：无线端点/adb serial → physical_serial（desktopPrefKeyFor）；
@@ -1052,8 +1090,10 @@ function App() {
         }
       }
       if (changed) {
-        try { localStorage.setItem("mirrordock.desktopPrefs", JSON.stringify(next)); }
-        catch { /* 迁移保存失败不影响本次会话。 */ }
+        // X10-90：键归一化后的整表回写后端。
+        invoke("set_desktop_prefs", { prefs: next }).catch((error: unknown) => {
+          setSettingsNotice(errorMessage(error, "桌面模式配置无法保存，本次会话仍可使用。"));
+        });
       }
       return changed ? next : prev;
     });
@@ -1065,7 +1105,10 @@ function App() {
   function resetAllOptions() {
     updateOptions(defaultOptions);
     setDesktopPrefs(() => {
-      try { localStorage.removeItem("mirrordock.desktopPrefs"); } catch { /* 忽略：存储不可用时仅本次会话生效。 */ }
+      // X10-90：清空后端持久层（localStorage 已在迁移后清除，无需再动）。
+      invoke("set_desktop_prefs", { prefs: {} }).catch((error: unknown) => {
+        setSettingsNotice(errorMessage(error, "桌面模式配置无法清空，本次会话仍可使用默认设置。"));
+      });
       return {};
     });
   }

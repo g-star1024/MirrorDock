@@ -3076,8 +3076,8 @@ fn tray_stop_device(app: &AppHandle, serial: &str) {
 /// 菜单里的「连接设备 / 断开连接」。
 ///
 /// 连接目标：优先最近设备里当前就绪的那台（符合「连我刚才那台」的直觉），
-/// 其次任意一台就绪设备；一台就绪的都没有时如实提示。启动参数用后端默认值，
-/// 与前端默认设置一致（保持唤醒/剪贴板/声音开、录制关）。
+/// 其次任意一台就绪设备；一台就绪的都没有时如实提示。启动参数 = 后端默认值
+/// 叠加这台设备的桌面模式偏好（X10-90），与主窗口「开始镜像」走同一条路径。
 fn tray_connect_toggle(app: &AppHandle) {
     let sessions: State<SessionStore> = app.state();
     let runtimes: State<AppRuntimes> = app.state();
@@ -3148,8 +3148,13 @@ fn tray_connect_toggle(app: &AppHandle) {
         );
         return;
     };
-    let result =
-        start_mirroring_with(&runtimes, &sessions, serial.clone(), SessionOptions::default(), None);
+    let result = start_mirroring_with(
+        &runtimes,
+        &sessions,
+        serial.clone(),
+        tray_session_options(app, &devices, &serial),
+        None,
+    );
     log.record_outcome("mirror_start", result.as_ref().err(), &[&serial, &label]);
     if result.is_ok() {
         maybe_switch_host_input_source(app);
@@ -3160,9 +3165,32 @@ fn tray_connect_toggle(app: &AppHandle) {
     refresh_tray_menu(app);
 }
 
+/// 托盘「连接设备」的启动参数（X10-90）：在后端默认值之上叠加这台设备的
+/// 桌面模式偏好——与主窗口「开始镜像」同一口径（`composeOptionsWithDesktop`）。
+/// 只覆盖桌面模式相关字段，其余（画质/帧率/快捷键…）托盘路径本来就没有入口，
+/// 沿用后端默认。开桌面模式时强制关摄像头源（与前端互斥逻辑一致）。
+fn tray_session_options(
+    app: &AppHandle,
+    devices: &[AdbDevice],
+    serial: &str,
+) -> SessionOptions {
+    let mut options = SessionOptions::default();
+    if let Some(pref) = desktop_pref_for_serial(app, devices, serial) {
+        options.desktop_mode = pref.desktop_mode;
+        options.desktop_app = if pref.desktop_mode {
+            pref.desktop_app
+        } else {
+            None
+        };
+        if pref.desktop_mode {
+            options.camera_source = false;
+        }
+    }
+    options
+}
+
 /// 从（最近设备 × 当前就绪设备）里挑出菜单「连接设备」的目标。
-fn pick_tray_target(recent: &[RecentDevice], devices: &[AdbDevice]) -> Option<(String, String)> {
-    let target = |device: &AdbDevice| (device.serial.clone(), device.label.clone());
+fn pick_tray_target(recent: &[RecentDevice], devices: &[AdbDevice]) -> Option<(String, String)> {    let target = |device: &AdbDevice| (device.serial.clone(), device.label.clone());
     // 最近设备优先：符合「连我刚才用的那台」的直觉。
     for entry in recent {
         if let Some(device) = devices
@@ -3585,6 +3613,115 @@ fn recent_devices_path(app: &AppHandle) -> Result<PathBuf, AppError> {
                 "请检查本机文件权限，或重新安装 MirrorDock。",
             )
         })
+}
+
+// ---------------------------------------------------------------------------
+// 桌面模式偏好（X10-90）：后端持久化，托盘等任意入口都能读取
+// ---------------------------------------------------------------------------
+
+/// 单台设备的桌面模式偏好。与前端 `DesktopPref` 同构，键为稳定 physical_serial。
+///
+/// 此前只存于前端 localStorage（webview 域），托盘「连接设备」这条 Rust 路径
+/// 完全够不到——用户配了桌面模式，从托盘点连接却启动成普通镜像（真机实测）。
+/// 移入后端 app data 后，托盘与主窗口任何入口都能叠加同一台设备的桌面模式。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DesktopPrefEntry {
+    desktop_mode: bool,
+    #[serde(default)]
+    desktop_app: Option<String>,
+}
+
+/// 把「adb 无线端点 / mDNS 端点」归一化成物理序列号（与前端
+/// `normalizeDeviceIdentityKey` 完全同规则，作为解析 pref 键的兜底）：
+/// `adb-<physical>-<随机>._adb-tls-connect._tcp` → `<physical>`；
+/// `192.168.x.x:port` 不含物理 id 原样返回；其他（短物理 id / USB serial）原样返回。
+fn normalize_device_identity_key(key: &str) -> String {
+    if let Some(rest) = key.strip_prefix("adb-") {
+        if let Some(head) = rest.strip_suffix("._adb-tls-connect._tcp") {
+            // 形如 `<physical>-<随机>`：物理 id 自身不含 `-`（ro.serialno 是字母数字）。
+            if let Some((physical, _random)) = head.split_once('-') {
+                if !physical.is_empty()
+                    && physical
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric())
+                {
+                    return physical.to_ascii_lowercase();
+                }
+            }
+        }
+    }
+    key.to_owned()
+}
+
+/// 把 adb serial（可能是无线端点）解析成桌面模式偏好的稳定键：
+/// 优先经设备列表反查 `physical_serial`；解析不到（设备已下线）时归一化兜底。
+/// 与前端 `desktopPrefKeyFor` 同口径——全链路唯一。
+fn desktop_pref_key_for(devices: &[AdbDevice], serial: &str) -> String {
+    devices
+        .iter()
+        .find(|device| {
+            device.serial == serial
+                || device.connections.iter().any(|c| c.serial == serial)
+        })
+        .and_then(|device| device.physical_serial.clone())
+        .unwrap_or_else(|| normalize_device_identity_key(serial))
+}
+
+fn desktop_prefs_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("desktop-prefs.json"))
+        .map_err(|_| {
+            AppError::new(
+                "recent_list_unavailable",
+                "无法访问本机的桌面模式配置。",
+                "请检查本机文件权限，或重新安装 MirrorDock。",
+            )
+        })
+}
+
+/// 读取桌面模式偏好。解析失败（手改坏 / 版本升级格式漂移）返回空表而非报错——
+/// 与前端 `readDesktopPrefs` 的容错策略一致，配置丢失可重建，不能挡住连接主流程。
+fn load_desktop_prefs(path: &Path) -> std::collections::HashMap<String, DesktopPrefEntry> {
+    let Ok(bytes) = fs::read(path) else {
+        return std::collections::HashMap::new();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn save_desktop_prefs(
+    path: &Path,
+    prefs: &std::collections::HashMap<String, DesktopPrefEntry>,
+) -> Result<(), AppError> {
+    if let Some(directory) = path.parent() {
+        let _ = fs::create_dir_all(directory);
+    }
+    let serialized = serde_json::to_vec_pretty(prefs).map_err(|_| {
+        AppError::new(
+            "desktop_prefs_write_failed",
+            "无法整理桌面模式配置。",
+            "请重试。",
+        )
+    })?;
+    fs::write(path, serialized).map_err(|_| {
+        AppError::new(
+            "desktop_prefs_write_failed",
+            "无法保存桌面模式配置。",
+            "请检查本机文件权限。",
+        )
+    })
+}
+
+/// 查出某台设备的桌面模式偏好（供托盘等后端入口叠加）。
+fn desktop_pref_for_serial(
+    app: &AppHandle,
+    devices: &[AdbDevice],
+    serial: &str,
+) -> Option<DesktopPrefEntry> {
+    let path = desktop_prefs_path(app).ok()?;
+    let prefs = load_desktop_prefs(&path);
+    prefs.get(&desktop_pref_key_for(devices, serial)).cloned()
 }
 
 fn load_recent_devices(path: &Path) -> Result<Vec<RecentDevice>, AppError> {
@@ -6468,6 +6605,33 @@ fn clear_recent_devices(app: AppHandle) -> Result<(), AppError> {
     save_recent_devices(&recent_devices_path(&app)?, &[])
 }
 
+/// 读取全部桌面模式偏好（X10-90）。供前端启动/设备变化时拉取；键为稳定
+/// physical_serial，与后端解析口径一致。解析失败返回空表（前端容错兜底）。
+#[tauri::command]
+fn get_desktop_prefs(
+    app: AppHandle,
+) -> std::collections::HashMap<String, DesktopPrefEntry> {
+    let Ok(path) = desktop_prefs_path(&app) else {
+        return std::collections::HashMap::new();
+    };
+    load_desktop_prefs(&path)
+}
+
+/// 覆盖式写入全部桌面模式偏好（X10-90）。前端每次增删改后传整表；返回错误时
+/// 前端如实提示，不假装保存成功。键在写前归一化（mDNS 端点→physical_serial），
+/// 与读取/解析口径对齐。
+#[tauri::command]
+fn set_desktop_prefs(
+    app: AppHandle,
+    prefs: std::collections::HashMap<String, DesktopPrefEntry>,
+) -> Result<(), AppError> {
+    let normalized: std::collections::HashMap<String, DesktopPrefEntry> = prefs
+        .into_iter()
+        .map(|(key, entry)| (normalize_device_identity_key(&key), entry))
+        .collect();
+    save_desktop_prefs(&desktop_prefs_path(&app)?, &normalized)
+}
+
 /// 把手机当前画面保存为本机的一张 PNG。
 ///
 /// 文件名由前端按**本地时间**生成（后端不猜时区），随后按不可信输入严格校验。
@@ -7570,6 +7734,8 @@ pub fn run() {
             list_recent_devices,
             forget_recent_device,
             clear_recent_devices,
+            get_desktop_prefs,
+            set_desktop_prefs,
             revoke_device_access,
             capture_screenshot,
             delete_screenshot,
@@ -10633,6 +10799,44 @@ mod tests {
             .all(|c| !c.contains("KEYCODE_")));
     }
 
+    // -- 桌面模式偏好（X10-90）--
+
+    #[test]
+    fn normalize_device_identity_key_extracts_physical_id_from_mdns_endpoint() {
+        assert_eq!(
+            normalize_device_identity_key("adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp"),
+            "qc8d8tonbmmzm7qs"
+        );
+        // ip:port 端点不含物理 id，原样返回（留给设备在线时反查）。
+        assert_eq!(
+            normalize_device_identity_key("192.168.1.5:42137"),
+            "192.168.1.5:42137"
+        );
+        // 短物理 id / USB serial 原样返回。
+        assert_eq!(normalize_device_identity_key("qc8d8tonbmmzm7qs"), "qc8d8tonbmmzm7qs");
+    }
+
+    #[test]
+    fn desktop_pref_key_for_resolves_wireless_endpoint_to_physical_serial() {
+        let mut device = adb_device(
+            "adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp",
+            "M2104K10AC",
+            DeviceState::Ready,
+        );
+        device.physical_serial = Some("qc8d8tonbmmzm7qs".into());
+        let devices = vec![device];
+        // 设备在线：反查 physical_serial（稳定，重连不变）。
+        assert_eq!(
+            desktop_pref_key_for(&devices, "adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp"),
+            "qc8d8tonbmmzm7qs"
+        );
+        // 设备离线/查不到：归一化兜底，仍能命中同一台手机的 pref。
+        assert_eq!(
+            desktop_pref_key_for(&[], "adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp"),
+            "qc8d8tonbmmzm7qs"
+        );
+    }
+
     // -- 最近设备 --
 
     fn adb_device(serial: &str, label: &str, state: DeviceState) -> AdbDevice {
@@ -10694,6 +10898,31 @@ mod tests {
     fn tray_connect_target_is_none_without_ready_devices() {
         let devices = vec![adb_device("u", "U", DeviceState::Unauthorized)];
         assert_eq!(pick_tray_target(&[], &devices), None);
+    }
+
+    #[test]
+    fn desktop_prefs_round_trip_through_disk_and_tolerate_garbage() {
+        let path = std::env::temp_dir().join(format!(
+            "mirrordock-desktop-prefs-test-{}.json",
+            std::process::id()
+        ));
+        let mut prefs = std::collections::HashMap::new();
+        prefs.insert(
+            "qc8d8tonbmmzm7qs".to_string(),
+            DesktopPrefEntry {
+                desktop_mode: true,
+                desktop_app: Some("com.netease.dhxy.qihoo".into()),
+            },
+        );
+        save_desktop_prefs(&path, &prefs).expect("写入应成功");
+        let loaded = load_desktop_prefs(&path);
+        assert_eq!(loaded.get("qc8d8tonbmmzm7qs"), prefs.get("qc8d8tonbmmzm7qs"));
+        // 文件被手改坏 → 返回空表而非 panic/报错（与前端容错策略一致）。
+        fs::write(&path, b"not json").unwrap();
+        assert!(load_desktop_prefs(&path).is_empty());
+        // 不存在的文件 → 空表。
+        let _ = fs::remove_file(&path);
+        assert!(load_desktop_prefs(&path).is_empty());
     }
 
     #[test]

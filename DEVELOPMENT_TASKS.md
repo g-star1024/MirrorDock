@@ -711,6 +711,14 @@
   - **v0.4.15 发版链已熔断**：远端 tag `v0.4.15-beta` 已删、Release 未生成、CI run 跑完无 tag 可发布。
   - **验证**：`cargo check` / `clippy` 0 warning / `cargo test --lib` 194 passed。**本次必须本地打包 + Mac 实机验证启动不卡后才发版**（0.4.15 未验启动即发版的教训）。
   - **教训**：给「跑在主线程的同步命令」加超时时，**绝不能在该线程里 sleep 轮询**——超时等待必须放进独立线程或把命令改 async。sample/Instruments 采样比日志更能定位主线程卡死。
+- [x] ✅ **X10-90 托盘「连接设备」不进桌面模式——桌面模式偏好从前端 localStorage 迁到后端持久层（2026-10-08；用户报「点开始镜像正常进入桌面模式，点连接设备就不能直接进入桌面模式，变成正常镜像手机了……不管从什么入口点击连接，都应该是桌面模式」）**
+  - **根因（结构性，非偶发）**：桌面模式偏好只存在**前端 webview 的 localStorage**（`mirrordock.desktopPrefs`），托盘菜单「连接设备」这条 **Rust 后端路径**完全够不到——`tray_connect_toggle` 直接 `start_mirroring_with(..., SessionOptions::default(), ...)`，`desktop_mode` 恒为 false。主窗口「开始镜像」在前端跑了 `composeOptionsWithDesktop` 叠加偏好，所以正常；托盘没经过前端，丢了桌面模式。**同一台设备，两个入口两种行为。**
+  - **修法（方案：持久层下沉到后端，用户报 bug 即拍板修）**：① 偏好从 localStorage 迁到后端 app data `desktop-prefs.json`（`~/Library/Application Support/com.mirrordock.desktop/`），键仍为稳定 physical_serial；② 后端新增 `normalize_device_identity_key`/`desktop_pref_key_for`（与前端 X10-84/87 同口径）+ `DesktopPrefEntry` + `load/save_desktop_prefs` + `desktop_pref_for_serial`；③ 新增两个命令 `get_desktop_prefs`/`set_desktop_prefs`（注册进 invoke handler）；④ `tray_connect_toggle` 启动分支改为 `tray_session_options`——后端默认值之上叠加这台设备的桌面模式偏好（开桌面模式强制关摄像头源，与前端互斥逻辑一致）；⑤ 前端挂载时**一次性迁移** localStorage→后端（成功才清 localStorage，失败保留下次重迁+如实提示），之后 `updateDesktopPref`/键归一化 effect/恢复默认全部改走后端 `set_desktop_prefs`；`readDesktopPrefs` 保留为迁移来源。
+  - **验证（反向验证已做）**：`cargo test --lib` 197 passed（新增 3 条：mDNS 端点归一化、无线端点→physical_serial 反查+离线归一化兜底、prefs 文件读写回环+坏文件容错）；`clippy` 0 warning；前端 `pnpm build`（tsc+vite）通过、`vitest` 81 passed（新增反向验证 `persists_desktop_pref_to_backend_not_localstorage`——翻转桌面模式开关必须调 `set_desktop_prefs` 且**不写** localStorage）；本地打包 `.app` 已换装 `/Applications/MirrorDock.app`（旧版备份 `MirrorDock.old-0.4.16.app`）。
+  - **未验证面（已闭环，2026-10-08 真机验证通过）**：真机「从托盘点连接设备 → 进入桌面模式并带上 `--start-app=<用户配的应用>`」已由用户实测确认没问题；迁移 effect 已把 localStorage 里的大话西游配置写进后端 `desktop-prefs.json`。
+  - **教训（与 X10-83 同源）**：这是**第二次**「同一偏好，一处改另一处不生效」——X10-83 是前端两处键口径不一致，X10-90 是**前后端两个持久域**。凡是「按设备存的偏好」，只要有一个入口（托盘/快捷键/伴侣端/未来的自动重连）不经过前端 webview，就必须存在后端能读的地方。**判断标准：新加入口时先问「它读得到 localStorage 吗」，读不到就不能把状态只放 webview。**
+- **版本**：X10-90，版本 0.4.16 → **0.4.17**。
+
 
   - **CI 波折与发版证据（已核验）**：首次 run `37284280561` 仅 macos-x64「构建安装包」失败（exit 1 无注解，raw log 需 admin 403）——**未盲猜**，按 10-03 教训先建能力（X10-82：build.yml 构建步骤 tee + 失败上传 `build-log-<label>` artifact，commit `7c43f9e`），重推 tag 重跑。重跑 run `37287371051` **success**，Release id `403545372`，**30 资产全齐**；`latest.json` version=0.4.13、**四平台签名全非空**（darwin-aarch64/x86_64 428 字符、linux/windows 444 字符）；`MirrorDock-companion-0.4.13.apk` 在列。Mac 已换装 0.4.13（旧版备份 `/Applications/MirrorDock.app.old-0.4.12`），图标已核验。site/index.html 已同步。**需用户重启客户端 + 重启镜像会话生效**（Dock 图标跟随先注册进程）。
 - - [x] ✅ **X10-80 桌面模式虚拟屏白屏根因定性 + 落地核验（2026-10-03 19:30；用户报「切 2560 白屏，切回 1920 依旧」）**
