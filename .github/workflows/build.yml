@@ -140,7 +140,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # X10-98：tag 发版必须全新编译，禁用 rust 增量缓存。
+      # 0.4.19-beta 事故实证：`Swatinem/rust-cache` 以 target 名为 key 缓存了
+      # 0.4.18 的编译产物，0.4.19 的 package job 命中同一缓存键后，Cargo 指纹
+      # 误判旧 `mirrordock` crate 为 fresh，**直接复用了 0.4.18 的旧二进制**——
+      # 装出来的「0.4.19」版本串是 0.4.18、X10-95 修复（is_recorder）整个不在
+      # 二进制里。日常 main 构建保留缓存提速，tag 发版用缓存等于拿旧代码发新版。
       - uses: Swatinem/rust-cache@v2
+        # 仅非 tag（main / 手动）构建用缓存。
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
@@ -249,6 +257,30 @@ jobs:
         run: |
           set -o pipefail
           pnpm tauri build --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/build-${{ matrix.label }}.log"
+
+      # X10-98：tag 发版后核验二进制版本串与 tag 一致——0.4.19 曾把 0.4.18 旧
+      # 二进制发出（缓存复用），版本串不一致直接 fail，不让错版进 Release。
+      - name: 核验二进制版本串与 tag 一致
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECT="${GITHUB_REF_NAME#v}"      # v0.4.19-beta -> 0.4.19-beta
+          EXPECT="${EXPECT%%-*}"             # -> 0.4.19
+          BIN=""
+          for cand in \
+            "src-tauri/target/${{ matrix.target }}/release/mirrordock" \
+            "src-tauri/target/${{ matrix.target }}/release/mirrordock.exe" \
+            "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MirrorDock.app/Contents/MacOS/mirrordock"; do
+            [ -f "$cand" ] && BIN="$cand" && break
+          done
+          [ -n "$BIN" ] || { echo "未找到构建产物二进制"; exit 1; }
+          if grep -q "$EXPECT" "$BIN"; then
+            echo "版本串核验通过：$BIN 含 $EXPECT"
+          else
+            echo "::error::二进制版本串不含 $EXPECT——疑似复用了旧缓存产物（X10-98）。"
+            exit 1
+          fi
 
       - name: 上传构建日志（失败诊断用）
         if: failure()
