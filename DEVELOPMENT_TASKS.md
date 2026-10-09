@@ -863,3 +863,14 @@
     - **决定性证据**：`recording_dir_invalid` / `recording_dir_unwritable` 两个 Tauri 命令/错误串由 X10-95（7cf5868）引入、其父提交 8bf2f12 中为 0 命中——**两者都在重发二进制里各命中 1 次**。证明重发包确实包含 X10-95 录制修复。
   - **结论**：重发的 0.4.19 是「plist 版本正确 + 含 X10-95 修复」的正确产物，用户可重装验证录像功能。早前「用户实测仍黑屏」若在本正确包上复现，则需另查（如自定义目录落盘路径/权限、scrcpy 实际退出信号），不再归咎于错版。
   - **方法教训（第二次同类教训）**：判「错版」必须找一个**新旧二态、且 release 后仍存活**的标记。版本串、`is_recorder`、普通中文字符串都不合格（前者是依赖 crate 版本、后两者会被内联/移入字符串表）。合格标记 = 新引入的 Tauri 命令名/错误枚举串（命令注册会把名字嵌入二进制）。本次用 `recording_dir_*` 才把真假说清。
+
+- [x] ✅ **X10-99 桌面模式录像「提示成功但文件夹没视频」根因修复（2026-10-09 午后）**：用户真机复现——开始/结束录制**两条提示都弹了**（"已开始屏幕录制：mirrordock-record-….mp4"/"已结束…保存在 MirrorDock 文件夹"），但 `Movies/MirrorDock` 里**没有视频**（目录只有 .DS_Store）。
+  - **根因（真机字节级复现，非推断）**：用户镜像窗口处于**桌面模式**（`--new-display --start-app=com.netease.dhxy.qihoo` 虚拟屏）。X10-92 双通道录制让录制进程继承 `record_arguments()`，其中桌面模式会带上 `--new-display **--start-app=...**`；而录制通道固定 `--no-control`（无窗三件套之一）。**scrcpy 规定「控制被禁用时不允许启动应用」**，直接报 `ERROR: Cannot start an Android app if control is disabled` 立即退出、**一个字节都不写**。本地 sigwrap 复现：带 `--start-app` → NO FILE；去掉 → `Recording complete`、duration=6.07s、MP4 完好落盘 `Movies/MirrorDock`。
+  - **为什么提示却成功（第二个 bug）**：`stop_recording_with` 只 stop 进程、从不核验产物文件是否存在/非空，就直接返回 `Recording{active:false}` → 前端弹「已结束…已保存」的**假成功**。这是「提示都有但没视频」的直接原因。
+  - **修法（三处，均已落地 + 全绿）**：
+    ① `record_arguments()` 桌面模式**去掉 `--start-app`**（录制是无头第二进程、无控制，起不了应用也用不着——应用已由显示通道启动；保留 `--new-display` 让录制仍落在虚拟屏，与桌面模式语义一致）。
+    ② `stop_recording_with` 结束后**核验产物真实存在且 `len>0`**，缺失/为空→清掉 `record_path` 并报 `recording_file_missing`（"录制没有产出视频文件"），不再谎报已保存。
+    ③ 前端 `toggleRecording` 结束录制报错时把本地 `recording` 一并复位 `null`，按钮/托盘回到「开始录制」，不再卡在「录制中」。
+  - **测试**：修正 `starting_recording_uses_a_separate_channel...`（补 stub 产物文件 + create_dir_all，模拟真实定型落盘）。`cargo test --lib` **199 全绿**、`pnpm build` ✅、`pnpm test` **82 全绿**。
+  - **真机实证**：sigwrap + 修复后参数（`--new-display` 无 `--start-app`）→ `Recording started/complete`、有效 MP4 写入 `Movies/MirrorDock`。
+  - **教训**：「开始/结束都提示成功」≠「产物存在」。任何「产出文件」的操作，成功提示必须建立在**核验产物真实落盘**之上；否则会话级错误（scrcpy 立即退出）会被静默吞掉，用户端表现为「明明说录好了却没有」。另：X10-92 桌面模式的录制参数继承漏了 `--start-app` 与 `--no-control` 的互斥，**桌面模式录制从双通道上线起就没真正工作过**——这是首次真机覆盖到该路径。

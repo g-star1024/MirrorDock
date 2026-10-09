@@ -794,22 +794,12 @@ impl SessionOptions {
         // 视频源必须与显示通道一致：桌面模式录虚拟屏、摄像头录摄像头、否则录手机屏幕。
         if self.desktop_mode {
             args.push("--new-display".into());
-            if let Some(app) = &self.desktop_app {
-                let pkg = app.trim();
-                let valid = !pkg.is_empty()
-                    && pkg.len() <= 120
-                    && pkg
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
-                if !valid {
-                    return Err(AppError::new(
-                        "desktop_app_invalid",
-                        "虚拟屏启动的应用包名无效。",
-                        "包名只允许字母、数字、点（.）和下划线，例如 com.android.browser；也可以留空。",
-                    ));
-                }
-                args.push(format!("--start-app={pkg}"));
-            }
+            // X10-99：录制进程**不带 --start-app**。录制通道固定 `--no-control`（无窗
+            // 三件套之一），而 scrcpy 规定「控制被禁用时不允许启动应用」，会直接报
+            // `Cannot start an Android app if control is disabled` 退出、一个字节都
+            // 不写——这就是桌面模式下「开始/结束录制都提示成功、文件夹里却没有视频」
+            // 的根因。应用已由显示通道的 `--start-app` 启动，录制只负责录这块虚拟屏，
+            // 无需重复拉起。仅保留 --new-display 让录制落在独立的虚拟显示上。
         } else if self.camera_source {
             args.push("--video-source=camera".into());
             // 摄像头源绝不采集麦克风（A1-05 承诺），录制同样静音。
@@ -4773,6 +4763,24 @@ fn stop_recording_with(
     // 优雅退出写 moov；失败也只记录，不阻断（文件可能已坏，但状态必须清）。
     let _ = process.stop();
     let path = state.record_path.clone().unwrap_or_default();
+    // X10-99：结束后**核验产物真实存在且非空**再报「已保存」。录制进程可能根本没
+    // 写出文件（例如桌面模式下 --start-app 与 --no-control 互斥导致 scrcpy 立即退出、
+    // 一字节未写），若不核验，界面会弹出「已结束录制…保存在文件夹」的假成功——这正是
+    // 「提示都有，但文件夹没有视频」的直接原因。文件缺失/为空时如实报错，不谎报。
+    let produced = Path::new(&path)
+        .metadata()
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false);
+    if !produced {
+        // 状态必须与磁盘一致：没产出文件就清掉 record_path，别让「当前录像」还指向
+        // 一个根本不存在的文件。
+        state.record_path = None;
+        return Err(AppError::new(
+            "recording_file_missing",
+            "录制没有产出视频文件。",
+            "桌面（虚拟屏）模式下请确认镜像窗口正常；可改录手机屏幕或降低画质后重试。",
+        ));
+    }
     let file = Path::new(&path)
         .file_name()
         .map(|v| v.to_string_lossy().into_owned())
@@ -12439,7 +12447,10 @@ mod tests {
             "录制中状态由独立录制进程决定"
         );
 
-        // 结束录制：显示进程仍在，录制通道被停掉。
+        // 结束录制：显示进程仍在，录制通道被停掉。真实录制进程退出前会把 MP4 定型落盘，
+        // 这里补一个 stub 文件模拟「产物已写出」，否则 X10-99 的产物核验会如实判失败。
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(&path, b"finalized-mp4").unwrap();
         let stopped = stop_recording_with(&store, None).unwrap().unwrap();
         assert!(!stopped.active);
         assert_eq!(starts.lock().unwrap().len(), 1, "停录也不重启显示进程");

@@ -1585,6 +1585,9 @@ function App() {
       }
     } catch (error) {
       setRecordingError(errorMessage(error, recording?.active ? "无法结束录制。" : "无法开始录制。"));
+      // X10-99：结束录制报错（如后端核验「没产出文件」）时，后端的录制状态其实已清，
+      // 前端不能还把按钮停在「录制中」——把本地状态一并复位，托盘/按钮回到「开始录制」。
+      if (recording?.active) setRecording(null);
     } finally {
       setRecordingBusy(false);
     }
