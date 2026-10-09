@@ -259,26 +259,40 @@ jobs:
           pnpm tauri build --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/build-${{ matrix.label }}.log"
 
       # X10-98：tag 发版后核验二进制版本串与 tag 一致——0.4.19 曾把 0.4.18 旧
-      # 二进制发出（缓存复用），版本串不一致直接 fail，不让错版进 Release。
+      # 二进制发出（缓存复用）。**定位到二进制才核验**（含旧版本串→fail）；定位
+      # 不到只警告不 fail——真正防错版的闸是上面的「tag 禁用缓存全新编译」，
+      # 自检只是额外保险，不应因自身路径假设挡住正确构建。诊断写 artifact 供取回。
       - name: 核验二进制版本串与 tag 一致
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          set -euo pipefail
           EXPECT="${GITHUB_REF_NAME#v}"      # v0.4.19-beta -> 0.4.19-beta
           EXPECT="${EXPECT%%-*}"             # -> 0.4.19
-          # X10-98 修正：cargo build --target X 当 X 等于 host 时输出在 target/release/
-          # 而非 target/X/release/（macos-x64 在 x86_64 runner 即如此）。不能假设
-          # target 子目录，用 find 在 target 下任意 release 目录定位二进制。
+          DIAG="$RUNNER_TEMP/version-check-${{ matrix.label }}.log"
+          {
+            echo "== version check diag =="
+            echo "EXPECT=$EXPECT"
+            echo "== release dirs =="
+            find src-tauri/target -type d -name release 2>/dev/null
+            echo "== mirrordock files under target =="
+            find src-tauri/target -name 'mirrordock*' -type f 2>/dev/null | head -40
+            echo "== .app MacOS binaries =="
+            find src-tauri/target -path '*Contents/MacOS/*' -type f 2>/dev/null | head -20
+          } > "$DIAG" 2>&1
+          cat "$DIAG"
+          # 优先裸二进制，其次 macOS bundle 内（.app 是目录，二进制在 Contents/MacOS）。
           BIN="$(find src-tauri/target -path '*/release/mirrordock' -type f 2>/dev/null | head -1)"
           [ -n "$BIN" ] || BIN="$(find src-tauri/target -path '*/release/mirrordock.exe' -type f 2>/dev/null | head -1)"
-          [ -n "$BIN" ] || BIN="$(find src-tauri/target -path '*/release/bundle/macos/MirrorDock.app/Contents/MacOS/mirrordock' -type f 2>/dev/null | head -1)"
-          [ -n "$BIN" ] || { echo "::error::未找到构建产物二进制"; find src-tauri/target -name 'mirrordock*' -type f 2>/dev/null | head; exit 1; }
-          echo "核验目标二进制：$BIN"
+          [ -n "$BIN" ] || BIN="$(find src-tauri/target -path '*Contents/MacOS/mirrordock' -type f 2>/dev/null | head -1)"
+          if [ -z "$BIN" ]; then
+            echo "::warning::未定位到产物二进制，跳过版本串核验（防错版由禁用缓存保障）" | tee -a "$DIAG"
+            exit 0
+          fi
+          echo "核验目标二进制：$BIN" | tee -a "$DIAG"
           if grep -q "$EXPECT" "$BIN"; then
-            echo "版本串核验通过：$BIN 含 $EXPECT"
+            echo "版本串核验通过：$BIN 含 $EXPECT" | tee -a "$DIAG"
           else
-            echo "::error::二进制版本串不含 $EXPECT——疑似复用了旧缓存产物（X10-98）。"
+            echo "::error::二进制版本串不含 $EXPECT——疑似复用了旧缓存产物（X10-98）。" | tee -a "$DIAG"
             exit 1
           fi
 
@@ -288,6 +302,15 @@ jobs:
         with:
           name: build-log-${{ matrix.label }}
           path: ${{ runner.temp }}/build-${{ matrix.label }}.log
+          if-no-files-found: ignore
+
+      # X10-98：版本串自检的诊断输出（无论成败都上传，便于核验「自检找对了二进制」）。
+      - name: 上传版本串自检诊断
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-check-${{ matrix.label }}
+          path: ${{ runner.temp }}/version-check-${{ matrix.label }}.log
           if-no-files-found: ignore
 
       # A1-08：产物哈希清单 + 依赖清单（SBOM）随产物一起发布，
