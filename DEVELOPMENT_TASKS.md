@@ -934,3 +934,11 @@
   - **结论**：诊断日志此前只记命令调用，不记进程退出——这是全平台可观测性的根本缺口。
   - **修复**：`spawn_session_monitor` 的 `finished` 分支强制落一条 `mirror_exit` 事件（正常/异常 + 是否触发自动重连 + scrcpy 输出尾部 4 行），让任何平台的异常退出都直接「日志说话」。测试环境无 TRAY_APP 自动跳过。cargo 204 ✅、clippy ✅。
   - **待办**：用户需复现一次「桌面模式虚拟屏闪退」，导出诊断看 `mirror_exit` 事件的 exit_success 与「是否触发自动重连」——据此钉死「Mac 不自动重启」是没触发重连还是重连 probe 失败。
+
+- [x] ✅ **X10-109 v0.4.23-beta 发版（2026-10-09 深夜）**：
+  - **提交**：`b3747bc`（X10-105/107/108 功能）+ `b201a6a`（release bump 0.4.22→0.4.23，8 文件 + docs/releases/v0.4.23-beta.md）。
+  - **CI**：tag `v0.4.23-beta` → 验证（Rust 单测+前端构建）✅、伴侣 APK ✅、四平台打包 ✅；run `37946061898`。
+  - **Release 核验（发版后才标 ✅，教训 X10-105/v0.4.5 幽灵版）**：Release id `408057993`，**34 资产全齐**（四平台 dmg/exe/msi/AppImage/deb/app.tar.gz + .sig + SBOM×8 + SHA256SUMS×4 + latest.json + version-check×4）。
+  - **updater 通道**：updater 分支 HEAD `ef4ac2a`，`latest.json` version=`0.4.23`、四平台 Ed25519 签名 URL 齐全——已装用户可自动更新到 0.4.23。
+  - **内容**：X10-105 录制状态自愈 / X10-107 断连自动续录 / X10-108 镜像退出诊断日志。
+  - **教训**：GitHub API 未认证限流 60 次/小时，监控脚本 90 次高频轮询会烧光配额导致查不到状态（误以为 CI 失败）。监控用 ≥3 分钟间隔的低频轮询，或用带认证的 GitHub MCP 工具。

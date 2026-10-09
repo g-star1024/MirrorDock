@@ -478,7 +478,10 @@ jobs:
             if [ -f "docs/releases/${TAG}.md" ]; then
               echo "## 本版更新内容"
               echo
-              cat "docs/releases/${TAG}.md"
+              # 剥掉文档开头的 `# ` 顶级标题（及紧随空行）：Release 页标题与上面
+              # 「本版更新内容」已提供标题，文档若再写 `# MirrorDock ...` 会重复成
+              # 两个内容头（v0.4.21~23 实踩）。文档应从 `##` 小节开始写。
+              sed -e '1{/^# /d}' -e '1{/^$/d}' "docs/releases/${TAG}.md"
               echo
               echo "---"
               echo
