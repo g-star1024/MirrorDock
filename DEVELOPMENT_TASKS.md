@@ -899,3 +899,11 @@
   - **私有版**：commit `febf87b`，tag `v0.4.21-beta` 已推（`fa9d51a..febf87b` main + new tag）。
   - **⚠ 私有版 CI 前提（同 X10-100，用户侧）**：tools 仓库 Actions 是否已启用、`COMPANION_KEYSTORE_BASE64`/`COMPANION_STORE_PASSWORD` 是否已填——若未就位，tag 不产 Release，需用户补齐后重推 tag 或 Run workflow。
   - **发版证据（待 CI 完成后回填，此行不预填）**：
+
+- [ ] ⏳ **X10-104 v0.4.22-beta 双仓库发版 + 拦截 X10-101 有毒版本（2026-10-09 傍晚）**：用户报「桌面模式点开始录制后镜像闪退、白屏」——X10-101 引入的严重回归。
+  - **根因（真机实测）**：X10-101 让录制进程 `--new-display --start-app` 自建第二块虚拟屏并重新拉起应用，把游戏「搬」到第二块屏、显示通道那块变白 → 闪退+白屏。X10-101 方向错了。
+  - **正解（X10-103）**：录制通道**不建屏、不重复拉起应用**，用 `--display-id=<显示通道虚拟屏id>` 捕获同一块屏。实测：1920×848、170帧/7.4s≈23fps、录到游戏真实画面、显示通道全程不闪退。工程改动：`record_arguments(desktop_display_id)` 改签名 + trait `start_recorder` 加参 + `start_recording_with` 从显示进程 output_tail 实时解析（`resolve_desktop_display_id`，最多重试 ~1.5s，拿不到报 `desktop_display_unknown`）。新增回归测试 `desktop_recording_captures_the_display_channel_virtual_screen`。
+  - **测试**：公开 cargo 200 ✅（含新测试）；私有 tools patch 同源应用 cargo 225 ✅。
+  - **发版**：公开 fix `80659a9` + bump `e111c30`；tools `a81ede5`。tag `v0.4.22-beta` 两仓库均已推。公开 CI run `37901180472`。
+  - **⚠ 拦截有毒 v0.4.21（X10-101 含闪退 bug）**：删远端+本地 tag `v0.4.21-beta`（GitHub 级联移除其 Release 407644872，Releases 列表顶端回到 v0.4.20）；**updater 分支回滚** `e34d2b7`(0.4.21)→`e6cd1d2`(0.4.20)（force push，发版链产物分支），已装用户自动更新回落到 0.4.20 稳定版。raw CDN 有缓存延迟，ls-remote 权威确认 HEAD=e6cd1d2(0.4.20)。
+  - **发版证据（待 CI 完成后回填，此行不预填）**：
