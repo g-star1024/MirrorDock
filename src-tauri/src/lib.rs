@@ -9578,6 +9578,87 @@ mod tests {
         assert_eq!(merged_device.state, DeviceState::Ready);
     }
 
+    /// X10-111：USB + 无线 IP + mDNS 三条通道同物理设备时，首选必须是 USB。
+    /// 用户真实机型形状（Redmi M2104K10AC）：USB 序列号 + 无线 IP:端口 + mDNS 名。
+    #[test]
+    fn usb_is_preferred_over_wireless_ip_and_mdns() {
+        let devices = vec![
+            AdbDevice {
+                serial: "adb-M2104K10AC-rQWqVr._adb-tls-connect._tcp".into(),
+                label: "M2104K10AC".into(),
+                state: DeviceState::Ready,
+                physical_serial: Some("PHYS-1".into()),
+                connections: vec![ConnectionEndpoint {
+                    serial: "adb-M2104K10AC-rQWqVr._adb-tls-connect._tcp".into(),
+                    kind: ConnectionKind::Wireless,
+                    state: DeviceState::Ready,
+                }],
+            },
+            AdbDevice {
+                serial: "192.168.2.90:41901".into(),
+                label: "M2104K10AC".into(),
+                state: DeviceState::Ready,
+                physical_serial: Some("PHYS-1".into()),
+                connections: vec![ConnectionEndpoint {
+                    serial: "192.168.2.90:41901".into(),
+                    kind: ConnectionKind::Wireless,
+                    state: DeviceState::Ready,
+                }],
+            },
+            AdbDevice {
+                serial: "79j7kn9tkjt8rwss".into(),
+                label: "M2104K10AC".into(),
+                state: DeviceState::Ready,
+                physical_serial: Some("PHYS-1".into()),
+                connections: vec![ConnectionEndpoint {
+                    serial: "79j7kn9tkjt8rwss".into(),
+                    kind: ConnectionKind::Usb,
+                    state: DeviceState::Ready,
+                }],
+            },
+        ];
+        let merged = dedup_devices(devices);
+        assert_eq!(merged.len(), 1, "三条通道应合并为一条");
+        assert_eq!(merged[0].serial, "79j7kn9tkjt8rwss", "首选必须是 USB，不是无线");
+        assert_eq!(merged[0].connections.len(), 3);
+    }
+
+    /// X10-111：USB 通道未就绪（MIUI 休眠 USB 调试）时，无线独立成卡、首选无线——
+    /// 这正是「插着 USB 却走了无线」的成因。USB 一旦回到 ready，首选立即回到 USB。
+    #[test]
+    fn wireless_card_appears_only_when_usb_not_ready() {
+        // USB offline + 无线 ready：不合并（USB 未就绪不进组），无线是首选。
+        let usb_offline = vec![
+            AdbDevice {
+                serial: "79j7kn9tkjt8rwss".into(),
+                label: "M2104K10AC".into(),
+                state: DeviceState::Offline,
+                physical_serial: None,
+                connections: vec![ConnectionEndpoint {
+                    serial: "79j7kn9tkjt8rwss".into(),
+                    kind: ConnectionKind::Usb,
+                    state: DeviceState::Offline,
+                }],
+            },
+            AdbDevice {
+                serial: "192.168.2.90:41901".into(),
+                label: "M2104K10AC".into(),
+                state: DeviceState::Ready,
+                physical_serial: Some("PHYS-1".into()),
+                connections: vec![ConnectionEndpoint {
+                    serial: "192.168.2.90:41901".into(),
+                    kind: ConnectionKind::Wireless,
+                    state: DeviceState::Ready,
+                }],
+            },
+        ];
+        let merged = dedup_devices(usb_offline);
+        // 无线 ready 卡 + USB 离线残影。首选（可镜像的）是无线。
+        let ready: Vec<_> = merged.iter().filter(|d| d.state == DeviceState::Ready).collect();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].serial, "192.168.2.90:41901", "USB 未就绪时只能走无线");
+    }
+
     #[test]
     fn does_not_merge_devices_missing_physical_serial() {
         // 未授权设备读不到硬件序列号，型号相同也不得强行合并。

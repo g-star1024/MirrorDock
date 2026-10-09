@@ -950,3 +950,12 @@
   - **测试**：新增 7 测试（uptime 格式化三档、无线零错误→wireless_link_cut、有线零错误→usb_link_cut、显式 ERROR 覆盖通道判定、通道标签随 serial、建议可操作性、resolve_process_exit 针对性恢复建议）。cargo **211 ✅**、clippy 零告警。
   - **反向验证**：破坏 `extract_error_line` 的错误检测 → `classify_explicit_error_overrides_channel` 变红；恢复 → 转绿。干净（仅改一行 + 改回，未用 checkout 抹改动）。
   - **未验证面**：真实断连下的 `mirror_exit` 事件成品（通道/存活/死因是否如预期渲染）待下次断连或用户主动验证；「插着 USB 仍走无线」是否需要在 UI 上显式提示用户「当前走的是无线而非你插的 USB」，**待用户拍板**（属产品决策，不擅自改交互）。
+
+- [ ] ⏳ **X10-111 USB+无线双通道默认走 USB（2026-10-10 早，用户拍板「默认 USB 通道」）**：
+  - **核实结论**：后端 `dedup_devices` **本就 USB 优先**——`endpoint_preference`（USB=2 > 无线IP=1 > mDNS=0），合并卡片的 `serial` 即首选通道（USB），前端点连接传的 `device.serial` 就是它。新增 2 个真实形状测试锁定：①`usb_is_preferred_over_wireless_ip_and_mdns`（USB+无线IP+mDNS 三通道同物理设备 ⇒ 首选 USB）；②`wireless_card_appears_only_when_usb_not_ready`（USB offline + 无线 ready ⇒ 不合并、只能走无线）。cargo 213 ✅。
+  - **「插着 USB 却走无线」的真因**：不是默认通道选错，而是**点连接那一刻 USB 通道不是 ready**（MIUI 在无 ADB 活动时休眠 USB 调试，USB 那行呈 offline），列表里没有 USB 可选、只剩无线 ready——于是走了无线。这属「USB 通道未被及时激活」，非「通道优先级」缺陷。
+  - **待用户拍板的改进方向**（暂不擅自改交互）：
+    - A. **USB 插入自动激活**：检测到 USB 上线（device 状态转 ready）时，若该机当前走无线，提示「检测到你插入了数据线，可切换更稳的有线」或自动把镜像迁到 USB（需重建虚拟屏，游戏仍要重登）。
+    - B. **点连接前唤醒 USB**：用户点「开始镜像」时，若同物理设备有 USB 端点但 offline，先尝试唤醒/重连 USB，成功则优先用 USB，失败再回落无线。
+    - C. **仅 UI 明示**：设备卡上标注「当前首选通道：USB/无线」，让用户一眼看清将要走哪条。
+  - **现状**：逻辑已证正确，无行为改动；仅补测试 + 台账。等用户选定 A/B/C 再实现。
