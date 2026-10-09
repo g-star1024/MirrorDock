@@ -463,13 +463,18 @@ trait MirrorRuntime: Send + Sync {
         record_path: Option<&Path>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error>;
 
-    /// X10-92：启动**独立的录制进程**（`--no-playback --no-window --no-control --record`），
+    /// X10-92：启动**独立的录制进程**（`--no-playback --no-window --record`），
     /// 与显示进程并存、互不干扰——镜像窗口全程不重启。返回录制进程句柄；结束录制 = kill 它。
+    ///
+    /// X10-103：`desktop_display_id` 为显示通道虚拟屏 id（桌面模式时由调用方从显示
+    /// 进程输出解析）。录制通道据此 `--display-id` 捕获**同一块屏**，而非自建第二块
+    /// （那会挤掉显示通道→闪退白屏，或录到一块空屏）。非桌面模式传 `None`。
     fn start_recorder(
         &self,
         serial: &str,
         options: &SessionOptions,
         record_path: &Path,
+        desktop_display_id: Option<u32>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error>;
 }
 
@@ -762,7 +767,7 @@ impl SessionOptions {
     ///  - 音频保留（除非摄像头源强制静音）：录制要的就是画面+声音。
     ///
     /// 这样录制进程的启停完全不触碰显示进程——镜像窗口全程不重启。
-    fn record_arguments(&self) -> Result<Vec<String>, AppError> {
+    fn record_arguments(&self, desktop_display_id: Option<u32>) -> Result<Vec<String>, AppError> {
         let (size, bitrate) = match self.quality {
             Quality::Smooth => (1024, "2M"),
             Quality::Balanced => (1920, "8M"),
@@ -792,45 +797,41 @@ impl SessionOptions {
         }
         // 视频源必须与显示通道一致：桌面模式录虚拟屏、摄像头录摄像头、否则录手机屏幕。
         if self.desktop_mode {
-            args.push("--new-display".into());
-            // X10-101：桌面模式录制**必须开控制**（不加 --no-control），并带 --start-app。
+            // X10-103：录制通道用 `--display-id` 捕获**显示通道那块虚拟屏**，不建第二块。
             //
-            // 根因（Mac 白屏 / Windows 不完整，真机实测）：scrcpy 在「无控制 + 无窗」下
-            // 不驱动虚拟屏渲染/刷新——Mac 上录到一块空白屏（白屏）、Windows 上几乎不产生
-            // 帧导致时间轴残缺（播放器报「视频不完整」）。实测：去 --no-control 后
-            // 22fps、录到虚拟屏真实画面；带 --no-control 则白屏/零帧。
+            // 根因链（三次实测定位）：
+            //  - X10-101 让录制进程 `--new-display --start-app` 自己起一块屏并拉起应用 →
+            //    把游戏「搬」到第二块屏、显示通道那块变白 → 用户看到「镜像闪退 + 白屏」。
+            //  - 去掉 --start-app 只留 --new-display → 录的是录制进程自己的空虚拟屏，
+            //    录不到显示通道上的游戏画面。
+            //  - 正解：录制通道**不建屏**，用 `--display-id=<显示通道的虚拟屏 id>` 直接捕获
+            //    同一块屏。实测：1920×848、139帧/6.4s≈22fps、录到游戏真实画面，且显示
+            //    通道全程不闪退。id 由显示通道 scrcpy 输出里的 `New display: ... (id=N)`
+            //    解析得到（parse_desktop_display_id）。
             //
-            // 控制开启后 X10-99 的「--no-control 与 --start-app 互斥」不复存在，因此
-            // 恢复 --start-app：录制进程自己拉起这块虚拟屏的目标应用，确保录到的是
-            // 用户要录的应用画面（而非空白桌面）。录制是无窗进程，不抢用户输入焦点，
-            // 控制通道仅用于驱动虚拟屏渲染。包名白名单校验与显示通道一致。
-            if let Some(app) = &self.desktop_app {
-                let pkg = app.trim();
-                let valid = !pkg.is_empty()
-                    && pkg.len() <= 120
-                    && pkg
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
-                if !valid {
-                    return Err(AppError::new(
-                        "desktop_app_invalid",
-                        "虚拟屏启动的应用包名无效。",
-                        "包名只允许字母、数字、点（.）和下划线，例如 com.android.browser；也可以留空。",
-                    ));
-                }
-                args.push(format!("--start-app={pkg}"));
-            }
-        } else {
-            // 非桌面模式（手机屏幕/摄像头）：录真实屏/摄像头，无需控制通道驱动，
-            // 保持无控制三件套以最小化对设备的占用。
-            args.push("--no-control".into());
-        }
-        if self.camera_source {
+            // 拿不到 id（显示通道输出还没产出该行、或解析失败）时**拒绝启动**——宁可让用户
+            // 看到「稍候重试」，也不要静默录一块空屏（那正是 X10-101 想修的白屏）。
+            let Some(display_id) = desktop_display_id else {
+                return Err(AppError::new(
+                    "desktop_display_unknown",
+                    "暂时无法开始录制。",
+                    "桌面模式的虚拟画面还没就绪，请稍候几秒再点开始录制。",
+                ));
+            };
+            args.push(format!("--display-id={display_id}"));
+            // 不建屏、不重复 --start-app：显示通道已拉起应用，录制只捕获同一块屏。
+        } else if self.camera_source {
             args.push("--video-source=camera".into());
             // 摄像头源绝不采集麦克风（A1-05 承诺），录制同样静音。
             args.push("--no-audio".into());
-        } else if !self.audio {
-            args.push("--no-audio".into());
+            // 录摄像头/主屏的真实源无需控制通道，保持无控制以最小化设备占用。
+            args.push("--no-control".into());
+        } else {
+            // 录手机真实主屏：同样无需控制通道。
+            args.push("--no-control".into());
+            if !self.audio {
+                args.push("--no-audio".into());
+            }
         }
         Ok(args)
     }
@@ -1418,9 +1419,10 @@ impl MirrorRuntime for ScrcpyRuntime {
         serial: &str,
         options: &SessionOptions,
         record_path: &Path,
+        desktop_display_id: Option<u32>,
     ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
         // X10-92：录制进程不开窗，**不经 macOS bundle**（bundle 只为 Dock 图标服务，
-        // 无窗进程用裸 scrcpy 即可）。参数集用 record_arguments（无窗/不播放/不控制）。
+        // 无窗进程用裸 scrcpy 即可）。参数集用 record_arguments（无窗/不播放）。
         let scrcpy = scrcpy_binary();
         let adb = adb_binary();
         let mut command = quiet_command(scrcpy);
@@ -1430,7 +1432,7 @@ impl MirrorRuntime for ScrcpyRuntime {
             .arg(serial)
             .args(
                 options
-                    .record_arguments()
+                    .record_arguments(desktop_display_id)
                     .map_err(|_| std::io::Error::other("invalid record options"))?,
             )
             .arg(format!("--record={}", record_path.to_string_lossy()))
@@ -4698,6 +4700,27 @@ fn start_recording(
     Ok(result)
 }
 
+/// X10-103：从显示通道的 scrcpy 输出解析虚拟屏 id，供录制通道 `--display-id` 捕获。
+///
+/// scrcpy 建虚拟屏后会在输出里打印 `New display: <WxH>/<dpi> (id=N)`，但**不是启动瞬间**
+/// 就有——所以要短重试（最多 ~1.5s）。超时仍拿不到就返回 None，由 record_arguments
+/// 报「虚拟画面还没就绪，请稍候重试」，而不是静默录一块空屏（X10-101 的白屏教训）。
+fn resolve_desktop_display_id(store: &SessionStore, target: &str) -> Option<u32> {
+    for _ in 0..15 {
+        let output = {
+            let Ok(map) = store.0.lock() else { return None };
+            let state = map.get(target)?;
+            let process = state.process.as_ref()?;
+            process.output_tail()
+        };
+        if let Some(id) = parse_desktop_display_id(&output) {
+            return Some(id);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    None
+}
+
 fn start_recording_with(
     app: &AppHandle,
     runtimes: &AppRuntimes,
@@ -4707,6 +4730,13 @@ fn start_recording_with(
 ) -> Result<Recording, AppError> {
     // 目标设备：显式指定优先，否则主会话（必须已有运行中的显示会话）。
     let (target, options) = running_session_options(store, serial.clone())?;
+    // X10-103：桌面模式下，录制通道要 `--display-id` 捕获显示通道那块虚拟屏——
+    // 从显示进程的 scrcpy 输出实时解析（含重试）。非桌面模式不需要，置 None。
+    let desktop_display_id = if options.desktop_mode {
+        resolve_desktop_display_id(store, &target)
+    } else {
+        None
+    };
     // 录制是 Pro 功能（与既有 ensure_edition_allows 同一闸门）。
     let record_opts = SessionOptions { record: true, ..options.clone() };
     ensure_edition_allows(app, &record_opts)?;
@@ -4715,7 +4745,7 @@ fn start_recording_with(
 
     let process = runtimes
         .mirror
-        .start_recorder(&target, &options, &record_path)
+        .start_recorder(&target, &options, &record_path, desktop_display_id)
         .map_err(|error| {
             // 动态文案不能用 AppError::new（要 &'static str）：先记日志，用静态文案。
             eprintln!("[mirrordock] start_recorder failed: {error}");
@@ -8783,6 +8813,7 @@ mod tests {
             _serial: &str,
             options: &SessionOptions,
             record_path: &Path,
+            _desktop_display_id: Option<u32>,
         ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
             // 记录录制进程的参数与路径，供测试断言「双通道用 record_arguments 且独立」。
             self.recorder_starts.lock().unwrap().push(options.clone());
@@ -11880,6 +11911,31 @@ mod tests {
     }
 
     #[test]
+    fn desktop_recording_captures_the_display_channel_virtual_screen() {
+        // X10-103：桌面模式录制用 --display-id 捕获显示通道那块虚拟屏，不建第二块、
+        // 不带 --start-app（否则挤掉显示通道→闪退白屏，或录到一块空屏）。
+        let desktop = SessionOptions {
+            desktop_mode: true,
+            desktop_app: Some("com.netease.dhxy.qihoo".into()),
+            ..Default::default()
+        };
+        let args = desktop.record_arguments(Some(105)).unwrap();
+        assert!(args.contains(&"--display-id=105".into()), "应捕获指定虚拟屏：{args:?}");
+        assert!(!args.iter().any(|a| a.contains("new-display")), "录制不建第二块屏：{args:?}");
+        assert!(!args.iter().any(|a| a.contains("start-app")), "录制不重复拉起应用：{args:?}");
+
+        // 拿不到显示通道虚拟屏 id 时拒绝启动（而非静默录空屏）。
+        let err = desktop.record_arguments(None).unwrap_err();
+        assert_eq!(err.code, "desktop_display_unknown");
+
+        // 非桌面模式（手机屏幕）：不需要 display-id，保持 --no-control。
+        let phone = SessionOptions::default();
+        let phone_args = phone.record_arguments(None).unwrap();
+        assert!(phone_args.contains(&"--no-control".into()));
+        assert!(!phone_args.iter().any(|a| a.contains("display-id")));
+    }
+
+    #[test]
     fn device_apps_are_parsed_from_pm_list_output_and_sorted() {
         let adb = FakeAdb {
             devices: vec![device("phone", DeviceState::Ready)],
@@ -12287,7 +12343,7 @@ mod tests {
         // 经 start_recorder 开录：路径原样交给独立录制进程，不碰显示进程。
         let recorder = runtimes
             .mirror
-            .start_recorder("phone", &SessionOptions::default(), &path)
+            .start_recorder("phone", &SessionOptions::default(), &path, None)
             .unwrap();
         {
             let mut map = store.lock().unwrap();
