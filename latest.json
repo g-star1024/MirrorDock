@@ -1,22 +1,22 @@
 {
   "version": "0.4.19",
   "notes": "本版是一次**录制批次修复**（X10-95，用户真机报障 5 项全部闭环）：\n\n- **录像黑屏/无影像修复**：此前点「结束录制」用 SIGTERM 强停录制进程，scrcpy 不响应导致 3 秒后被强杀，MP4 丢失 moov 索引（ffprobe 报 moov atom not found）——视频文件存在但完全无法播放。现改为对录制进程发送 SIGINT 优雅停止，scrcpy 正常写入「Recording complete」，录像完整可播。\n- **托盘菜单录制状态修复**：托盘此前用旧字段判断，开始录制后仍显示「开始屏幕录制」、看不到「结束录制」。现按真实录制进程状态刷新，开始/停止录制后托盘文案即时更新。\n- **点「结束录制」报错修复**：与黑屏同源——强杀导致收尾失败报错，优雅停止后报错消失。\n- **录像保存位置可自定义**：设置页新增「录像保存位置」，可选任意文件夹，留空即恢复系统默认（影片/MirrorDock）。\n- **首次开录制闪退**：内部复现（桌面模式双通道虚拟屏）未再出现，推断已随本批修复覆盖；如你的设备上仍出现，请通过 Issue 反馈。\n\n**Windows 平台说明**：Windows 上没有与 SIGINT 等价的优雅停止机制，录制停止在 Windows 仍走强制收尾，极端情况下录像可能缺少索引（该限制已在兼容性矩阵注明）。",
-  "pub_date": "2026-10-08T23:24:55Z",
+  "pub_date": "2026-10-09T03:27:40Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXhneVhyNkx6M242WjM2ZlRJL2N2N1hOcGppenB2SFRNbkdPYjc4TFltNEMvaXRRTFloZHVsWGhjQm84dmtjS0NNNGxoNitxK2orMW1nRDBuR2pDMVFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTAxNTY1CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE5CnN6N1pNQlVMN29jYUdLZUpFdUNoSDN3K1paZk1Fci9xajVUdkdJYjNxWWpVb1RYRjI0NGEwUnRsRk9ZcC9FdlUzY2V4M1p5WFYwY2FMNEJkYW56YUF3PT0K",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTN6ZDJ4WTU5RXVNV0xXOFJVbVN3c2dKWE93YVBMLyszZFJuKytQN2QyYnp1LzJqM3lCZlVMVnp4WVNNSVlQbVJjUFhVaUdhendabHZRL0NOS1hadXdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE1ODg0CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE5CmtkL3FmUjFtcGhDbmVWc0NNbXgyMDJvMmREOHROakhyNlJUTUgwdUhwM3pLSkMzcWxrQTVEc0hyQXFXQ1NmbjVMVTNyTGoydGtNOW1sQzRnU01LcEJBPT0K",
       "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTY1ZC9xd2d3S0M5Sm5XNFhmbEtCM0FqenFWaDBIY2QzVE54TFdtYVdveUF6Vmw2ZDVZNy9BOGczREYzVy9qY1NNcU00QlNvMzlHRC9JT0dFc0NHd0FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTAxNzc2CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE5CkphQVFSQk95b0tMTmo2YXdPY01VK0s4WmJibVQ1c1BMYWpwcWFqd3VTdms3c2FXMjkrMnZHQW04VkRiV21WN1g1UkVkWUV4WFFVaTlhWEpzb2h6RERRPT0K",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTVFbTFEZzZld1RLZXVwRzR1NWRwblRvZUl3REFXNmxyV0JlQit5R0JUeFV0cmVNQXEvbEdTTlRLeXM5NzR6ZW9tNGJuV21tRWp1VWRLTkwxYTVFamdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE2NDAxCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE5CmQvZEtwak5HVmZoZTNZVWVLWGVybmxmcFFtaXhvYTVrSnUra0kzcVVIREJNUlZ6STlyWlNNT0tjK2R4ekFnK0ZMNEovaVREVHBib2NHbWJybUdCR0J3PT0K",
       "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTBnaG8vR1dRUDZaYTF4Mk84MVNPcjV6bko4bjNlQjNLNlBDVnMyNzRNaVZOOU1HM3V3RnB4UGR3S1UxOWJhc1NxUS9WRUgzTW9abXZaUFRhYy96L1E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTAxNDk5CWZpbGU6TWlycm9yRG9ja18wLjQuMTlfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMTkKQzRwUCtjZjhlcEw0WFhnMzJlRkRNcTc4S3hZWFpMM0NlUmZqU2RSa3E4RnFmREhtTHFNY0RWVGFVOEE4OHhHS25Jei92SG4zRjFtLzllZkRuNlF4Qnc9PQo=",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTZOQ2o1ZFJRY0ljWmJLVGpqYURIQVExQWV5aU8yWkQvWTNmdkNmejQvbmZzZkhxLzRRb2RYVDAxT0ZSNTMydzVyVmxXSll3OVh4TU9rYmpGdlVyUUEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE2MTEzCWZpbGU6TWlycm9yRG9ja18wLjQuMTlfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMTkKeGtnMDA1dVByNEhiT2Y2VWVpZEx2aGxpaGxSRzRGZmhBcG85ZUw2a1p0VXVBNWdRUFBBNzhSZXQ3c3BIcUNVeUJTVnpiT09IZVF2dzY3OXdteWVZRFE9PQo=",
       "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXg5OUpjVVlVUDM3RlgxWnRhS0VuejhJMU1qQlBXNHlaWWNmOVNDai91N01ZcUxiWnNUWWluLzJaVlZKajk3Tk81OTdpVCtFWEkyL1ZwNmRNUXdiY0FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTAxNjgxCWZpbGU6TWlycm9yRG9ja18wLjQuMTlfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4xOQpWbXFwZW40UkgydXMvYmY5T3ZMSlBDWGlKZ1JxUEdJNVpKcXYzR3pCU3I0eXkydkRsdlUrR05VN0dyTWJhaVBueFdzYWtsb05jcGF3S0o4Kys3RkhDQT09Cg==",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaStEeWQvYlRic0xsTUhtd3BHNTdiMmcrZEJGZXVlWHAvYmVLbzZnVmpnUGNJOFJmNGRjL2pvc1U3Smk2Y2JqWmdDRlhRVWsrQkRWNktENTAwazdrYkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE2MTIzCWZpbGU6TWlycm9yRG9ja18wLjQuMTlfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4xOQo4YnN2eDZvTks1bTVXVXE5YUNWQVZVUDZ1TXplYXdXTmNhOC83TlA4T1hCVXJqRk1wV1FjZTZOZUVFNWhhZnNsZldEa1kwWWVpNXVldHkzbXZkTTBEQT09Cg==",
       "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_x64-setup.exe"
     }
   }
