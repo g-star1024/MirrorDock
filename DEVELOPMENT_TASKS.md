@@ -874,3 +874,10 @@
   - **测试**：修正 `starting_recording_uses_a_separate_channel...`（补 stub 产物文件 + create_dir_all，模拟真实定型落盘）。`cargo test --lib` **199 全绿**、`pnpm build` ✅、`pnpm test` **82 全绿**。
   - **真机实证**：sigwrap + 修复后参数（`--new-display` 无 `--start-app`）→ `Recording started/complete`、有效 MP4 写入 `Movies/MirrorDock`。
   - **教训**：「开始/结束都提示成功」≠「产物存在」。任何「产出文件」的操作，成功提示必须建立在**核验产物真实落盘**之上；否则会话级错误（scrcpy 立即退出）会被静默吞掉，用户端表现为「明明说录好了却没有」。另：X10-92 桌面模式的录制参数继承漏了 `--start-app` 与 `--no-control` 的互斥，**桌面模式录制从双通道上线起就没真正工作过**——这是首次真机覆盖到该路径。
+
+- [ ] ⏳ **X10-100 v0.4.20-beta 公私双仓库同步发版（2026-10-09 午后）**：用户拍板「直接出 v0.4.20-beta（公开+私有）」。
+  - **内容**：X10-99 桌面模式录像无视频修复 + 假成功提示修复（commit 公开 `1d22b05` / 私有 `fa9d51a` 同源）。版本 0.4.19→0.4.20（8 文件口径两仓库同步）+ `docs/releases/v0.4.20-beta.md`。测试：公开 cargo 199 ✅ / pnpm 82 ✅；私有 cargo 224 ✅ / pnpm build ✅。
+  - **公开版**：commit `f10cc3f`，tag `v0.4.20-beta` 已推（`b1bb90b..f10cc3f` main + new tag）。CI run `37892508536` 已触发（tag 构建，含 X10-98 全新编译 + 版本文件名核验脚本）。
+  - **私有版**：commit `fa9d51a`，删旧 tag `v0.4.19-beta`（d40b4a5）→ 重打 `v0.4.20-beta` 已推（`4ccf0d6..fa9d51a` main + new tag）。
+  - **⚠ 私有版 CI 前提（用户侧）**：tools 仓库 Actions 此前未启用（X10-97 零运行），且伴侣签名 secret `COMPANION_KEYSTORE_BASE64` 未填（X10-21 keystore 缺文件 → `validateSigningDebug FAILED`）。base64 已交付用户（源 `MirrorDock-内部文档/mirrordock-companion.keystore`，密码 WQDZAM0HZNR6hakMUmmn）。**若 Actions 未启用/secret 未填，本次 tag 不会产出 Release**——需用户启用 Actions + 填 secret 后重推 tag 或 Run workflow。
+  - **发版证据（待 CI 完成后回填，此行不预填）**：
