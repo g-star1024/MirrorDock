@@ -848,3 +848,11 @@
   - **公开版内容**：X10-95 录制批次修复（优雅停止/托盘状态/保存目录，commit 7cf5868）首次进入 Release 渠道；本提交只做版本号 bump（package.json / tauri.conf.json / Cargo.toml / Cargo.lock / README / docs/compatibility-matrix.md 4 处 / site/index.html 21 处 / site/compatibility.html 6 处）+ `docs/releases/v0.4.19-beta.md` 发版说明。README 伴侣 App 口径由 0.3.0 更正为实际 0.3.2（build.gradle.kts versionName）。
   - **私有版同步**：MirrorDock-tools 同样 bump 0.4.19 + 发版说明（含 X10-94 点击器说明），tag 同名 `v0.4.19-beta`。
   - **发版证据（已核验，2026-10-09 07:35）**：tag `v0.4.19-beta` 已推远端、commit `86bd5b5`；CI run `37857794012` **success**；Release id `407339807` **draft=False、30 资产全齐**（7 安装包 + 伴侣 APK `MirrorDock-companion-0.4.19.apk` 4.29MB + 4 SHA256SUMS + 8 SBOM + updater 归档与签名）；`latest.json` **version=0.4.19**、pub_date=2026-10-08T23:24:55Z、四平台签名全非空（darwin-aarch64/darwin-x86_64/linux-x86_64/windows-x86_64 全 OK）。
+
+- [ ] ⏳ **X10-98 v0.4.19-beta 错版事故 + CI 缓存根因修复 + 重发（2026-10-09 上午）**：用户真机实测 0.4.19 录像仍黑屏、自定义录像目录/托盘状态均未生效。
+  - **事故定性（字节级实证，非推断）**：下载远端 0.4.19 产物 + 本地 /Applications 二进制，`strings`/字节搜索发现版本串 **0.4.19 MISSING、0.4.18 FOUND**，X10-95 修复标记 `is_recorder` **整个不在二进制里**；二进制大小与 0.4.18 完全一致（8209760 字节）。**装出来的「0.4.19」实为 0.4.18 旧二进制**。
+  - **根因**：`Swatinem/rust-cache@v2` 以 `key: target名` 缓存 0.4.18 的 target 目录，0.4.19 的 package job 命中同一缓存键后 **Cargo 指纹误判旧 mirrordock crate 为 fresh、未重编**，直接复用旧二进制。版本号来自 `env!("CARGO_PKG_VERSION")` 本应触发重编，但 rust-cache 恢复的 target 让 Cargo 跳过了整个 crate。
+  - **修法（已落地 commit eaad6e1）**：①package job rust-cache 加 `if: 非 tag`（发版强制全新编译，日常 main 保留缓存提速）；②构建后新增「核验二进制版本串与 tag 一致」步骤，不含对应版本串直接 fail-fast 不进 Release。
+  - **重发**：删旧 tag → 在 eaad6e1 上重打 v0.4.19-beta → 重推，CI 全新编译（约 25 分钟）。release job 会清理该 tag 下旧的错版 Release。
+  - **真机根因补充（澄清 X10-95 的盲区）**：SIGINT 优雅停止**本身是对的**——C wrapper 实测重置 SIG_DFL 后 1.0s 优雅退出、moov 完好；问题从不是信号路径，而是「修复根本没进二进制」。X10-95 的单测只验证「stop 发 SIGINT」，**没验证 spawn 的 pre_exec 重置进了产物**——这是测试盲区，也是这次没拦住的原因。
+  - **教训**：发版核验不能只看「CI success + 资产齐 + latest.json 签名」——那些都是真的，但包的内容可能是旧的。**必须核验产物二进制本身**（版本串/关键修复标记）。已把版本串自检固化进 workflow，下次错版会在 CI 阶段被拦。
