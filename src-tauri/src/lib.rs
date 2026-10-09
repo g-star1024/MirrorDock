@@ -281,7 +281,14 @@ fn resolve_process_exit(serial: &str, success: bool, scrcpy_output: &str) -> Mir
     if success {
         MirrorSession::idle()
     } else {
-        let mut recovery = "请检查手机授权与连接后重新启动镜像。".to_owned();
+        // X10-110：按死因给针对性建议，不再一句通用话。
+        let kind = classify_mirror_exit(serial, scrcpy_output);
+        let advice = mirror_exit_advice(&kind);
+        let mut recovery = if advice.is_empty() {
+            "请检查手机授权与连接后重新启动镜像。".to_owned()
+        } else {
+            format!("{advice}\n\n排查完成后请重新启动镜像。")
+        };
         let tail = scrcpy_output.trim();
         if !tail.is_empty() {
             // 只保留尾部若干行：环形缓冲本身有上限，这里再截一次，避免界面被刷爆。
@@ -1514,6 +1521,11 @@ struct SessionState {
     /// 续录 +1；达到 `RECORD_RESUME_MAX` 仍断则放弃续录并提示用户改用数据线，避免
     /// 无线链路持续抖动时无限重启录制。用户手动开始/停止、或显示会话结束时清零。
     record_resume_count: u32,
+    /// X10-110：当前显示进程接入时刻（诊断「存活多久后退出」）。
+    ///
+    /// 仅日志用途；重连重启会话时随 `attach_process` 更新。`std::time::Instant`
+    /// 不可序列化，但 `SessionState` 从不离开进程内存，无碍。
+    attached_at: Option<std::time::Instant>,
 }
 
 /// 会话表（X10-27 并发多设备）：**每台设备一个会话**。
@@ -1572,6 +1584,7 @@ fn session_entry_mut<'a>(
         record_path: None,
         record_process: None,
         record_resume_count: 0,
+        attached_at: None,
     })
 }
 
@@ -1673,6 +1686,7 @@ fn attach_process(
     state.process = Some(process);
     state.options = options;
     state.record_path = record_path;
+    state.attached_at = Some(std::time::Instant::now());
     Ok(state.epoch)
 }
 
@@ -1818,6 +1832,8 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
         let mut was_recording = false;
         let mut recorder_died = false;
         let mut exit_scrcpy_tail = String::new();
+        // X10-110：存活时长（attach → exit），诊断「跑了多久后挂」。
+        let mut exit_uptime: Option<std::time::Duration> = None;
         let finished = {
             let Ok(mut map) = store.0.lock() else {
                 return;
@@ -1840,6 +1856,7 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                     was_recording = state.record_path.is_some();
                     // 先取出输出再交还进程：退出原因就写在 scrcpy 的输出里（X10-79）。
                     let scrcpy_output = process.output_tail();
+                    exit_uptime = state.attached_at.take().map(|t| t.elapsed());
                     state.process = None;
                     state.session = resolve_process_exit(&serial, success, &scrcpy_output);
                     exit_scrcpy_tail = scrcpy_output;
@@ -1932,17 +1949,45 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             // 完全无痕（用户实测：闪退后日志里一条退出事件都没有），排查只能凭回忆
             // 复现。这里记录退出性质、是否触发自动重连、scrcpy 输出尾部，让下一次
             // 任何平台的异常退出都直接「日志说话」。
+            //
+            // X10-110：增强——补通道（有线/无线，来自 serial）、存活时长、死因分类
+            // （链路秒杀 / scrcpy 报错 / 未知）。用户实测「插着 USB 仍断连」正因其
+            // 会话走的是无线端点，通道一目了然才能避免再凭感觉归因。
             if let Some(app) = TRAY_APP.get() {
                 if let Some(log) = app.try_state::<DiagnosticsLog>() {
-                    let outcome = if exit_success { "正常退出" } else { "异常退出" };
+                    let channel = if is_wireless_serial(&serial) { "无线" } else { "有线" };
+                    let uptime = exit_uptime
+                        .map(|d| format!("，存活 {}", format_uptime(d)))
+                        .unwrap_or_default();
+                    let outcome = if exit_success {
+                        "正常退出".to_owned()
+                    } else {
+                        let kind = classify_mirror_exit(&serial, &exit_scrcpy_tail);
+                        let label = match &kind {
+                            MirrorExitKind::ScrcpyError => {
+                                match extract_error_line(&exit_scrcpy_tail) {
+                                    Some(line) => format!("异常退出（scrcpy 报错：{line}）"),
+                                    None => "异常退出（scrcpy 报错）".to_owned(),
+                                }
+                            }
+                            MirrorExitKind::WirelessLinkCut => "异常退出（疑似无线链路中断）".to_owned(),
+                            MirrorExitKind::UsbLinkCut => "异常退出（疑似有线连接中断）".to_owned(),
+                        };
+                        let advice = mirror_exit_advice(&kind);
+                        if advice.is_empty() {
+                            label
+                        } else {
+                            format!("{label}。{advice}")
+                        }
+                    };
                     let reconnect = if reconnect_triggered { "已触发自动重连" } else { "未触发自动重连" };
                     let tail = exit_scrcpy_tail.trim();
                     let detail = if tail.is_empty() {
-                        format!("{outcome}，{reconnect}。")
+                        format!("{outcome}，通道 {channel}{uptime}，{reconnect}。")
                     } else {
                         let lines: Vec<&str> = tail.lines().collect();
                         let excerpt: Vec<&str> = lines.iter().rev().take(4).rev().copied().collect();
-                        format!("{outcome}，{reconnect}。scrcpy 末尾：{}", excerpt.join(" | "))
+                        format!("{outcome}，通道 {channel}{uptime}，{reconnect}。scrcpy 末尾：{}", excerpt.join(" | "))
                     };
                     log.record("mirror_exit", if exit_success { "ok" } else { "mirror_exited" }, &detail, &[&serial]);
                 }
@@ -5314,6 +5359,77 @@ fn is_scrcpy_available() -> bool {
 /// 与前端 `looksLikeWirelessEndpoint` 保持同一判定，仅用于通道归类与界面提示。
 fn is_wireless_endpoint(serial: &str) -> bool {
     serial.contains(':') || serial.contains("._adb-tls") || serial.contains("._tcp")
+}
+
+// ---------------------------------------------------------------------------
+// X10-110：镜像异常退出的死因分类（写进 mirror_exit 诊断事件）
+// ---------------------------------------------------------------------------
+
+/// 把存活时长格式成日志里一眼可读的短串：`23秒` / `3分42秒` / `1时07分`。
+fn format_uptime(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}秒")
+    } else if secs < 3600 {
+        format!("{}分{:02}秒", secs / 60, secs % 60)
+    } else {
+        format!("{}时{:02}分", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// X10-110：镜像**异常**退出的死因分类。
+///
+/// 判据按证据强度从强到弱（全覆盖，无 unknown 兜底——分类就是为了不再「未知」）：
+/// 1. scrcpy 末尾带显式错误行（`ERROR:` / `WARN: Device disconnected`）→ `scrcpy_error`，
+///    直接把错误行原文带回——这是最有信息量的情形，不二次解读。
+/// 2. 无线通道（serial 判 + 输出判取或）且零错误输出 → `wireless_link_cut`。
+///    真机实证（X10-106，2026-10-09/10）：adbd `SSL_write failed` / 漫游 / Wi-Fi 省电
+///    把链路瞬间掐断时，scrcpy 末尾最后一行仍是正常 `Texture:` 心跳、毫无 ERROR——
+///    「无线 + 零错误 + 异常退出」三者齐备即是链路秒杀特征。
+/// 3. 其余零错误输出（USB 通道）→ `usb_link_cut`（真拔线 / 数据线接触不良 / USB 省电）。
+#[derive(Debug, PartialEq, Eq)]
+enum MirrorExitKind {
+    ScrcpyError,
+    WirelessLinkCut,
+    UsbLinkCut,
+}
+
+/// 从 scrcpy 输出尾部提取第一处显式错误行（供 `scrcpy_error` 附原文）。
+fn extract_error_line(tail: &str) -> Option<String> {
+    for line in tail.lines().rev() {
+        let l = line.trim();
+        if l.contains("ERROR:") || l.contains("WARN: Device disconnected") {
+            return Some(l.chars().take(120).collect());
+        }
+    }
+    None
+}
+
+fn classify_mirror_exit(serial: &str, scrcpy_tail: &str) -> MirrorExitKind {
+    if extract_error_line(scrcpy_tail).is_some() {
+        return MirrorExitKind::ScrcpyError;
+    }
+    let wireless = is_wireless_serial(serial)
+        || scrcpy_tail.contains("(tcpip)")
+        || scrcpy_tail.contains("_adb-tls-connect._tcp");
+    if wireless {
+        MirrorExitKind::WirelessLinkCut
+    } else {
+        MirrorExitKind::UsbLinkCut
+    }
+}
+
+/// 按死因给出针对性的恢复建议（替代原来一句通用的「请检查手机授权与连接」）。
+fn mirror_exit_advice(kind: &MirrorExitKind) -> &'static str {
+    match kind {
+        MirrorExitKind::ScrcpyError => "",
+        MirrorExitKind::WirelessLinkCut => {
+            "疑似无线链路中断（Wi-Fi 漫游/省电会把连接瞬间掐断，与有线无关）。建议：① 手机关闭 Wi-Fi 省电与「智能网络切换」，路由器关 band steering；② 长时间使用改插数据线最稳。"
+        }
+        MirrorExitKind::UsbLinkCut => {
+            "USB 连接中断。请重新插拔数据线（换个接口/换线试试），并确认手机没有进入 USB 省电。"
+        }
+    }
 }
 
 fn parse_adb_devices(output: &str) -> Vec<AdbDevice> {
@@ -12739,6 +12855,119 @@ mod tests {
         }
         let map = store.lock().unwrap();
         assert_eq!(map.get("phone").unwrap().record_resume_count, 0);
+    }
+
+    // -------------------------------------------------------------------
+    // X10-110：镜像异常退出的死因分类与存活时长
+    // -------------------------------------------------------------------
+
+    /// 存活时长格式化：秒 / 分秒 / 时分三档。
+    #[test]
+    fn uptime_formats_into_human_readable_units() {
+        assert_eq!(format_uptime(Duration::from_secs(0)), "0秒");
+        assert_eq!(format_uptime(Duration::from_secs(23)), "23秒");
+        assert_eq!(format_uptime(Duration::from_secs(59)), "59秒");
+        assert_eq!(format_uptime(Duration::from_secs(60)), "1分00秒");
+        assert_eq!(format_uptime(Duration::from_secs(222)), "3分42秒");
+        assert_eq!(format_uptime(Duration::from_secs(3599)), "59分59秒");
+        assert_eq!(format_uptime(Duration::from_secs(3600)), "1时00分");
+        assert_eq!(format_uptime(Duration::from_secs(4020)), "1时07分");
+    }
+
+    /// 无线链路秒杀：无线 serial + 零错误输出 ⇒ wireless_link_cut。
+    /// 反向验证：把 `(tcpip)` 从输出里抹掉、serial 换成纯 USB，结果必须变。
+    #[test]
+    fn classify_wireless_zero_error_exit_as_link_cut() {
+        let tail = "INFO: --> (tcpip) 192.168.1.9:33739 device M2104K10AC\n\
+                    INFO: Renderer: metal\nINFO: Texture: 848x1920\nINFO: Texture: 1920x848";
+        // 无线 serial（ip:port）。
+        assert_eq!(
+            classify_mirror_exit("192.168.1.9:33739", tail),
+            MirrorExitKind::WirelessLinkCut
+        );
+        // mDNS serial 也算无线。
+        assert_eq!(
+            classify_mirror_exit("adb-abc-rQWqVr._adb-tls-connect._tcp", tail),
+            MirrorExitKind::WirelessLinkCut
+        );
+        // 即便 serial 看着像 USB，输出里出现 (tcpip) 仍判无线（通道以实际为准）。
+        assert_eq!(
+            classify_mirror_exit("79j7kn9tkjt8rwss", tail),
+            MirrorExitKind::WirelessLinkCut
+        );
+    }
+
+    /// 有线链路中断：USB serial + 输出无 (tcpip) 也无错误 ⇒ usb_link_cut。
+    /// 反向验证：输出一旦含 (tcpip)，同 serial 即翻转为 wireless_link_cut（见上）。
+    #[test]
+    fn classify_usb_zero_error_exit_as_link_cut() {
+        let tail = "INFO: --> (usb) device M2104K10AC\nINFO: Renderer: metal\nINFO: Texture: 848x1920";
+        assert_eq!(
+            classify_mirror_exit("79j7kn9tkjt8rwss", tail),
+            MirrorExitKind::UsbLinkCut
+        );
+        // USB 输出但 serial 是无线端点 ⇒ 以 serial 为准仍无线。
+        assert_eq!(
+            classify_mirror_exit("192.168.1.9:33739", tail),
+            MirrorExitKind::WirelessLinkCut
+        );
+    }
+
+    /// 显式错误行优先于一切通道判定：哪怕无线，只要输出有 ERROR 就报 scrcpy_error。
+    #[test]
+    fn classify_explicit_error_overrides_channel() {
+        let tail = "INFO: --> (tcpip) device M2104K10AC\nERROR: Could not open icon image\nINFO: Texture: 848x1920";
+        assert_eq!(
+            classify_mirror_exit("192.168.1.9:33739", tail),
+            MirrorExitKind::ScrcpyError
+        );
+        assert_eq!(
+            extract_error_line(tail).as_deref(),
+            Some("ERROR: Could not open icon image")
+        );
+        // WARN: Device disconnected 也算显式断连证据。
+        let tail2 = "INFO: Texture: 848x1920\nWARN: Device disconnected";
+        assert_eq!(
+            classify_mirror_exit("79j7kn9tkjt8rwss", tail2),
+            MirrorExitKind::ScrcpyError
+        );
+        assert_eq!(
+            extract_error_line(tail2).as_deref(),
+            Some("WARN: Device disconnected")
+        );
+    }
+
+    /// 通道标签从 serial 判定：无线 / 有线。
+    #[test]
+    fn channel_label_follows_serial() {
+        assert!(is_wireless_serial("192.168.1.9:33739"));
+        assert!(is_wireless_serial("adb-abc._adb-tls-connect._tcp"));
+        assert!(!is_wireless_serial("79j7kn9tkjt8rwss"));
+    }
+
+    /// 针对性建议：无线链路中断要给出可操作的 Wi-Fi/省电提示；有线给插拔提示。
+    #[test]
+    fn advice_is_actionable_per_cause() {
+        assert!(mirror_exit_advice(&MirrorExitKind::WirelessLinkCut).contains("无线"));
+        assert!(mirror_exit_advice(&MirrorExitKind::WirelessLinkCut).contains("数据线"));
+        assert!(mirror_exit_advice(&MirrorExitKind::UsbLinkCut).contains("USB"));
+        assert!(mirror_exit_advice(&MirrorExitKind::ScrcpyError).is_empty());
+    }
+
+    /// resolve_process_exit 对无线链路秒杀给出针对性恢复建议（不再一句通用话）。
+    #[test]
+    fn failed_session_carries_cause_specific_advice() {
+        let tail = "INFO: --> (tcpip) device M2104K10AC\nINFO: Texture: 848x1920";
+        let session = resolve_process_exit("192.168.1.9:33739", false, tail);
+        let err = session.error.unwrap();
+        assert_eq!(err.code, "mirror_exited");
+        assert!(
+            err.recovery.contains("无线链路"),
+            "无线秒杀应提示无线链路：{}",
+            err.recovery
+        );
+        // 正常退出无错误。
+        assert!(resolve_process_exit("s", true, "").error.is_none());
     }
 
     /// X10-105：录制进程在显示会话仍存活时闪退，监测循环必须就地回收句柄——

@@ -942,3 +942,11 @@
   - **updater 通道**：updater 分支 HEAD `ef4ac2a`，`latest.json` version=`0.4.23`、四平台 Ed25519 签名 URL 齐全——已装用户可自动更新到 0.4.23。
   - **内容**：X10-105 录制状态自愈 / X10-107 断连自动续录 / X10-108 镜像退出诊断日志。
   - **教训**：GitHub API 未认证限流 60 次/小时，监控脚本 90 次高频轮询会烧光配额导致查不到状态（误以为 CI 失败）。监控用 ≥3 分钟间隔的低频轮询，或用带认证的 GitHub MCP 工具。
+
+- [ ] ⏳ **X10-110 镜像退出诊断增强（2026-10-10 凌晨，通道+存活时长+死因分类）**：
+  - **起因（关键反转）**：用户升级 0.4.23 后反馈「**我用 USB 连接的**，但还是自动重连、游戏进程重连后掉登录，以前能稳定连一晚上」。但 `mirror_exit` 日志每条 scrcpy 末尾都是 `INFO: --> (tcpip) ...`——`(tcpip)` 是 scrcpy 标明本次会话走**网络通道**（真走数据线是 `--> (usb)`）。即用户插着 USB，但手机无线调试仍开着，MirrorDock 实际选用了无线端点，断的还是无线链路（00:20/03:19/03:20/05:06/05:07 多次断连，间隔 22秒~3.5小时无固定周期，全部零 ERROR 被链路秒杀）。游戏掉登录：桌面模式虚拟屏随断连销毁，MIUI 清掉挂在虚拟屏上的游戏进程，重连 `--start-app` 冷启动新进程。
+  - **结论**：日志只记「异常退出」不够——必须让通道、存活时长、死因一目了然，才能避免「插着 USB 却断连」这类凭感觉归因。
+  - **实现**：`SessionState` 加 `attached_at`（attach 时刻）；新增 `format_uptime`（秒/分秒/时分）、`MirrorExitKind`（ScrcpyError/WirelessLinkCut/UsbLinkCut，全覆盖无 unknown）、`extract_error_line`、`classify_mirror_exit`（错误行优先于通道判定）、`mirror_exit_advice`（按死因给针对性建议）。`mirror_exit` 事件改写为「{死因}，通道 {有线/无线}，存活 {时长}，{是否重连}。scrcpy 末尾：...」；`resolve_process_exit` 的恢复建议同步按死因定制（无线秒杀提示关 Wi-Fi 省电/换数据线，有线提示插拔/换线，不再一句通用话）。
+  - **测试**：新增 7 测试（uptime 格式化三档、无线零错误→wireless_link_cut、有线零错误→usb_link_cut、显式 ERROR 覆盖通道判定、通道标签随 serial、建议可操作性、resolve_process_exit 针对性恢复建议）。cargo **211 ✅**、clippy 零告警。
+  - **反向验证**：破坏 `extract_error_line` 的错误检测 → `classify_explicit_error_overrides_channel` 变红；恢复 → 转绿。干净（仅改一行 + 改回，未用 checkout 抹改动）。
+  - **未验证面**：真实断连下的 `mirror_exit` 事件成品（通道/存活/死因是否如预期渲染）待下次断连或用户主动验证；「插着 USB 仍走无线」是否需要在 UI 上显式提示用户「当前走的是无线而非你插的 USB」，**待用户拍板**（属产品决策，不擅自改交互）。
