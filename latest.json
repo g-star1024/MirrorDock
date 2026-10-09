@@ -1,23 +1,23 @@
 {
-  "version": "0.4.19",
-  "notes": "本版是一次**录制批次修复**（X10-95，用户真机报障 5 项全部闭环）：\n\n- **录像黑屏/无影像修复**：此前点「结束录制」用 SIGTERM 强停录制进程，scrcpy 不响应导致 3 秒后被强杀，MP4 丢失 moov 索引（ffprobe 报 moov atom not found）——视频文件存在但完全无法播放。现改为对录制进程发送 SIGINT 优雅停止，scrcpy 正常写入「Recording complete」，录像完整可播。\n- **托盘菜单录制状态修复**：托盘此前用旧字段判断，开始录制后仍显示「开始屏幕录制」、看不到「结束录制」。现按真实录制进程状态刷新，开始/停止录制后托盘文案即时更新。\n- **点「结束录制」报错修复**：与黑屏同源——强杀导致收尾失败报错，优雅停止后报错消失。\n- **录像保存位置可自定义**：设置页新增「录像保存位置」，可选任意文件夹，留空即恢复系统默认（影片/MirrorDock）。\n- **首次开录制闪退**：内部复现（桌面模式双通道虚拟屏）未再出现，推断已随本批修复覆盖；如你的设备上仍出现，请通过 Issue 反馈。\n\n**Windows 平台说明**：Windows 上没有与 SIGINT 等价的优雅停止机制，录制停止在 Windows 仍走强制收尾，极端情况下录像可能缺少索引（该限制已在兼容性矩阵注明）。",
-  "pub_date": "2026-10-09T03:27:40Z",
+  "version": "0.4.20",
+  "notes": "本版是一次**录制定向修复**（X10-99，真机报障「开始/结束录制都提示成功、文件夹里却没有视频」闭环）：\n\n- **桌面（虚拟屏）模式录像无视频修复**：在桌面模式下点「开始/结束录制」，此前两条提示都弹、但保存目录里没有任何文件。根因是录制进程继承了桌面模式的 `--start-app`（启动指定应用），而录制通道本身不带控制（`--no-control`）——scrcpy 规定「控制被禁用时不允许启动应用」，于是一启动就报错退出、一个字节都不写。现录制进程不再携带 `--start-app`（应用已由镜像窗口那条通道启动，录制只负责录这块虚拟屏），桌面模式录像正常产出、可播放。\n- **「假成功」提示修复**：此前结束录制只负责停进程、**从不核验视频文件是否真的落盘**，于是录制进程早已失败退出，界面仍弹出「已结束录制…已保存」。现结束录制会检查产物真实存在且非空；没产出文件时如实报「录制没有产出视频文件」，并把按钮/托盘状态复位回「开始录制」，不再停在「录制中」。\n\n**影响范围**：仅桌面（虚拟屏）模式录像受影响；录手机屏幕、摄像头源的录像行为不变。桌面模式录制自 v0.4.18 双通道上线起即未真正生效，本版首次修复。",
+  "pub_date": "2026-10-09T06:27:28Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTN6ZDJ4WTU5RXVNV0xXOFJVbVN3c2dKWE93YVBMLyszZFJuKytQN2QyYnp1LzJqM3lCZlVMVnp4WVNNSVlQbVJjUFhVaUdhendabHZRL0NOS1hadXdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE1ODg0CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE5CmtkL3FmUjFtcGhDbmVWc0NNbXgyMDJvMmREOHROakhyNlJUTUgwdUhwM3pLSkMzcWxrQTVEc0hyQXFXQ1NmbjVMVTNyTGoydGtNOW1sQzRnU01LcEJBPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXllNzlkZjI3M1cwM0VqczEzWWVyV0JST3A2eSt6NEM3U3p0Sjd0d01hVzhvRG9xV2w5dWVZd2NQRFRRaGVUS2hFVmJTcUE3enBtdWRTaFdwYzhvN1FnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTI2ODkyCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjIwCjQ1MDltTnVtUzlnOEJnbU96TFJ2UzM5VkIvK2VjQXlzZWN3eFZZZDZnenRVMTB6SWUrMTRYQmNSclhpNDNNa2xsSXFNWkdHMzlhWjBNc216eHBYUkRnPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.20-beta/MirrorDock_0.4.20_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTVFbTFEZzZld1RLZXVwRzR1NWRwblRvZUl3REFXNmxyV0JlQit5R0JUeFV0cmVNQXEvbEdTTlRLeXM5NzR6ZW9tNGJuV21tRWp1VWRLTkwxYTVFamdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE2NDAxCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjE5CmQvZEtwak5HVmZoZTNZVWVLWGVybmxmcFFtaXhvYTVrSnUra0kzcVVIREJNUlZ6STlyWlNNT0tjK2R4ekFnK0ZMNEovaVREVHBib2NHbWJybUdCR0J3PT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXdnbkszVHhCdmxiT2tzdzJjaldacVcyaVNhcmIrcHRYUCtEZUJiNHkrczNaSENSUzk5dGNUNFlyZEE2cEY0WWxsRUI2RHRLVm9Ed2NYWTIzY29tMWdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTI3MTk2CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjIwCnp0OXJlQjJUc3BKSlRsdlZmL2ViRnlXUWpmZ2FVbTZCRE1xTkZFZmlHbTBJRS9EMVNnOFFBWmhoaEFRY3pYZU1LYTBjQkxSZHQxRGNsZFZucGo2bkRBPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.20-beta/MirrorDock_0.4.20_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTZOQ2o1ZFJRY0ljWmJLVGpqYURIQVExQWV5aU8yWkQvWTNmdkNmejQvbmZzZkhxLzRRb2RYVDAxT0ZSNTMydzVyVmxXSll3OVh4TU9rYmpGdlVyUUEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE2MTEzCWZpbGU6TWlycm9yRG9ja18wLjQuMTlfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMTkKeGtnMDA1dVByNEhiT2Y2VWVpZEx2aGxpaGxSRzRGZmhBcG85ZUw2a1p0VXVBNWdRUFBBNzhSZXQ3c3BIcUNVeUJTVnpiT09IZVF2dzY3OXdteWVZRFE9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTFIQU53THJMaVlXVkJEcWs5MExXNVNyZ2l5bEo2b1oweFplZUt3dFZqUFZ0d2dLakxyZUVRK0xUdHhrbEZxQUtFVWVuY0pXRVluN0FhWS9CRzNOMndnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTI3MjE4CWZpbGU6TWlycm9yRG9ja18wLjQuMjBfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMjAKY3BJN2hmS29YaFRWN0kweERPS1JiQm5KcGR6RFBjQXBjeUtjazNDRVdPKy9aTEpXVEhTSUpaOVZGRGFBNW90ZXZlSFF6aHE5dGdFaG1Jam5QR3FkREE9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.20-beta/MirrorDock_0.4.20_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaStEeWQvYlRic0xsTUhtd3BHNTdiMmcrZEJGZXVlWHAvYmVLbzZnVmpnUGNJOFJmNGRjL2pvc1U3Smk2Y2JqWmdDRlhRVWsrQkRWNktENTAwazdrYkE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTE2MTIzCWZpbGU6TWlycm9yRG9ja18wLjQuMTlfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4xOQo4YnN2eDZvTks1bTVXVXE5YUNWQVZVUDZ1TXplYXdXTmNhOC83TlA4T1hCVXJqRk1wV1FjZTZOZUVFNWhhZnNsZldEa1kwWWVpNXVldHkzbXZkTTBEQT09Cg==",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.19-beta/MirrorDock_0.4.19_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTlFR1VGdytqUVd6QTQxNFVOYUczL3pjOGRCbUxkSmgwV0ppTm5kK2YrQnoxQVhVdUtKeGRiem9VQkFNVi9PaEZ0eEtjR1RscVR5OFJmanc5VW5DYXc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTI3MTc4CWZpbGU6TWlycm9yRG9ja18wLjQuMjBfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4yMApla1A4WGcvVXZYdFhzRWxQblJ0VVBua1hXQW10clNWYThnK21UaE1jSWNTM3M0Q2NFQzQ0QytHUjYxb2krSkgxRWl1MlhqTVVISzRJYkFGRk1FZWhEdz09Cg==",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.20-beta/MirrorDock_0.4.20_x64-setup.exe"
     }
   }
 }
