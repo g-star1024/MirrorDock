@@ -892,3 +892,10 @@
   - **测试**：cargo 199 全绿（录制 13 + 桌面 3 全过）。真机端到端（修复后参数）：152帧/7.9s、录到游戏真实画面。
   - **Windows 覆盖说明**：本次为纯 Rust 录制参数逻辑（record_arguments），两平台共用同一份代码与 scrcpy 4.1，Windows「不完整」与 Mac「白屏」同源（虚拟屏零帧/空帧），修复同步生效；真机仅验 Mac（无 Windows 设备），Windows 端待用户复验。
   - **发版状态**：源码已改（未提交未发版），release 构建进行中。需出 v0.4.21-beta。
+
+- [ ] ⏳ **X10-102 v0.4.21-beta 公私双仓库同步发版（2026-10-09 下午）**：用户拍板「直接出 v0.4.21-beta 公私双仓库」。
+  - **内容**：X10-101 桌面模式录制 Mac白屏/Windows不完整修复（公开 commit `028bb02` / 私有 `febf87b` 同源）。版本 0.4.20→0.4.21（8 文件两仓库同步）+ `docs/releases/v0.4.21-beta.md`。测试：公开 cargo 199 ✅；私有 cargo 224 ✅。
+  - **公开版**：发版 commit `51ed0c5`，tag `v0.4.21-beta` 已推（`d4e4c6e..51ed0c5` main + new tag）。CI run `37897776188` 已触发（tag 构建）。
+  - **私有版**：commit `febf87b`，tag `v0.4.21-beta` 已推（`fa9d51a..febf87b` main + new tag）。
+  - **⚠ 私有版 CI 前提（同 X10-100，用户侧）**：tools 仓库 Actions 是否已启用、`COMPANION_KEYSTORE_BASE64`/`COMPANION_STORE_PASSWORD` 是否已填——若未就位，tag 不产 Release，需用户补齐后重推 tag 或 Run workflow。
+  - **发版证据（待 CI 完成后回填，此行不预填）**：
