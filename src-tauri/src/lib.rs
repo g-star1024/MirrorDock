@@ -1508,6 +1508,12 @@ struct SessionState {
     /// 完全解耦：开始/结束录制只 spawn/kill 这条进程，显示进程不动、镜像窗口不重启。
     /// 「是否仍在录制」改由这个字段判定，而非 `record_path + process`。
     record_process: Option<Box<dyn MirrorProcess>>,
+    /// X10-107：断连自动续录的连续计数。
+    ///
+    /// 录制进程**异常**退出（断连掐断，非用户手动停止）时自动用新文件名续录，每次
+    /// 续录 +1；达到 `RECORD_RESUME_MAX` 仍断则放弃续录并提示用户改用数据线，避免
+    /// 无线链路持续抖动时无限重启录制。用户手动开始/停止、或显示会话结束时清零。
+    record_resume_count: u32,
 }
 
 /// 会话表（X10-27 并发多设备）：**每台设备一个会话**。
@@ -1565,6 +1571,7 @@ fn session_entry_mut<'a>(
         options: SessionOptions::default(),
         record_path: None,
         record_process: None,
+        record_resume_count: 0,
     })
 }
 
@@ -1809,6 +1816,8 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
         std::thread::sleep(MONITOR_INTERVAL);
         let mut exit_success = false;
         let mut was_recording = false;
+        let mut recorder_died = false;
+        let mut exit_scrcpy_tail = String::new();
         let finished = {
             let Ok(mut map) = store.0.lock() else {
                 return;
@@ -1833,11 +1842,42 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                     let scrcpy_output = process.output_tail();
                     state.process = None;
                     state.session = resolve_process_exit(&serial, success, &scrcpy_output);
+                    exit_scrcpy_tail = scrcpy_output;
                     true
                 }
-                None => false,
+                None => {
+                    // X10-105：显示进程仍在跑，但**独立录制进程可能已闪退**。此前录制
+                    // 进程只在「显示进程退出时」被连带 stop，自己死掉时无人回收句柄——
+                    // `record_process` 永远是 Some，托盘菜单停在「结束屏幕录制」、点结束
+                    // 不变更、再点开始提示「已在录制」（三处都判 record_process.is_some()）。
+                    // 这里在显示进程存活期间顺带 try_wait 录制进程，发现它已退出就自愈：
+                    // 清句柄 + 清录制路径，让三处状态判定自动回到「开始录制」。
+                    let died = match state.record_process.as_mut() {
+                        Some(rec) => rec.try_wait().is_some(),
+                        None => false,
+                    };
+                    if died {
+                        let _ = state.record_process.take();
+                        state.record_path = None;
+                        recorder_died = true;
+                    }
+                    false
+                }
             }
         };
+        // X10-105：录制进程在显示会话仍存活时闪退——状态已就地清理，这里负责对外
+        // 同步：刷新托盘菜单（回到「开始屏幕录制」）、给伴侣端补「录制结束」、通知
+        // 前端复位录制按钮。显示会话不受影响，继续镜像。
+        if recorder_died {
+            if let Some(app) = TRAY_APP.get() {
+                notify_companion_recording(app, false);
+                refresh_tray_menu(app);
+                let _ = app.emit(
+                    "recording-ended",
+                    serde_json::json!({ "serial": serial, "unexpected": true }),
+                );
+            }
+        }
         if finished {
             // 录制中的会话退出：给伴侣端补发「录制结束」（M4-3 会话生命周期钩子）。
             if was_recording {
@@ -1877,12 +1917,34 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             }
             // 无线断线自动重连（X10-45）：只在「异常退出」（手机/网络掉线）时触发；
             // 用户主动关闭镜像窗口是正常退出，不打扰。
+            let mut reconnect_triggered = false;
             if let Some(app) = TRAY_APP.get() {
                 let enabled = app_settings_path(app)
                     .map(|path| load_app_settings(&path).auto_reconnect)
                     .unwrap_or(true);
                 if should_auto_reconnect(exit_success, &serial, enabled) {
-                    spawn_wireless_reconnect(app, store, epoch, &serial);
+                    reconnect_triggered = true;
+                    spawn_wireless_reconnect(app, store.clone(), epoch, &serial);
+                }
+            }
+            // X10-108：把「镜像进程退出」本身落进诊断日志——无论正常/异常、哪个平台。
+            // 此前日志只记命令调用（mirror_start/record_start），进程因断连被杀时
+            // 完全无痕（用户实测：闪退后日志里一条退出事件都没有），排查只能凭回忆
+            // 复现。这里记录退出性质、是否触发自动重连、scrcpy 输出尾部，让下一次
+            // 任何平台的异常退出都直接「日志说话」。
+            if let Some(app) = TRAY_APP.get() {
+                if let Some(log) = app.try_state::<DiagnosticsLog>() {
+                    let outcome = if exit_success { "正常退出" } else { "异常退出" };
+                    let reconnect = if reconnect_triggered { "已触发自动重连" } else { "未触发自动重连" };
+                    let tail = exit_scrcpy_tail.trim();
+                    let detail = if tail.is_empty() {
+                        format!("{outcome}，{reconnect}。")
+                    } else {
+                        let lines: Vec<&str> = tail.lines().collect();
+                        let excerpt: Vec<&str> = lines.iter().rev().take(4).rev().copied().collect();
+                        format!("{outcome}，{reconnect}。scrcpy 末尾：{}", excerpt.join(" | "))
+                    };
+                    log.record("mirror_exit", if exit_success { "ok" } else { "mirror_exited" }, &detail, &[&serial]);
                 }
             }
             return;
@@ -2126,9 +2188,23 @@ fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64,
             ) {
                 continue;
             }
-            // 设备回来了：用原参数重建会话（录制不续录，见函数注释）。
+            // 设备回来了：用原参数重建会话。录制不在这里自动恢复（record 置 false），
+            // 而是由下方在重建成功后按「断连自动续录」逻辑单独拉起录制进程——
+            // 这样续录失败不会拖垮刚刚恢复的镜像，两段也能用分段文件名区分（X10-107）。
             let mut options = session_options;
             options.record = false;
+            // 重连前若在录制，先记下原录制路径与已续录次数：start_mirroring_with 内部
+            // 的 reserve_session 会清空这些字段，必须提前取出。`was_recording` 用
+            // record_path 判定（X10-105 已保证断连时它被保留到重连前）。
+            let (resume_from, resume_count) = {
+                let map = sessions.0.lock().ok();
+                map.and_then(|m| {
+                    m.get(&endpoint).map(|s| {
+                        (s.record_path.clone(), s.record_resume_count)
+                    })
+                })
+                .unwrap_or((None, 0))
+            };
             let outcome =
                 start_mirroring_with(&runtimes, &sessions, endpoint.clone(), options, None);
             let status = if outcome.is_ok() { "succeeded" } else { "gave_up" };
@@ -2138,10 +2214,81 @@ fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64,
             );
             if outcome.is_ok() {
                 refresh_tray_menu(&app);
+                // X10-107：断连自动续录。镜像已恢复，若之前在录制且未达上限则续录一段。
+                if let Some(original_path) = resume_from {
+                    resume_recording_after_reconnect(&app, &runtimes, &sessions, &endpoint, &original_path, resume_count);
+                }
             }
             return;
         }
     });
+}
+
+/// X10-107：断连后是否值得自动续录。
+///
+/// 达到 `RECORD_RESUME_MAX` 仍断 ⇒ 放弃（无线链路持续抖动时无限重试只会切碎录像）。
+/// 抽出为纯函数以便在无 AppHandle 的测试环境直接验证上限语义。
+fn should_resume_recording(resume_count: u32) -> bool {
+    resume_count < RECORD_RESUME_MAX
+}
+
+/// X10-107：镜像断连重连成功后，自动续录一段。
+///
+/// 只在「断连前确实在录制」（调用方已传入原录制路径）时被触发。断连期间的画面
+/// 无法补回，续录用分段文件名（`xxx-part2.mp4`）另起一段，如实反映「同一意图的
+/// 多段」，而不是伪装成一条完整录像。达到 `RECORD_RESUME_MAX` 仍断则放弃续录并
+/// 提示用户改用数据线——无线链路持续抖动时，无限重试只会切出一堆 3 分钟碎片。
+fn resume_recording_after_reconnect(
+    app: &AppHandle,
+    runtimes: &AppRuntimes,
+    sessions: &SessionStore,
+    endpoint: &str,
+    original_path: &str,
+    resume_count: u32,
+) {
+    let next_segment = resume_count + 2; // 原段为 part1，第一次续录是 part2
+    if !should_resume_recording(resume_count) {
+        // 连续断连次数用尽：放弃续录，明确告知用户根因与对策，而非无感重试。
+        let _ = app.emit(
+            "recording-resume-failed",
+            serde_json::json!({
+                "serial": endpoint,
+                "reason": "too_many_disconnects",
+            }),
+        );
+        eprintln!("[mirrordock] recording resume gave up after {resume_count} resumes for {endpoint}");
+        return;
+    }
+    let original_name = Path::new(original_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "MirrorDock-recording.mp4".to_owned());
+    let segment_name = resume_segment_name(&original_name, next_segment);
+    match start_recording_with(app, runtimes, sessions, Some(endpoint.to_owned()), Some(segment_name)) {
+        Ok(_) => {
+            // 续录成功：写回自增后的计数，并刷新托盘/伴侣端状态。
+            if let Ok(mut map) = sessions.0.lock() {
+                if let Some(state) = map.get_mut(endpoint) {
+                    state.record_resume_count = resume_count + 1;
+                }
+            }
+            refresh_tray_menu(app);
+            notify_companion_recording(app, true);
+            let _ = app.emit(
+                "recording-resumed",
+                serde_json::json!({ "serial": endpoint, "segment": next_segment }),
+            );
+        }
+        Err(error) => {
+            // 续录失败（如虚拟屏 id 还没就绪、或设备编码能力不足）：不拖垮刚恢复的
+            // 镜像，只提示用户录制未能自动恢复，可手动重开。
+            eprintln!("[mirrordock] recording resume failed for {endpoint}: {}", error.message);
+            let _ = app.emit(
+                "recording-resume-failed",
+                serde_json::json!({ "serial": endpoint, "reason": "start_failed" }),
+            );
+        }
+    }
 }
 
 /// 只有该设备空闲时才把“已配对”写进它的会话，避免覆盖正在运行的镜像会话。
@@ -4677,6 +4824,31 @@ fn prepare_recording_path(
     Ok(Some(unique_file_path(&directory, &name)))
 }
 
+/// X10-107：断连自动续录的连续上限。
+///
+/// 无线链路持续抖动（如每 180s 周期性断连）时，录制会被反复掐断。续录只能保住
+/// 后续片段、断连期间的画面永远丢失——所以不是「无限重试」就能挽救，达到上限后
+/// 放弃续录并明确提示用户改用数据线，比无感地切一堆 3 分钟碎片更诚实。
+const RECORD_RESUME_MAX: u32 = 3;
+
+/// X10-107：为续录片段生成分段文件名。
+///
+/// 在原文件名主干后追加 `-part<N>`：`录屏.mp4` 续录为 `录屏-part2.mp4`、`录屏-part3.mp4`…
+/// 断连期间的画面无法补回，分段命名如实反映「这是同一意图的多段」，而不是伪装成
+/// 一条完整录像；用户后期可用 ffmpeg concat 手动拼接。
+fn resume_segment_name(original: &str, segment: u32) -> String {
+    let path = Path::new(original);
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| original.to_owned());
+    let ext = path
+        .extension()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mp4".to_owned());
+    format!("{stem}-part{segment}.{ext}")
+}
+
 /// 读取主会话最近一次的录制信息（若有）。`active` 表示此刻进程是否仍在写这个文件。
 /// X10-27 后多台设备可能同时录制；界面「撤销」入口按主会话展示，删除校验则扫描全部会话。
 #[tauri::command]
@@ -4695,6 +4867,14 @@ fn start_recording(
     file_name: Option<String>,
 ) -> Result<Recording, AppError> {
     let result = start_recording_with(&app, &runtimes, &sessions, serial, file_name)?;
+    // X10-107：用户手动开始新一轮录制，此前因断连累积的续录计数作废（从 part1 重算）。
+    // 自动续录走的是 spawn_wireless_reconnect → resume_recording_after_reconnect，
+    // 不经过这里，所以这里的清零只影响「用户手动开始」这一条路径。
+    if let Ok(mut map) = sessions.0.lock() {
+        for state in map.values_mut() {
+            state.record_resume_count = 0;
+        }
+    }
     // X10-95：录制状态跃迁后刷新托盘菜单（开始→「结束屏幕录制」）。
     refresh_tray_menu(&app);
     Ok(result)
@@ -8717,6 +8897,31 @@ mod tests {
         }
     }
 
+    /// X10-105：退出时机可由测试在进程「运行中」切换的录制进程替身。
+    /// `exit` 为共享 Cell——测试先让它持续运行（None），中途再写入 Some(success)
+    /// 模拟「录制进程跑了一段时间后闪退」，验证监测循环能就地回收句柄。
+    struct ControlledProcess {
+        exit: Arc<Mutex<Option<bool>>>,
+    }
+
+    impl ControlledProcess {
+        fn running() -> (Self, Arc<Mutex<Option<bool>>>) {
+            let exit = Arc::new(Mutex::new(None));
+            (Self { exit: Arc::clone(&exit) }, exit)
+        }
+    }
+
+    impl MirrorProcess for ControlledProcess {
+        fn try_wait(&mut self) -> Option<bool> {
+            *self.exit.lock().unwrap()
+        }
+
+        fn kill(&mut self) -> Result<(), std::io::Error> {
+            *self.exit.lock().unwrap() = Some(false);
+            Ok(())
+        }
+    }
+
     struct FakeMirror {
         available: bool,
         exit: Option<bool>,
@@ -12492,6 +12697,105 @@ mod tests {
             exit: None,
             killed: Arc::new(Mutex::new(false)),
         }));
+    }
+
+    /// X10-107：续录分段文件名在原主干后追加 -part<N>，扩展名保留。
+    #[test]
+    fn resume_segment_name_appends_part_suffix() {
+        assert_eq!(
+            resume_segment_name("MirrorDock-recording.mp4", 2),
+            "MirrorDock-recording-part2.mp4"
+        );
+        assert_eq!(resume_segment_name("录屏.mp4", 3), "录屏-part3.mp4");
+        // 无扩展名时回退 mp4；带路径时只取文件名主干。
+        assert_eq!(resume_segment_name("clip", 2), "clip-part2.mp4");
+        assert_eq!(resume_segment_name("a.b.mp4", 4), "a.b-part4.mp4");
+    }
+
+    /// X10-107：连续断连达到上限后放弃续录（不应无限重试切碎录像）。
+    #[test]
+    fn resume_gives_up_after_max_disconnects() {
+        // 低于上限 ⇒ 续录；达到/超过上限 ⇒ 放弃。
+        assert!(should_resume_recording(0));
+        assert!(should_resume_recording(RECORD_RESUME_MAX - 1));
+        assert!(!should_resume_recording(RECORD_RESUME_MAX));
+        assert!(!should_resume_recording(RECORD_RESUME_MAX + 1));
+    }
+
+    /// X10-107：用户手动开始录制会清零此前累积的断连续录计数。
+    #[test]
+    fn manual_start_recording_resets_resume_count() {
+        let store = SessionStore::default();
+        {
+            let mut map = store.lock().unwrap();
+            let state = session_entry_mut(&mut map, "phone");
+            state.record_resume_count = 2;
+        }
+        // 模拟 start_recording 命令成功后的清零逻辑。
+        if let Ok(mut map) = store.0.lock() {
+            for state in map.values_mut() {
+                state.record_resume_count = 0;
+            }
+        }
+        let map = store.lock().unwrap();
+        assert_eq!(map.get("phone").unwrap().record_resume_count, 0);
+    }
+
+    /// X10-105：录制进程在显示会话仍存活时闪退，监测循环必须就地回收句柄——
+    /// 否则托盘菜单停在「结束屏幕录制」、点结束不变更、再点开始提示「已在录制」。
+    #[test]
+    fn a_crashed_recorder_is_reaped_while_the_display_session_keeps_streaming() {
+        let runtimes = runtimes(
+            FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]),
+            FakeMirror::running(),
+        );
+        let store = SessionStore::default();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
+
+        // 挂一个「可控退出时机」的录制进程：先持续运行，模拟录制进行中。
+        let (recorder, recorder_exit) = ControlledProcess::running();
+        {
+            let mut map = store.0.lock().unwrap();
+            let state = map.get_mut("phone").unwrap();
+            state.record_path = Some("MirrorDock-recording.mp4".into());
+            state.record_process = Some(Box::new(recorder));
+        }
+        assert!(any_session_recording(&store), "录制进程在跑 ⇒ 正在录制");
+
+        // 录制进程闪退（显示进程仍在跑）。下一拍监测循环应收掉它的句柄。
+        *recorder_exit.lock().unwrap() = Some(false);
+        // 等监测循环跑到：MONITOR_INTERVAL=200ms，留足余量轮询最多 ~2s。
+        let mut reaped = false;
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(100));
+            let map = store.0.lock().unwrap();
+            let state = map.get("phone").unwrap();
+            if state.record_process.is_none() && state.record_path.is_none() {
+                reaped = true;
+                break;
+            }
+        }
+        assert!(
+            reaped,
+            "录制进程闪退后句柄与录制路径必须被清理，状态回到「开始录制」"
+        );
+        assert!(
+            !any_session_recording(&store),
+            "录制进程已死 ⇒ 不再判定为「正在录制」（托盘/删除校验/重复开始三处一致）"
+        );
+        // 显示会话不受影响，仍在镜像。
+        let map = store.0.lock().unwrap();
+        assert!(
+            map.get("phone").unwrap().process.is_some(),
+            "录制进程闪退不得连带停掉显示会话"
+        );
     }
 
     #[test]

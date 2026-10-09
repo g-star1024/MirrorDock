@@ -2282,6 +2282,29 @@ function App() {
       if (unlisten) unlisten();
     };
   }, []);
+  // X10-105：录制进程在镜像仍存活时闪退——后端已自清状态并推本事件，前端把录制
+  // 按钮从「录制中」复位回「开始录制」，并提示用户（区别于手动结束的「已定型可播放」，
+  // 闪退的 MP4 可能缺 moov 索引无法播放）。
+  useEffect(() => {
+    const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    if (!hasTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<{ serial: string; unexpected: boolean }>("recording-ended", (event) => {
+      if (event.payload?.unexpected) {
+        setRecording(null);
+        setRecordingError("录制意外中断（可能因手机性能不足或网络波动），镜像未受影响。中断的录像文件可能无法播放。");
+      }
+    })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      });
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
   // X10-80：桌面模式下虚拟屏启动的应用没有真正落地（常见于部分游戏的投屏
   // 兼容性限制，真机实证见 lib.rs X10-80 注释）→ 白屏的根因提示与替代路径，
   // 不让用户对着一面白屏自己猜。

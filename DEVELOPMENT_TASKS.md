@@ -906,4 +906,31 @@
   - **测试**：公开 cargo 200 ✅（含新测试）；私有 tools patch 同源应用 cargo 225 ✅。
   - **发版**：公开 fix `80659a9` + bump `e111c30`；tools `a81ede5`。tag `v0.4.22-beta` 两仓库均已推。公开 CI run `37901180472`。
   - **⚠ 拦截有毒 v0.4.21（X10-101 含闪退 bug）**：删远端+本地 tag `v0.4.21-beta`（GitHub 级联移除其 Release 407644872，Releases 列表顶端回到 v0.4.20）；**updater 分支回滚** `e34d2b7`(0.4.21)→`e6cd1d2`(0.4.20)（force push，发版链产物分支），已装用户自动更新回落到 0.4.20 稳定版。raw CDN 有缓存延迟，ls-remote 权威确认 HEAD=e6cd1d2(0.4.20)。
-  - **发版证据（待 CI 完成后回填，此行不预填）**：
+  - **发版证据**：公开 CI run `37901180472` `completed/success`；Release `407682954` 共 34 资产全齐（四平台安装包 + 签名 + SBOM + latest.json）。aarch64 dmg **字节级核验**：16719338 字节，sha256 `970d6fdf…` 与官方 `SHA256SUMS-macos-arm64.txt` 完全一致；plist `CFBundleShortVersionString`/`CFBundleVersion` 均 = `0.4.22`；`otool __cstring` 实证 `--display-id=`（X10-103 捕获逻辑）已编入 release 产物。
+  - **真机验收（外部阻塞）**：桌面模式「开始录制不再闪退白屏、能录到真实画面」待用户在 Windows/Android 真机复核。
+
+- [ ] ⏳ **X10-105 录制进程闪退后状态卡死（2026-10-09 晚）**：用户报「Windows 下录制开启一段时间后闪退重启镜像；重启后录制已停，但托盘仍显示『结束屏幕录制』，点结束文案不变，再点开始提示『已在录制』」。
+  - **根因（代码实证）**：`spawn_session_monitor` 只监测**显示进程** `state.process` 的退出，对**独立录制进程** `state.record_process` 只在「显示进程退出时」才连带 stop。**录制进程自己闪退时无人回收句柄**——`record_process` 恒为 `Some`，而托盘菜单文案（lib.rs:3140）、删除校验 `recording_in_progress`（lib.rs:4907）、重复开始判定三处全部读 `record_process.is_some()`，于是状态全部卡死在「录制中」。这是 X10-92 双通道方案遗留的监测盲区。
+  - **修复**：在 `spawn_session_monitor` 的「显示进程仍在跑」分支顺带 `try_wait` 录制进程，发现已退出即自愈——清 `record_process`/`record_path` → 刷新托盘菜单 → 给伴侣端补「录制结束」→ emit `recording-ended` 事件让前端复位录制按钮（App.tsx 新增监听）。无论录制进程因何而死，三处状态判定自动回到「开始录制」。
+  - **测试**：新增回归测试 `a_crashed_recorder_is_reaped_while_the_display_session_keeps_streaming`（可控退出的 `ControlledProcess` 替身模拟「先跑后闪退」）。**反向验证**：临时禁用回收分支后测试如期变红，恢复后转绿——确认测试真正覆盖修复。全量 `cargo test` 201 ✅（原 200+新 1）、`pnpm build`(tsc) ✅、`cargo clippy` 零告警。
+  - **未验证面（外部阻塞）**：① ~~录制进程**闪退的诱因**需 Windows 真机 scrcpy 输出定位，已请用户抓日志~~ **已定位（见下）**；② 修复后的真机行为（闪退时托盘/按钮自动复位、镜像不中断）待用户复核。此条不标 ✅。
+  - **改动文件**：`src-tauri/src/lib.rs`（监测循环 + 测试 + `ControlledProcess` 替身）、`src/App.tsx`（`recording-ended` 监听）。
+
+- [ ] ⏳ **X10-106 录制闪退诱因已定位——无线链路 180s 周期性断连（2026-10-09 晚，用户提供 Windows 真机日志）**：
+  - **设备环境**：Redmi M2104K10AC（Android 13）**无线 adb** 连接 Windows 桌面端。
+  - **日志证据链（用户排查）**：scrcpy 报 `WARN: Device disconnected` → 设备端 logcat `adbd: SSL_write failed [BAD_WRITE_RETRY]` + `ADB wifi device disconnected` → 7 秒后 `Handshake succeeded` 自动重连 → **断连间隔恰好 180 秒**（18:36:56 / 18:39:56），第二次无额外实例照样被杀；断连前 30 秒 Wi-Fi RSSI 从 51 掉到 46，系统反复报 `current network is in roaming environment` + Wi-Fi HAL 报错。F 盘每段录像结束时间与断连时刻吻合——**录制每 ~3 分钟被掐断一次 = 用户看到的「闪退」**。期间 MirrorDock 自动重启会话（虚拟屏 id 121→123），所以用户看到「还在运行」。
+  - **归因结论**：**不是 scrcpy 编码器/进程崩溃，是无线链路层周期性断连**（Wi-Fi 漫游 + 省电行为），与 app 无关。USB 连接场景不受影响。
+  - **用户侧对策（已建议，按优先级）**：① USB 线连手机录一次验证——不断连即可 100% 归因无线链路；② 无线方案下关手机 Wi-Fi 省电/优化（设置→WLAN→高级）、路由器关 band steering/漫游引导，让手机钉死在一个 AP/频段。
+  - **app 侧待决策**：「断连自动恢复录制」——当前会话重连只恢复镜像，录制不会自动重启（用户每段只能录 ~3 分钟）。**是否做、是否自动续录，待用户拍板**。注意：断连期间丢帧无法补回，续录只能保后续片段，需考虑分段文件命名（如 `xxx-part2.mp4`）与 UI 提示。
+
+- [ ] ⏳ **X10-107 断连自动续录（2026-10-09 晚，用户拍板「做自动续录」）**：
+  - **设计**：挂点在「镜像断连重连成功后」（用户 Windows 日志证明断连时显示+录制一起死，X10-105 的存活分支覆盖不到），`spawn_wireless_reconnect` 重建会话成功后调 `resume_recording_after_reconnect`。续录用分段文件名（`录屏.mp4`→`录屏-part2.mp4`），断连画面如实不补；连续断连 3 次（`RECORD_RESUME_MAX`）放弃续录并提示改用数据线；用户手动开始新一轮录制时清零计数。
+  - **实现**：`SessionState` 加 `record_resume_count`；新增 `resume_segment_name`/`should_resume_recording`/`resume_recording_after_reconnect`；`start_recording`（手动入口）成功后清零计数；续录失败不拖垮刚恢复的镜像。
+  - **测试**：新增 3 测试（分段命名、上限判定、手动清零），cargo 204 ✅、clippy 零告警、前端 tsc ✅。**端到端（重连→起新录制进程）依赖真机，未验证**。
+  - **未提交**：与 X10-105、X10-108 一并待用户确认后提交。
+
+- [ ] ⏳ **X10-108 全平台镜像退出诊断落日志（2026-10-09 晚，根因排查中发现可观测性缺口）**：
+  - **起因**：用户三组对照实验（USB 13min 稳定 / Wi-Fi 普通镜像挂 1 次自动重启成功 / Wi-Fi 录制近 5min 正常）已证明**程序在多数场景稳定**，问题收敛到无线链路 + 特定条件；但最初那次「Wi-Fi + 桌面模式虚拟屏 + 录制」闪退且不自动重启，诊断日志里**只有 mirror_start/record_start 全 ok，没有任何退出事件**——进程因断连被杀时完全无痕，排查只能凭回忆复现。
+  - **结论**：诊断日志此前只记命令调用，不记进程退出——这是全平台可观测性的根本缺口。
+  - **修复**：`spawn_session_monitor` 的 `finished` 分支强制落一条 `mirror_exit` 事件（正常/异常 + 是否触发自动重连 + scrcpy 输出尾部 4 行），让任何平台的异常退出都直接「日志说话」。测试环境无 TRAY_APP 自动跳过。cargo 204 ✅、clippy ✅。
+  - **待办**：用户需复现一次「桌面模式虚拟屏闪退」，导出诊断看 `mirror_exit` 事件的 exit_success 与「是否触发自动重连」——据此钉死「Mac 不自动重启」是没触发重连还是重连 probe 失败。
