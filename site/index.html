@@ -155,11 +155,12 @@
   }
   .sec-lede{margin:0 0 40px;color:var(--muted);max-width:44em;font-size:16px}
 
-  /* 功能区：一个主面板 + 一组发丝分隔的条目（不做等大卡片阵列） */
-  .features{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);gap:48px;align-items:start}
+  /* 功能区：左侧快捷键面板吸顶，右侧条目两列网格——避免右列超长时左列留白 */
+  .features{display:grid;grid-template-columns:minmax(0,.92fr) minmax(0,1.08fr);gap:44px;align-items:start}
   .panel{
     background:var(--paper);border:1px solid var(--line);border-radius:14px;
-    padding:26px 26px 22px
+    padding:26px 26px 22px;
+    position:sticky;top:84px;  /* 右列滚动时左列吸附在视口内，消除底部空白 */
   }
   .panel h3{margin:0 0 10px;font-size:18.5px;font-weight:650}
   .panel p{margin:0 0 16px;color:var(--muted);font-size:15px}
@@ -170,12 +171,21 @@
     background:var(--paper-2);color:#2C3A50;white-space:nowrap
   }
   .keys-note{font-size:13px;color:var(--muted);margin-top:12px}
-  .rows{list-style:none;margin:0;padding:0}
-  .rows li{padding:17px 0;border-bottom:1px solid var(--line-soft)}
-  .rows li:first-child{padding-top:0}
-  .rows li:last-child{border-bottom:0;padding-bottom:0}
-  .rows h4{margin:0 0 5px;font-size:15.5px;font-weight:650}
-  .rows p{margin:0;color:var(--muted);font-size:14.5px;line-height:1.66}
+  /* 右列条目：两列网格，缩短整体高度、与左列更均衡 */
+  .rows{
+    list-style:none;margin:0;padding:0;
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:0 30px;
+  }
+  .rows li{
+    padding:14px 0;border-bottom:1px solid var(--line-soft);
+    break-inside:avoid;
+  }
+  .rows li:first-child{padding-top:14px}
+  .rows li:nth-child(-n+2){padding-top:0}
+  .rows li:nth-last-child(-n+2){border-bottom:0}
+  .rows h4{margin:0 0 4px;font-size:15px;font-weight:650}
+  .rows p{margin:0;color:var(--muted);font-size:14px;line-height:1.62}
 
   /* 三步：内容本身是序列，用编号 */
   .steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px}
@@ -262,9 +272,21 @@
   footer .spacer{margin-left:auto}
   footer .lic{color:#6E7E97}
 
+  /* 平板宽度：右列网格退回单列，避免两列过窄挤压文字 */
+  @media (min-width:901px) and (max-width:1180px){
+    .rows{grid-template-columns:1fr;gap:0}
+    .rows li:nth-child(-n+2){padding-top:14px}
+    .rows li:first-child{padding-top:0}
+    .rows li:nth-last-child(-n+2){border-bottom:1px solid var(--line-soft)}
+    .rows li:last-child{border-bottom:0}
+  }
   @media (max-width:900px){
     .hero .wrap{grid-template-columns:1fr;gap:44px}
-    .features{grid-template-columns:1fr;gap:36px}
+    .features{grid-template-columns:1fr;gap:32px}
+    .panel{position:static}                 /* 窄屏取消吸顶，避免遮挡 */
+    .rows{grid-template-columns:1fr;gap:0}  /* 窄屏回到单列 */
+    .rows li:nth-last-child(-n+2){border-bottom:1px solid var(--line-soft)}
+    .rows li:last-child{border-bottom:0}
     .boundary{grid-template-columns:1fr;gap:28px}
     .steps{grid-template-columns:1fr;gap:22px}
     section{padding:64px 0}
