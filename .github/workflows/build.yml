@@ -267,14 +267,14 @@ jobs:
           set -euo pipefail
           EXPECT="${GITHUB_REF_NAME#v}"      # v0.4.19-beta -> 0.4.19-beta
           EXPECT="${EXPECT%%-*}"             # -> 0.4.19
-          BIN=""
-          for cand in \
-            "src-tauri/target/${{ matrix.target }}/release/mirrordock" \
-            "src-tauri/target/${{ matrix.target }}/release/mirrordock.exe" \
-            "src-tauri/target/${{ matrix.target }}/release/bundle/macos/MirrorDock.app/Contents/MacOS/mirrordock"; do
-            [ -f "$cand" ] && BIN="$cand" && break
-          done
-          [ -n "$BIN" ] || { echo "未找到构建产物二进制"; exit 1; }
+          # X10-98 修正：cargo build --target X 当 X 等于 host 时输出在 target/release/
+          # 而非 target/X/release/（macos-x64 在 x86_64 runner 即如此）。不能假设
+          # target 子目录，用 find 在 target 下任意 release 目录定位二进制。
+          BIN="$(find src-tauri/target -path '*/release/mirrordock' -type f 2>/dev/null | head -1)"
+          [ -n "$BIN" ] || BIN="$(find src-tauri/target -path '*/release/mirrordock.exe' -type f 2>/dev/null | head -1)"
+          [ -n "$BIN" ] || BIN="$(find src-tauri/target -path '*/release/bundle/macos/MirrorDock.app/Contents/MacOS/mirrordock' -type f 2>/dev/null | head -1)"
+          [ -n "$BIN" ] || { echo "::error::未找到构建产物二进制"; find src-tauri/target -name 'mirrordock*' -type f 2>/dev/null | head; exit 1; }
+          echo "核验目标二进制：$BIN"
           if grep -q "$EXPECT" "$BIN"; then
             echo "版本串核验通过：$BIN 含 $EXPECT"
           else
