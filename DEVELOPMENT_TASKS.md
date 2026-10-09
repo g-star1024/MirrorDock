@@ -881,3 +881,14 @@
   - **私有版**：commit `fa9d51a`，删旧 tag `v0.4.19-beta`（d40b4a5）→ 重打 `v0.4.20-beta` 已推（`4ccf0d6..fa9d51a` main + new tag）。
   - **⚠ 私有版 CI 前提（用户侧）**：tools 仓库 Actions 此前未启用（X10-97 零运行），且伴侣签名 secret `COMPANION_KEYSTORE_BASE64` 未填（X10-21 keystore 缺文件 → `validateSigningDebug FAILED`）。base64 已交付用户（源 `MirrorDock-内部文档/mirrordock-companion.keystore`，密码 WQDZAM0HZNR6hakMUmmn）。**若 Actions 未启用/secret 未填，本次 tag 不会产出 Release**——需用户启用 Actions + 填 secret 后重推 tag 或 Run workflow。
   - **发版证据（待 CI 完成后回填，此行不预填）**：
+
+- [ ] ⏳ **X10-101 桌面模式录制「Mac 白屏 / Windows 不完整」根因修复（2026-10-09 下午）**：用户真机报「Mac 桌面模式录出视频但白屏；Windows 桌面模式录视频提示视频不完整」。
+  - **根因（真机实测定位，非推断）**：X10-92 给录制通道固定 `--no-control`（无窗三件套之一）。实测对比：非桌面模式（录真实主屏）`--no-control` 下录到 864×1920、抽帧 1.79MB 真实主屏 ✅；桌面模式（录虚拟屏）`--no-control` 下 Mac 录到 848×1920 **白屏+黑边**、几无有效帧，Windows 则因虚拟屏不刷新几乎零帧→时间轴残缺→「视频不完整」。**scrcpy 在无控制+无窗下不驱动虚拟屏渲染/刷新**——这是两平台同源的根因。
+  - **关键实测对照（设备 qc8d8tonbmmzm7qs 小米 Android 13，梦幻西游 com.netease.dhxy.qihoo）**：
+    - `--no-control --new-display` → 白屏帧（白+左右黑边）、nb_frames 极低 ❌
+    - `--no-control` 录真实主屏 → 真实主屏画面 ✅（证明问题专属于虚拟屏）
+    - **去 `--no-control` + `--new-display --start-app=游戏`** → 848×1920、152帧/7.9s≈19-22fps、抽帧 2.35MB **真实游戏画面** ✅
+  - **修法（record_arguments，纯参数逻辑两平台共用）**：桌面模式录制**去掉 `--no-control`**（控制默认开，驱动虚拟屏渲染）+ **恢复 `--start-app`**（控制开启后 X10-99 的「--no-control 与 --start-app 互斥」不复存在，录制进程自己拉起目标应用确保录到该应用画面）。非桌面模式（主屏/摄像头）保持 `--no-control`。X10-99 与 X10-101 是同一根因链上的两步：X10-99 先去掉互斥的 --start-app 让 scrcpy 能起来，X10-101 进一步发现 --no-control 才是虚拟屏录不到画面的根源。
+  - **测试**：cargo 199 全绿（录制 13 + 桌面 3 全过）。真机端到端（修复后参数）：152帧/7.9s、录到游戏真实画面。
+  - **Windows 覆盖说明**：本次为纯 Rust 录制参数逻辑（record_arguments），两平台共用同一份代码与 scrcpy 4.1，Windows「不完整」与 Mac「白屏」同源（虚拟屏零帧/空帧），修复同步生效；真机仅验 Mac（无 Windows 设备），Windows 端待用户复验。
+  - **发版状态**：源码已改（未提交未发版），release 构建进行中。需出 v0.4.21-beta。

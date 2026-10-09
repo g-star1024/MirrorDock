@@ -772,10 +772,9 @@ impl SessionOptions {
             format!("--max-size={size}"),
             format!("--video-bit-rate={bitrate}"),
             "--video-codec=h264".into(),
-            // 录制通道三件套：无窗、不播放、不控制。
+            // 录制通道默认无窗、不播放；控制见下方桌面模式分支。
             "--no-playback".into(),
             "--no-window".into(),
-            "--no-control".into(),
         ];
         if self.rotation != 0 {
             // 录制用 display-orientation 锁定方向（与显示通道同一语义）。
@@ -794,13 +793,39 @@ impl SessionOptions {
         // 视频源必须与显示通道一致：桌面模式录虚拟屏、摄像头录摄像头、否则录手机屏幕。
         if self.desktop_mode {
             args.push("--new-display".into());
-            // X10-99：录制进程**不带 --start-app**。录制通道固定 `--no-control`（无窗
-            // 三件套之一），而 scrcpy 规定「控制被禁用时不允许启动应用」，会直接报
-            // `Cannot start an Android app if control is disabled` 退出、一个字节都
-            // 不写——这就是桌面模式下「开始/结束录制都提示成功、文件夹里却没有视频」
-            // 的根因。应用已由显示通道的 `--start-app` 启动，录制只负责录这块虚拟屏，
-            // 无需重复拉起。仅保留 --new-display 让录制落在独立的虚拟显示上。
-        } else if self.camera_source {
+            // X10-101：桌面模式录制**必须开控制**（不加 --no-control），并带 --start-app。
+            //
+            // 根因（Mac 白屏 / Windows 不完整，真机实测）：scrcpy 在「无控制 + 无窗」下
+            // 不驱动虚拟屏渲染/刷新——Mac 上录到一块空白屏（白屏）、Windows 上几乎不产生
+            // 帧导致时间轴残缺（播放器报「视频不完整」）。实测：去 --no-control 后
+            // 22fps、录到虚拟屏真实画面；带 --no-control 则白屏/零帧。
+            //
+            // 控制开启后 X10-99 的「--no-control 与 --start-app 互斥」不复存在，因此
+            // 恢复 --start-app：录制进程自己拉起这块虚拟屏的目标应用，确保录到的是
+            // 用户要录的应用画面（而非空白桌面）。录制是无窗进程，不抢用户输入焦点，
+            // 控制通道仅用于驱动虚拟屏渲染。包名白名单校验与显示通道一致。
+            if let Some(app) = &self.desktop_app {
+                let pkg = app.trim();
+                let valid = !pkg.is_empty()
+                    && pkg.len() <= 120
+                    && pkg
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
+                if !valid {
+                    return Err(AppError::new(
+                        "desktop_app_invalid",
+                        "虚拟屏启动的应用包名无效。",
+                        "包名只允许字母、数字、点（.）和下划线，例如 com.android.browser；也可以留空。",
+                    ));
+                }
+                args.push(format!("--start-app={pkg}"));
+            }
+        } else {
+            // 非桌面模式（手机屏幕/摄像头）：录真实屏/摄像头，无需控制通道驱动，
+            // 保持无控制三件套以最小化对设备的占用。
+            args.push("--no-control".into());
+        }
+        if self.camera_source {
             args.push("--video-source=camera".into());
             // 摄像头源绝不采集麦克风（A1-05 承诺），录制同样静音。
             args.push("--no-audio".into());
