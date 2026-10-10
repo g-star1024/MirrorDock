@@ -1050,6 +1050,36 @@
 要窗口」给的开关）；③ scrcpy-server 改**写死哈希**（原实现取 release API 的
 `head -1` digest，实际取到的是 `scrcpy-linux-x86_64-v4.1.tar.gz` 而不是 server 的）。
 
+### 【第三个根因】镜像漏装 scrcpy-server 的默认查找路径 → 录制秒退（飞牛真机）
+**原文（用户在 NAS 容器终端手动跑 scrcpy 拿到）**：
+```
+ERROR: '/usr/local/share/scrcpy/scrcpy-server' does not exist or is not a regular file
+ERROR: Server connection failed
+Done(1)                      # 进程秒退
+```
+**源码实证**（`scrcpy/app/src/server.c` → `get_server_path()`）：
+查找顺序是 ①环境变量 `SCRCPY_SERVER_PATH` ②编译期 prefix 下
+`<prefix>/share/scrcpy/scrcpy-server`（本镜像 prefix=/usr/local）。
+**只在二进制目录放 server 无效**——「在自身目录找」是 `PORTABLE` 构建才有的行为。
+
+**症状极具误导性**：设备识别与截图全部正常（走 adb 通道不经 scrcpy），
+只有录制失败。叠加上面那个「stop() 只看进程退出码」的缺陷后，演变成 UI 报
+「录制已结束」但文件从不存在。
+
+**四层修复，逐层收紧**：
+1. 构建阶段把 server 也装进 `/usr/local/share/scrcpy/`
+2. runtime 阶段 COPY 该目录，并 fail-closed 校验三件套齐全（缺件则构建失败）
+3. `ENV SCRCPY_SERVER_PATH` 显式指定，不再依赖编译期 prefix
+4. Rust 侧两处自查：启动日志打印 server 就绪状态（NAS 常开机，人未必在场）；
+   `start()` 录制前置检查，缺件直接报错，不等秒退再反推
+
+### CI 漏洞补上：NAS 服务端此前零校验
+`build.yml` 只跑 `--manifest-path src-tauri/Cargo.toml`，而 workspace 显式
+`exclude = ["src-tauri"]` → NAS 服务端代码在 CI 上从来没被检查过。
+新增 `verify` job（fmt / clippy / test），`image` job `needs: verify`。
+**该门禁当场见效**：首次运行即红了 `cargo fmt --check`，抓出既有文件的格式偏差
+（`ff6d459`）。
+
 ### CI 状态
 - `build`（桌面端验证门禁）：`656d7ed` / `5926861` / `20cfde9` / `294ff2b` /
   `7a478b0` / `2212c70` **全部 success**，打包与 Release 正确跳过
