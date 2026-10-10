@@ -7,7 +7,10 @@
 use chrono::Local;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
 
 /// 录制参数与桌面端 record_arguments 保持一致（max-size / 码率 / h264）。
 /// 注意这里是有意的参数对齐而非代码复用：SessionOptions 深埋在桌面端 lib.rs 里，
@@ -51,6 +54,9 @@ pub fn now_stamp() -> String {
 pub struct Recording {
     pub path: PathBuf,
     child: Option<Child>,
+    /// scrcpy 的 stderr 尾部。排错全靠它：设备未授权、display 打不开、
+    /// 编码器失败，报错全在 stderr，而进程一退出这些信息就没了。
+    stderr_tail: Arc<Mutex<String>>,
 }
 
 impl Recording {
@@ -96,13 +102,39 @@ impl Recording {
             }
         }
 
-        let child = command
+        let mut child = command
             .spawn()
             .map_err(|e| format!("无法启动 scrcpy 录制（路径 {scrcpy}）：{e}"))?;
-        Ok(Self { path, child: Some(child) })
+
+        // 后台收走 stderr（不收会塞满管道把 scrcpy 噎死），留尾部 600 字节。
+        let stderr_tail: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        if let Some(mut err_pipe) = child.stderr.take() {
+            let tail = stderr_tail.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let _ = err_pipe.read_to_end(&mut buf).await;
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let start = text.len().saturating_sub(600);
+                *tail.lock().await = text[start..].to_string();
+            });
+        }
+
+        // 启动存活检查：scrcpy 起不来时（设备忙 / 未授权 / display 失败）通常
+        // 几秒内就退出。不在这里拦住，用户会录到一场「成功」的空录制——
+        // 2026-10-11 飞牛真机实踩：UI 报「录制已结束」，recordings 目录却没文件。
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        if let Ok(Some(status)) = child.try_wait() {
+            let tail = stderr_tail.lock().await.clone();
+            return Err(format!("scrcpy 启动后立即退出（{status}）。输出：{tail}"));
+        }
+
+        Ok(Self { path, child: Some(child), stderr_tail })
     }
 
     /// 停止录制。**必须走 SIGINT 优雅退出**，见上方 X10-95 说明。
+    ///
+    /// 返回 Ok 的唯一标准：**MP4 文件真实存在且非 0 字节**。进程退出码不算数——
+    /// 它只证明 scrcpy 退了，不证明录像写出来了。
     pub async fn stop(&mut self) -> Result<(), String> {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
@@ -115,7 +147,20 @@ impl Recording {
                 .await;
         }
         match tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await {
-            Ok(Ok(_)) => Ok(()),
+            Ok(Ok(_)) => {
+                // 如实验收：文件必须真的写出来了，否则报错并带上 scrcpy 的输出。
+                match tokio::fs::metadata(&self.path).await {
+                    Ok(m) if m.len() > 0 => Ok(()),
+                    Ok(_) => Err(format!(
+                        "录制文件为空（0 字节）。scrcpy 输出：{}",
+                        self.stderr_tail.lock().await
+                    )),
+                    Err(e) => Err(format!(
+                        "录制文件未生成（{e}）。scrcpy 输出：{}",
+                        self.stderr_tail.lock().await
+                    )),
+                }
+            }
             Ok(Err(e)) => Err(format!("等待录制进程退出失败：{e}")),
             // 超时才动用 SIGKILL——此时 moov 已经写不出来，只能如实告知。
             Err(_) => {
