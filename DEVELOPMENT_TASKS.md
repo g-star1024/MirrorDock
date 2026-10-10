@@ -1036,8 +1036,28 @@
 11. **沙箱内 docker 的 apt 极慢**（`apt-get update` 量级 50 分钟），本地完整镜像
     构建不可行；Dockerfile 验证以 CI 为准，本地只做「拿到报错原文」的短诊断。
 
+### 镜像构建排错时间线（每个根因都是日志原文实证，不是推测）
+| run | 结果 | 根因 |
+|---|---|---|
+| `38077437383` | failure | 无从得知——job 日志/artifact 都要管理员权限，只能看到 exit code |
+| `38078152363` | failure | 同上（此时已加 tee+artifact，但我仍无权下载） |
+| `38079601045` | failure | **缺 libc6-dev**：`ld: cannot find Scrt1.o / crti.o` |
+| `38080320820` | failure | **SDL3 要求 X11/Wayland**：`SDL could not find X11 or Wayland development libraries` |
+| `38081153154` | **success** | — 镜像发布 `ghcr.io/g-star1024/mirrordock/mirrordock-nas`（main/latest） |
+
+修法：① apt 显式补 `libc6-dev`（Debian 里 gcc-12 对它是 Recommends 而非 Depends）；
+② cmake 加 `-DSDL_UNIX_CONSOLE_BUILD=ON`（官方 docs/README-cmake.md 对「真的不需
+要窗口」给的开关）；③ scrcpy-server 改**写死哈希**（原实现取 release API 的
+`head -1` digest，实际取到的是 `scrcpy-linux-x86_64-v4.1.tar.gz` 而不是 server 的）。
+
 ### CI 状态
-- `build`（桌面端验证门禁）：commit `656d7ed` / `5926861` / `20cfde9` **均 success**，
-  打包与 Release 正确跳过 → 桌面端发版链未被 NAS 改动影响 ✅
-- `nas-image`：首轮 `38077437383` 与 `38078152363` 失败（根因 libc6-dev，已修）；
-  修复后重跑待验证。
+- `build`（桌面端验证门禁）：`656d7ed` / `5926861` / `20cfde9` / `294ff2b` /
+  `7a478b0` / `2212c70` **全部 success**，打包与 Release 正确跳过
+  → 桌面端发版链未被 NAS 改动影响 ✅
+- `nas-image`：`38081153154` **success**，镜像已发布。
+
+### 镜像实测（拉取已发布镜像真跑，非推测）
+- 容器正常启动并监听 8080，`/api/status` 返回 version 0.4.24 与正确的 adb/scrcpy 路径
+- `/api/devices` 返回空数组（容器内无 USB 设备，符合预期）
+- `/` 正确返回 Web 界面 HTML
+- 镜像体积 794MB；**不含任何测试数据**（空挂载时 `/api/recordings` 为空数组）
