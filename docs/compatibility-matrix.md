@@ -6,10 +6,10 @@
 
 | 平台 | 版本 | 打包 | 安装验证 | 运行验证 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| macOS Intel | macOS 13+（目标下限待真机验证） | ✅ v0.4.23-beta | ❌ 未验证（开发机即打包机） | ✅ 开发机日常使用 | 随包 scrcpy 已证实生效 |
-| macOS Apple Silicon | 同上 | ✅ v0.4.23-beta | ❌ | ❌ | 外部阻塞 |
-| Windows x64 | Windows 10/11 | ✅ v0.4.23-beta | ❌ | ❌ | 录制收尾（SIGTERM）在 Windows 无对应机制，风险已在 Cargo.toml 注明 |
-| Ubuntu x64 | 22.04+ | ✅ v0.4.23-beta | ❌ | ❌ | 安装包随包分发 scrcpy 4.1 与 adb（Linux 无官方预编译包，由流水线从官方源码编译，自 v0.3.0 起）；**SDL3 / FFmpeg 等运行时动态库不随包、由发行版提供**——Ubuntu 25.04+ 可直接安装，22.04/24.04 需先获取 SDL3（见 README「Linux 运行库说明」） |
+| macOS Intel | macOS 13+（目标下限待真机验证） | ✅ v0.4.24-beta | ❌ 未验证（开发机即打包机） | ✅ 开发机日常使用 | 随包 scrcpy 已证实生效 |
+| macOS Apple Silicon | 同上 | ✅ v0.4.24-beta | ❌ | ❌ | 外部阻塞 |
+| Windows x64 | Windows 10/11 | ✅ v0.4.24-beta | ❌ | ❌ | 录制收尾（SIGTERM）在 Windows 无对应机制，风险已在 Cargo.toml 注明 |
+| Ubuntu x64 | 22.04+ | ✅ v0.4.24-beta | ❌ | ❌ | 安装包随包分发 scrcpy 4.1 与 adb（Linux 无官方预编译包，由流水线从官方源码编译，自 v0.3.0 起）；**SDL3 / FFmpeg 等运行时动态库不随包、由发行版提供**——Ubuntu 25.04+ 可直接安装，22.04/24.04 需先获取 SDL3（见 README「Linux 运行库说明」） |
 
 ## 设备矩阵（真机）
 
