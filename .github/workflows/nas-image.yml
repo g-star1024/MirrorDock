@@ -75,8 +75,12 @@ jobs:
             --progress=plain \
             --push . 2>&1 | tee nas-build.log
         env:
-          # arm64 一并构建：飞牛与主流 NAS 既有 x86 机型也有 ARM 机型。
-          PLATFORMS: linux/amd64,linux/arm64
+          # 【为什么先只做 amd64】
+          # arm64 走 QEMU 模拟编译 SDL3 + scrcpy，动辄数小时；在 Dockerfile 还没
+          # 跑通过一轮之前就上双架构，等于每次排错都要付几小时。先让 amd64 全链
+          # 路跑绿、把镜像发出来，再单独加 arm64（届时只是一次已知可行的长构建）。
+          # ARM NAS 用户在此期间用 `docker compose build` 在本地原生构建即可。
+          PLATFORMS: linux/amd64
 
       # 摘要常驻：成功也能一眼看到产物摘要，失败时尾部即为报错现场。
       - name: 构建日志尾部

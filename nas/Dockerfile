@@ -26,17 +26,27 @@ ARG PLATFORM_TOOLS_VERSION=r34.0.5
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl unzip \
       gcc make pkg-config meson ninja-build cmake pkg-config \
+      # libc6-dev 必须显式写：Debian 里 gcc-12 对 libc6-dev 只是 Recommends 而非
+      # Depends，而本层用了 --no-install-recommends → 不写就没有 Scrt1.o / crti.o。
+      # 后果是「能编译不能链接」，报错点在 SDL3 的 cmake 里，离根因十万八千里
+      # （2026-10-11 实踩：CI 3 分钟失败，靠完整日志才定位到 ld 找不到启动文件）。
+      libc6-dev \
       libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev \
       libusb-1.0-0-dev \
     && rm -rf /var/lib/apt/lists/* \
-    # 工具链自检：这一步缺任何东西都要在这里立刻失败。否则会拖到 SDL3 的
-    # cmake 才报「CMAKE_C_COMPILER not set」这种看不出根因的错误（2026-10-11
-    # 首跑实锤：apt 层看似成功却在后续步骤找不到 gcc，靠此处自检才定位）。
+    # 工具链自检：必须是「真的编译+链接+跑一遍」，不能只查 --version。
+    # 只查 --version 会让「gcc 在但 libc6-dev 不在」这类问题一路潜伏到 SDL3 的
+    # cmake 才炸——那一刻的报错（CMAKE_C_COMPILER not set / C compiler broken）
+    # 完全指不向真正的缺失项。
+    && printf 'int main(void){return 0;}\n' > /tmp/md-toolchain-check.c \
+    && cc /tmp/md-toolchain-check.c -o /tmp/md-toolchain-check \
+    && /tmp/md-toolchain-check \
+    && rm -f /tmp/md-toolchain-check /tmp/md-toolchain-check.c \
     && gcc --version >/dev/null \
     && cmake --version >/dev/null \
     && meson --version >/dev/null \
     && ninja --version >/dev/null \
-    && echo "工具链自检通过"
+    && echo "工具链自检通过（编译+链接+运行均成功）"
 
 WORKDIR /build
 
