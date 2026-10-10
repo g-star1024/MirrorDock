@@ -1018,3 +1018,26 @@
 5. **Debian slim 缺 `make`**：CMake 报「CMAKE_C_COMPILER not set」极易误判成编译器没装
    （CI 的 Ubuntu runner 自带 make，容器里没有）。已在 Dockerfile 加工具链自检。
 6. **axum 0.8 路径参数是 `{name}` 不是 `:name`**：编译期不报错，只有真跑起来才崩。
+7. **容器里 `--no-install-recommends` 会吃掉 libc6-dev**：Debian 中 gcc-12 对
+   libc6-dev 只是 Recommends 而非 Depends。结果是「能编译不能链接」，
+   `ld: cannot find Scrt1.o / crti.o`，而报错发生在 SDL3 的 cmake 配置阶段
+   （`C compiler is broken`），与根因相隔极远。已在 apt 清单显式补 `libc6-dev`。
+8. **工具链自检必须真的编译+链接+运行一遍**：原先只查 `gcc --version`，恰好漏掉
+   第 7 条这类「程序在、库不在」的缺失——这是本次排错绕远路的直接原因。
+   已改成用 `cc` 编译一个 main 并实际执行。
+9. **GitHub Actions 的 job 日志与 artifact 都需要管理员权限**：
+   `GET .../actions/jobs/{id}/logs` → 403 Must have admin rights；
+   `GET .../actions/artifacts/{id}/zip` → 401。CI 失败时**只能看到 exit code**。
+   已在 nas-image.yml 把构建改成 CLI + `tee` 日志 + `::group::` 打印尾部 300 行
+   + 失败上传 artifact（供有权限者下载）；本轮真正的原文是靠**本地复现**拿到的。
+10. **本环境 SSH 22 端口被封**：`git push` 直连 github.com 报
+    `Connection closed by UNKNOWN port 65535`。可用 `ssh.github.com:443` 绕开
+    （`GIT_SSH_COMMAND="ssh -F <配置 HostName ssh.github.com / Port 443>"`）。
+11. **沙箱内 docker 的 apt 极慢**（`apt-get update` 量级 50 分钟），本地完整镜像
+    构建不可行；Dockerfile 验证以 CI 为准，本地只做「拿到报错原文」的短诊断。
+
+### CI 状态
+- `build`（桌面端验证门禁）：commit `656d7ed` / `5926861` / `20cfde9` **均 success**，
+  打包与 Release 正确跳过 → 桌面端发版链未被 NAS 改动影响 ✅
+- `nas-image`：首轮 `38077437383` 与 `38078152363` 失败（根因 libc6-dev，已修）；
+  修复后重跑待验证。

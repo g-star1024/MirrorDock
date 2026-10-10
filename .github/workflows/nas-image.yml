@@ -29,7 +29,8 @@ jobs:
   image:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # contents: write 只为失败时把构建日志推到 ci-logs-nas 分支（见文末说明）
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -97,3 +98,23 @@ jobs:
           name: nas-build-log
           path: nas-build.log
           retention-days: 7
+
+      # 【为什么还要推到 git 分支】
+      # artifact 下载同样要管理员权限（401）——上面那步对没有 admin 权限的人
+      # 依然拿不到。把日志推成一个孤儿分支，任何有仓库读权限的人（包括只持有
+      # SSH key 的协作者）都能 `git fetch origin ci-logs-nas` 取到原文。
+      # 这是「先建立拿到原文的能力，再改代码」这条元教训落成的最后一环。
+      - name: 把构建日志推到 ci-logs-nas 分支
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name  "mirrordock-ci-bot"
+          git config user.email "ci-bot@invalid.local"
+          git checkout --orphan ci-logs-nas
+          git rm -r --cached . -q
+          cp nas-build.log "nas-build-run-${GITHUB_RUN_ID}.log"
+          git add -f "nas-build-run-${GITHUB_RUN_ID}.log"
+          git commit -q -m "nas-image 构建日志 run ${GITHUB_RUN_ID} (${GITHUB_SHA})"
+          git push -f origin ci-logs-nas
