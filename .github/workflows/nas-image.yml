@@ -22,6 +22,8 @@ on:
       - "nas/**"
       - "crates/**"
       - "Cargo.toml"
+      # 本文件自身变更也要自测：否则改坏了 workflow 只能等下次 nas/ 改动才发现。
+      - ".github/workflows/nas-image.yml"
 
 jobs:
   image:
@@ -53,15 +55,41 @@ jobs:
             echo "tag=main" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: nas/Dockerfile
+      # 【为什么不用 docker/build-push-action】
+      # 它需要仓库管理员权限才能下载 job 日志（`GET .../actions/jobs/{id}/logs`
+      # 返回 403 Must have admin rights）。构建一旦失败，除了「exit code」什么
+      # 都看不到——这正是 X10-97 用三次发版失败换来的教训：**先建立拿到原文的能力，
+      # 再改代码**。改用 CLI 直接构建，把完整输出 tee 成文件并作为 artifact 上传，
+      # 任何人都能拿到编译器原文。
+      - name: 构建并推送镜像
+        id: build
+        run: |
+          set -o pipefail
+          docker buildx build \
+            --file nas/Dockerfile \
+            --platform "${PLATFORMS}" \
+            --tag "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" \
+            --tag "${{ steps.meta.outputs.image }}:latest" \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --progress=plain \
+            --push . 2>&1 | tee nas-build.log
+        env:
           # arm64 一并构建：飞牛与主流 NAS 既有 x86 机型也有 ARM 机型。
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-            ${{ steps.meta.outputs.image }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          PLATFORMS: linux/amd64,linux/arm64
+
+      # 摘要常驻：成功也能一眼看到产物摘要，失败时尾部即为报错现场。
+      - name: 构建日志尾部
+        if: always()
+        run: |
+          echo "::group::nas-build.log 尾部 300 行"
+          tail -n 300 nas-build.log 2>/dev/null || echo "(无日志)"
+          echo "::endgroup::"
+
+      - name: 上传完整构建日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nas-build-log
+          path: nas-build.log
+          retention-days: 7
