@@ -144,6 +144,13 @@ async function loadStatus() {
     const s = await api('/api/status');
     $('status-line').textContent =
       `v${s.version} · 数据目录 ${s.data_dir} · adb ${s.adb}${s.recording ? ' · 录制中' : ''}`;
+    // 【按钮状态必须跟服务端对齐】录制状态活在服务端进程里，按钮 disabled
+    // 却只存在前端内存——页面一刷新两者就脱节：服务端明明在录，结束按钮
+    // 却永远是灰的，那场录制就再也停不下来，产出一份没有 moov 索引、浏览器
+    // 拒播的孤儿 MP4（2026-10-11 飞牛真机实踩）。
+    $('rec-start').disabled = !!s.recording;
+    $('rec-stop').disabled = !s.recording;
+    if (s.recording) $('rec-state').textContent = '录制中：' + s.recording;
   } catch (e) { $('status-line').textContent = '无法连接服务端'; }
 }
 
