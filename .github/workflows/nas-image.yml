@@ -37,12 +37,44 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: 格式 / lint / 单测
+      - name: cargo fmt --check
         run: |
-          set -euo pipefail
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee verify.log
+      - name: cargo clippy
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee -a verify.log
+      - name: cargo test
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee -a verify.log
+
+      # 为什么每个检查单独一步并 tee：job 正文日志要仓库管理员权限才下得下来
+      # （403），看不到原文就是盲修。拆独立 step 后，即便没有管理员权限也能从
+      # jobs API 看出是哪一步红；失败时日志还会推到 ci-logs-nas 分支，
+      # 任何人 git fetch 就能拿到完整原文。
+      - name: 校验日志尾部
+        if: always()
+        run: |
+          echo "::group::verify.log 尾部 300 行"
+          tail -n 300 verify.log 2>/dev/null || echo "(无日志)"
+          echo "::endgroup::"
+
+      - name: 把校验日志推到 ci-logs-nas 分支
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name  "mirrordock-ci-bot"
+          git config user.email "ci-bot@invalid.local"
+          git checkout --orphan ci-logs-nas
+          git rm -r --cached . -q
+          cp verify.log "nas-verify-run-${GITHUB_RUN_ID}.log"
+          git add -f "nas-verify-run-${GITHUB_RUN_ID}.log"
+          git commit -q -m "nas-image verify 日志 run ${GITHUB_RUN_ID} (${GITHUB_SHA})"
+          git push -f origin ci-logs-nas
 
   image:
     runs-on: ubuntu-latest
