@@ -56,7 +56,11 @@ fn parse_device_line(line: &str) -> Option<ConnectionEndpoint> {
     } else {
         ConnectionKind::Usb
     };
-    Some(ConnectionEndpoint { serial, kind, state })
+    Some(ConnectionEndpoint {
+        serial,
+        kind,
+        state,
+    })
 }
 
 /// 拉取已 dedup 的设备列表。去重与「USB 优先」完全由 md-core 决定。

@@ -111,10 +111,7 @@ pub fn dedup_devices(devices: Vec<AdbDevice>) -> Vec<AdbDevice> {
                 .clone()
                 .filter(|value| !value.is_empty())
             {
-                match merged_groups
-                    .iter_mut()
-                    .find(|(key, _)| *key == psn)
-                {
+                match merged_groups.iter_mut().find(|(key, _)| *key == psn) {
                     Some((_, group)) => group.push(device),
                     None => merged_groups.push((psn, vec![device])),
                 }
@@ -131,14 +128,20 @@ pub fn dedup_devices(devices: Vec<AdbDevice>) -> Vec<AdbDevice> {
     // 残留）。三者都判不了才保留独立卡片——离线状态必须如实可见，不能瞎猜合并。
     let group_keys: Vec<(String, Vec<String>, Vec<String>)> = merged_groups
         .iter()
-        .map(|(psn, group)| (psn.clone(), group_usb_serials(group), group_wireless_ips(group)))
+        .map(|(psn, group)| {
+            (
+                psn.clone(),
+                group_usb_serials(group),
+                group_wireless_ips(group),
+            )
+        })
         .collect();
     let shadows: Vec<AdbDevice> = passthrough
         .into_iter()
         .filter(|device| {
-            !group_keys
-                .iter()
-                .any(|(psn, usb_serials, wireless_ips)| device_shadows_group(device, psn, usb_serials, wireless_ips))
+            !group_keys.iter().any(|(psn, usb_serials, wireless_ips)| {
+                device_shadows_group(device, psn, usb_serials, wireless_ips)
+            })
         })
         .collect();
     // 整机离线时的残影之间也归并：USB 残影 + 它的 mDNS 残影 → 一张卡。
@@ -200,8 +203,8 @@ pub fn mdns_serial_contains_usb(mdns_serial: &str, usb_serial: &str) -> bool {
 pub fn group_usb_serials(group: &[AdbDevice]) -> Vec<String> {
     let mut out = Vec::new();
     for device in group {
-        let serials = std::iter::once(&device.serial)
-            .chain(device.connections.iter().map(|c| &c.serial));
+        let serials =
+            std::iter::once(&device.serial).chain(device.connections.iter().map(|c| &c.serial));
         for serial in serials {
             if !is_wireless_endpoint(serial) && !out.contains(serial) {
                 out.push(serial.clone());
@@ -215,8 +218,8 @@ pub fn group_usb_serials(group: &[AdbDevice]) -> Vec<String> {
 pub fn group_wireless_ips(group: &[AdbDevice]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for device in group {
-        let serials = std::iter::once(&device.serial)
-            .chain(device.connections.iter().map(|c| &c.serial));
+        let serials =
+            std::iter::once(&device.serial).chain(device.connections.iter().map(|c| &c.serial));
         for serial in serials {
             if let Some(ip) = wireless_ip_endpoint(serial) {
                 if !out.iter().any(|known| known == ip) {
@@ -238,8 +241,8 @@ pub fn device_shadows_group(
     if device.physical_serial.as_deref() == Some(psn) {
         return true;
     }
-    let serials = std::iter::once(&device.serial)
-        .chain(device.connections.iter().map(|c| &c.serial));
+    let serials =
+        std::iter::once(&device.serial).chain(device.connections.iter().map(|c| &c.serial));
     for serial in serials {
         // mDNS 发现名（无线、不含冒号）内含组内 USB 序列号 → 同一台手机。
         if is_wireless_endpoint(serial)

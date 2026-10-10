@@ -68,8 +68,7 @@ pub struct SerialQuery {
 
 pub async fn screenshot(Query(q): Query<SerialQuery>) -> ApiResult {
     let name = format!("shot-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-    let dir = std::env::var("MIRRORDOCK_DATA")
-        .unwrap_or_else(|_| "/var/lib/mirrordock".to_owned());
+    let dir = std::env::var("MIRRORDOCK_DATA").unwrap_or_else(|_| "/var/lib/mirrordock".to_owned());
     let dir = std::path::Path::new(&dir).join("screenshots");
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         return Err(err(AppError::new(
@@ -101,7 +100,9 @@ pub async fn screenshot(Query(q): Query<SerialQuery>) -> ApiResult {
                     &format!("请检查数据卷是否可写：{e}"),
                 )));
             }
-            Ok(Json(serde_json::json!({ "file": name, "bytes": o.stdout.len() })))
+            Ok(Json(
+                serde_json::json!({ "file": name, "bytes": o.stdout.len() }),
+            ))
         }
         Ok(o) => Err(err(AppError::new(
             "screenshot_failed",
@@ -156,7 +157,9 @@ pub async fn start_record(
         Ok(rec) => {
             let file = rec.path.display().to_string();
             *guard = Some(rec);
-            Ok(Json(serde_json::json!({ "file": file, "serial": body.serial })))
+            Ok(Json(
+                serde_json::json!({ "file": file, "serial": body.serial }),
+            ))
         }
         Err(message) => Err(err(AppError::new(
             "record_start_failed",
@@ -176,7 +179,9 @@ pub async fn stop_record(AxumState(state): AxumState<Arc<State>>) -> ApiResult {
         )));
     };
     match rec.stop().await {
-        Ok(()) => Ok(Json(serde_json::json!({ "file": rec.path.display().to_string() }))),
+        Ok(()) => Ok(Json(
+            serde_json::json!({ "file": rec.path.display().to_string() }),
+        )),
         Err(message) => Err(err(AppError::new(
             "record_stop_failed",
             "录制结束异常。",
@@ -237,7 +242,11 @@ pub async fn list_files(Query(q): Query<FileQuery>) -> ApiResult {
     ];
     match adb::run_adb(&args).await {
         Ok(raw) => {
-            let entries: Vec<String> = raw.lines().map(|l| l.trim().to_owned()).filter(|l| !l.is_empty()).collect();
+            let entries: Vec<String> = raw
+                .lines()
+                .map(|l| l.trim().to_owned())
+                .filter(|l| !l.is_empty())
+                .collect();
             Ok(Json(serde_json::json!({ "path": dir, "entries": entries })))
         }
         Err(message) => Err(err(AppError::new(
