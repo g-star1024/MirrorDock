@@ -37,11 +37,26 @@ async fn main() {
     let _ = tokio::fs::create_dir_all(data.join("recordings")).await;
     let _ = tokio::fs::create_dir_all(data.join("screenshots")).await;
 
-    let state = Arc::new(State { data_dir: data.clone(), recording: Mutex::new(None) });
+    let state = Arc::new(State {
+        data_dir: data.clone(),
+        recording: Mutex::new(None),
+    });
+
+    // 开机自检：scrcpy 缺 server 时，设备识别与截图（走 adb 通道）全都正常，
+    // 只有录制会秒退——NAS 常开机的场景下人不一定在场，必须在启动日志里先喊出来。
+    let server = record::server_path();
+    if server.is_file() {
+        println!("scrcpy-server 就绪：{}", server.display());
+    } else {
+        eprintln!(
+            "[警告] 找不到 scrcpy-server（{}）：录制将不可用，设备识别与截图不受影响。 \
+             请检查镜像是否完整（是否覆盖了 SCRCPY_SERVER_PATH）。",
+            server.display()
+        );
+    }
 
     // 静态站：MIRRORDOCK_WEB 可指向自定义前端目录，缺省随包 ./web。
-    let web =
-        std::env::var("MIRRORDOCK_WEB").unwrap_or_else(|_| "/opt/mirrordock/web".to_owned());
+    let web = std::env::var("MIRRORDOCK_WEB").unwrap_or_else(|_| "/opt/mirrordock/web".to_owned());
 
     let api = Router::new()
         .route("/api/status", get(api::status))

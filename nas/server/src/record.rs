@@ -51,6 +51,18 @@ pub fn now_stamp() -> String {
     Local::now().format("%Y%m%d-%H%M%S").to_string()
 }
 
+/// scrcpy 要推送到设备上的 server 路径。
+///
+/// 解析顺序与 `app/src/server.c` 的 `get_server_path()` 保持一致：环境变量
+/// `SCRCPY_SERVER_PATH` 优先，否则退回编译期 prefix 下的 share 目录。
+/// 镜像里两个位置都放了 server，这里主要是把「缺件」变成一句人看得懂的话，
+/// 而不是让用户录一场秒退的空录制（2026-10-11 飞牛真机实踩）。
+pub fn server_path() -> PathBuf {
+    std::env::var("SCRCPY_SERVER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/usr/local/share/scrcpy/scrcpy-server"))
+}
+
 pub struct Recording {
     pub path: PathBuf,
     child: Option<Child>,
@@ -70,6 +82,14 @@ impl Recording {
         tokio::fs::create_dir_all(dir)
             .await
             .map_err(|e| format!("无法创建录像目录：{e}"))?;
+        // 缺 server 不必等到 scrcpy 秒退再说——那时要从 stderr 里反推，成本高得多。
+        let server = server_path();
+        if !server.is_file() {
+            return Err(format!(
+                "找不到 scrcpy-server（{}）。镜像不完整或 SCRCPY_SERVER_PATH 指错了位置。",
+                server.display()
+            ));
+        }
         let path = dir.join(recording_name(serial, &now_stamp()));
         let (max_size, bit_rate) = quality.profile();
 
@@ -128,7 +148,11 @@ impl Recording {
             return Err(format!("scrcpy 启动后立即退出（{status}）。输出：{tail}"));
         }
 
-        Ok(Self { path, child: Some(child), stderr_tail })
+        Ok(Self {
+            path,
+            child: Some(child),
+            stderr_tail,
+        })
     }
 
     /// 停止录制。**必须走 SIGINT 优雅退出**，见上方 X10-95 说明。
@@ -169,7 +193,6 @@ impl Recording {
             }
         }
     }
-
 }
 
 #[cfg(unix)]
@@ -188,15 +211,20 @@ mod tests {
 
     #[test]
     fn recording_name_uses_timestamp_and_serial() {
-        assert_eq!(recording_name("ABC123", "20261011-010000"),
-                   "ABC123-20261011-010000.mp4");
+        assert_eq!(
+            recording_name("ABC123", "20261011-010000"),
+            "ABC123-20261011-010000.mp4"
+        );
     }
 
     /// 无线端点里的冒号必须替换：冒号在 SMB/Windows 分享上是非法文件名字符。
     #[test]
     fn recording_name_sanitizes_wireless_colon() {
         let name = recording_name("192.168.1.9:5555", "20261011-010000");
-        assert!(!name.contains(':'), "冒号会导致 SMB/Windows 分享失败：{name}");
+        assert!(
+            !name.contains(':'),
+            "冒号会导致 SMB/Windows 分享失败：{name}"
+        );
         assert!(name.ends_with(".mp4"));
     }
 

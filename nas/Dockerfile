@@ -101,14 +101,26 @@ RUN cd "scrcpy-${SCRCPY_VERSION}" \
     && ninja -C build
 
 # ⑤ 组装到统一目录，供 runtime 阶段整段 COPY
-RUN mkdir -p /opt/scrcpy \
+RUN mkdir -p /opt/scrcpy /usr/local/share/scrcpy \
     && cp "scrcpy-${SCRCPY_VERSION}/build/app/scrcpy" /opt/scrcpy/scrcpy \
     && cp "scrcpy-server-v${SCRCPY_VERSION}" /opt/scrcpy/scrcpy-server \
     && cp platform-tools/adb /opt/scrcpy/adb \
     && chmod +x /opt/scrcpy/scrcpy /opt/scrcpy/adb \
     # scrcpy 启动时会在自身目录找图标，缺了会刷错误（X10-79 的经验）
     && touch /opt/scrcpy/scrcpy.png \
-    && ls -la /opt/scrcpy/
+    # 【关键】scrcpy 找 server 的路径由编译期 prefix 决定：
+    #   app/src/server.c → get_server_path() 优先读环境变量 SCRCPY_SERVER_PATH，
+    #   否则退回 SC_SERVER_PATH_DEFAULT，也就是 <prefix>/share/scrcpy/scrcpy-server，
+    #   本镜像 prefix=/usr/local，即 /usr/local/share/scrcpy/scrcpy-server。
+    # 只在 /opt/scrcpy 放 server 是不行的：scrcpy 不会在自身目录找（那是 PORTABLE
+    # 构建才有的行为）。2026-10-11 飞牛真机实锤——服务起得来、截图能用（截图走 adb
+    # 通道不经过 scrcpy），唯独录制一按就秒退，报
+    #   ERROR: '/usr/local/share/scrcpy/scrcpy-server' does not exist
+    # 故标准位置必须放一份。
+    && cp "scrcpy-server-v${SCRCPY_VERSION}" /usr/local/share/scrcpy/scrcpy-server \
+    && test -s /opt/scrcpy/scrcpy-server \
+    && test -s /usr/local/share/scrcpy/scrcpy-server \
+    && ls -la /opt/scrcpy/ /usr/local/share/scrcpy/
 
 # ---------------------------------------------------------------------------
 # 阶段 2：编译 NAS 服务端（Rust）
@@ -149,7 +161,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # SDL3 运行时（源码编译产物，Debian 仓库没有）
 COPY --from=scrcpy-builder /usr/local/lib/libSDL3.so* /usr/local/lib/
 COPY --from=scrcpy-builder /opt/scrcpy /opt/scrcpy
-RUN ldconfig
+# scrcpy-server 的默认查找位置（见构建阶段注释）：漏掉这一行，录制会秒退，
+# 而 adb 通道的截图却照常能用，症状极具误导性。
+COPY --from=scrcpy-builder /usr/local/share/scrcpy /usr/local/share/scrcpy
+RUN ldconfig \
+    # fail-closed：缺任何一件都让镜像构建失败，而不是等用户在 NAS 上踩
+    && test -s /opt/scrcpy/scrcpy \
+    && test -s /opt/scrcpy/adb \
+    && test -s /usr/local/share/scrcpy/scrcpy-server \
+    && echo "scrcpy 运行时三件套校验通过（含 server 默认路径）"
+
+ENV PATH="/opt/scrcpy:${PATH}"
+# 显式告诉 scrcpy server 在哪：不依赖编译期 prefix，也不依赖将来有无 PORTABLE
+# 构建差异。server.c 里这个环境变量优先级最高，是最稳的一层保险。
+ENV SCRCPY_SERVER_PATH=/opt/scrcpy/scrcpy-server
 
 # NAS 服务端二进制与前端静态站
 COPY --from=app-builder /usr/local/bin/mirrordock-nas /opt/mirrordock/mirrordock-nas

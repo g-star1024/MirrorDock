@@ -26,8 +26,27 @@ on:
       - ".github/workflows/nas-image.yml"
 
 jobs:
+  # NAS 侧 Rust 校验。此前 build.yml 只跑 src-tauri（--manifest-path src-tauri/Cargo.toml），
+  # 而 workspace 又显式 exclude 了 src-tauri → NAS 服务端代码在 CI 上原本**零校验**，
+  # 改坏了只能等用户在 NAS 上录一场空视频才发现。补在上游，先于镜像构建执行。
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: 格式 / lint / 单测
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
   image:
     runs-on: ubuntu-latest
+    needs: verify
     permissions:
       # contents: write 只为失败时把构建日志推到 ci-logs-nas 分支（见文末说明）
       contents: write
