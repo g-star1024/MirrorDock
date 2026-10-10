@@ -55,8 +55,14 @@ WORKDIR /build
 RUN curl -fsSL -o sdl3.tar.gz "https://codeload.github.com/libsdl-org/SDL/tar.gz/refs/tags/${SDL3_VERSION}" \
     && echo "c2ee715e42ec520c4d11fd8d249ef1d2b2baf4ad31148b72b3b000276c0b3633  sdl3.tar.gz" | sha256sum -c - \
     && tar -xzf sdl3.tar.gz \
+    # SDL_UNIX_CONSOLE_BUILD=ON：容器里没有 X11/Wayland，SDL3 默认会因此直接
+    # 终止配置（"SDL could not find X11 or Wayland development libraries"）。
+    # 官方 docs/README-cmake.md 对「真的不需要窗口」给的就是这个开关——NAS 端
+    # 只用 scrcpy 的 --no-window --no-playback 录制能力，确实不需要窗口。
+    # 打开后保留的后端是 dummy / offscreen，正好是 headless 需要的那两个。
     && cmake -S "SDL-${SDL3_VERSION}" -B sdl3-build \
         -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF \
+        -DSDL_UNIX_CONSOLE_BUILD=ON \
     && cmake --build sdl3-build -j4 \
     && cmake --install sdl3-build \
     && ldconfig
