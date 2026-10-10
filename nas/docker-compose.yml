@@ -12,7 +12,10 @@
 
 services:
   mirrordock:
-    image: ghcr.io/g-star1024/mirrordock-nas:latest
+    # GHCR 的命名规则是 ghcr.io/<owner>/<仓库名>/<包名>——中间那段仓库名不能省。
+    # 少了它就会得到 Head ".../mirrordock-nas/manifests/latest": denied
+    # （2026-10-11 首测实踩）。本行由 CI 的「镜像名一致性」步骤守卫，改坏会红。
+    image: ghcr.io/g-star1024/mirrordock/mirrordock-nas:latest
     container_name: mirrordock-nas
 
     # 常开机是这个项目的立身之本：宿主机重启后自动拉起，长时间挂机不受影响。
@@ -41,7 +44,10 @@ services:
       # USB 设备节点。privileged 已包含，显式写出便于排错。
       - /dev/bus/usb:/dev/bus/usb
 
-    # 本地构建的镜像可换成 image: mirrordock-nas:latest
+    # 本地构建（ARM 机型 NAS 推荐：原生编译比 QEMU 模拟快一个数量级）。
+    # 用 build 时注释掉上面的 image，反之亦然。
+    # 注意上下文必须是**仓库根目录**：Dockerfile 会 COPY crates/ 与 nas/server，
+    # 指向 nas/ 内部会让 COPY 找不到文件。
     # build:
-    #   context: ./server
-    #   dockerfile: ../Dockerfile
+    #   context: ..
+    #   dockerfile: nas/Dockerfile

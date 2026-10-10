@@ -62,6 +62,25 @@ jobs:
       # 都看不到——这正是 X10-97 用三次发版失败换来的教训：**先建立拿到原文的能力，
       # 再改代码**。改用 CLI 直接构建，把完整输出 tee 成文件并作为 artifact 上传，
       # 任何人都能拿到编译器原文。
+      # 【为什么要有这一步】
+      # GHCR 的镜像名是 ghcr.io/<owner>/<仓库名>/<包名>，中间那段仓库名极易漏写。
+      # 2026-10-11 首测就因为这个：docker-compose.yml 里写成了
+      # ghcr.io/g-star1024/mirrordock-nas（漏了 /mirrordock），用户照 README 粘贴
+      # 后 pull 直接 403 denied——而镜像本身是好的，纯属清单写错。
+      # 这类「产物对了、文档错了」的问题在 CI 里完全看不出来，只能靠显式比对。
+      - name: 校验 compose 里的镜像名与即将发布的镜像名一致
+        run: |
+          set -e
+          WANT="${{ steps.meta.outputs.image }}:latest"
+          GOT="$(grep -m1 -E '^[[:space:]]*image:' nas/docker-compose.yml | awk '{print $2}')"
+          echo "compose 声明: ${GOT}"
+          echo "本次将发布:   ${WANT}"
+          if [ "${GOT}" != "${WANT}" ]; then
+            echo "::error::镜像名不一致。compose 写的是 ${GOT}，实际会发布 ${WANT}。用户按 README 粘贴 compose 将 pull 失败（403 denied）。"
+            exit 1
+          fi
+          echo "一致性校验通过"
+
       - name: 构建并推送镜像
         id: build
         run: |

@@ -16,8 +16,13 @@
 > 首次连接手机时，手机上会弹出 RSA 授权确认。授权密钥持久化在 `./adbkeys`，
 > 容器重建后不必重新授权——这是 NAS 场景的关键，因为 NAS 通常离人很远。
 
-**镜像架构**：目前只发布 `linux/amd64`。ARM 架构的 NAS（如部分 ARM 飞牛机型）
-请在 NAS 上用 `docker compose build` 本地原生构建——比 QEMU 模拟快一个数量级。
+**镜像架构**：`linux/amd64` 与 `linux/arm64` 双架构，`docker pull` 会自动挑匹配的那份。
+若你的 NAS 架构特殊，可在 NAS 上用 `docker compose build` 本地原生构建
+（注意构建上下文必须是仓库根目录，不是 `nas/`）。
+
+> ⚠️ 镜像全名是 `ghcr.io/g-star1024/mirrordock/mirrordock-nas`——中间的 `mirrordock`
+> 是仓库名，GHCR 的命名规则是 `ghcr.io/<owner>/<仓库名>/<包名>`，**不能省**。
+> 少了它会报 `Head ".../mirrordock-nas/manifests/latest": denied`。
 
 ## 目录结构
 
