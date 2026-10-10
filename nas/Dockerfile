@@ -72,24 +72,20 @@ RUN curl -fsSL -o scrcpy-src.tar.gz "https://codeload.github.com/Genymobile/scrc
     && echo "537b2ade623cb94b6edddfa5c61bf0b0af21484aa8365ea2531b686ea573249a  scrcpy-src.tar.gz" | sha256sum -c - \
     && tar -xzf scrcpy-src.tar.gz
 
-# ② scrcpy-server：容器里没有 gh CLI，改用 GitHub API 取官方 release 的 digest，
-#    与 CI 的 `--jq .digest` 语义等价（同样 fail-closed，取不到即失败）。
-RUN SCRCPY_SERVER="scrcpy-server-v${SCRCPY_VERSION}" \
-    && DEB_ARCH="$(dpkg --print-architecture)" \
-    && case "$DEB_ARCH" in \
-         amd64)   GH_ARCH=x86_64 ;; \
-         arm64)   GH_ARCH=aarch64 ;; \
-         *)       echo "unsupported arch: $DEB_ARCH"; exit 1 ;; \
-       esac \
-    && curl -fsSL -o "$SCRCPY_SERVER" \
-        "https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/${SCRCPY_SERVER}" \
-    && echo "架构 ${DEB_ARCH} -> GitHub release arch ${GH_ARCH}" \
-    && EXPECTED="$(curl -fsSL "https://api.github.com/repos/Genymobile/scrcpy/releases/tags/v${SCRCPY_VERSION}" \
-        | sed -n 's/.*"digest" *: *"sha256:\([0-9a-f]*\)".*/\1/p' | head -1)" \
-    && ACTUAL="$(sha256sum "$SCRCPY_SERVER" | cut -d' ' -f1)" \
-    && echo "server digest: expected=${EXPECTED} actual=${ACTUAL}" \
-    && [ -n "$EXPECTED" ] \
-    && [ "$EXPECTED" = "$ACTUAL" ] \
+# ② scrcpy-server：官方 release 资产，哈希写死——与 SDL3 / scrcpy 源码 /
+#    platform-tools 同一套 fail-closed 做法。
+#
+#    【为什么不动态取 release API 的 digest】
+#    最初的实现是 `curl api.github.com .../releases/tags/v4.1 | sed 取 digest | head -1`，
+#    实测取到的是 **第一个资产** scrcpy-linux-x86_64-v4.1.tar.gz 的摘要
+#    （ad56ae8b…），而 server 自己的摘要是 deacb991… —— 资产顺序不保证，
+#    于是「下载是对的、校验却失败」（2026-10-11 CI 实踩）。release 资产一旦发布
+#    即不可变，写死哈希既最严格，也让我们不必依赖 GitHub API（CI 里未鉴权的
+#    api.github.com 还额外有速率限制风险）。
+#    该哈希取自 v4.1 release 页 scrcpy-server-v4.1 的官方 digest。
+RUN curl -fsSL --retry 3 --retry-all-errors -o "scrcpy-server-v${SCRCPY_VERSION}" \
+      "https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-server-v${SCRCPY_VERSION}" \
+    && echo "deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae  scrcpy-server-v${SCRCPY_VERSION}" | sha256sum -c - \
     && echo "scrcpy-server 校验通过"
 
 # ③ adb：Google 官方 platform-tools（固定版本 + 固定哈希）
