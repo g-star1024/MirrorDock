@@ -1,0 +1,47 @@
+# MirrorDock NAS 版 · Docker Compose（含飞牛 fnOS 说明）
+#
+# fnOS 部署方式：「Docker → Compose → 新建项目」，把本文件内容粘贴进去即可。
+# 飞牛图形界面的 Docker 管理面板支持导入 compose，也有「使用特权模式运行」开关。
+#
+# 【为什么必须 privileged】
+# 安卓调试走 USB 时，容器需要有权限访问 /dev/bus/usb 下的设备节点。
+# 群晖/飞牛社区里跑 ADB、Frigate（USB 摄像头）等方案普遍使用 privileged，
+# 是家庭内网场景下的通行做法。若你的安全策略不允许，可退而精确挂载：
+#   devices:
+#     - "/dev/bus/usb:/dev/bus/usb"
+
+services:
+  mirrordock:
+    image: ghcr.io/g-star1024/mirrordock-nas:latest
+    container_name: mirrordock-nas
+
+    # 常开机是这个项目的立身之本：宿主机重启后自动拉起，长时间挂机不受影响。
+    restart: unless-stopped
+
+    # USB 透传（必需）。缺失则容器看不到任何手机。
+    privileged: true
+
+    # 无线调试/mDNS 发现依赖局域网广播，桥接模式下 adb pair 会找不到手机。
+    # host 模式最省心；若必须隔离网络，改用 network_mode: bridge + ports 映射。
+    network_mode: host
+
+    environment:
+      # Web 端口（host 网络模式下直接映射为宿主机端口）
+      - PORT=8080
+      # 数据目录：录像、截图、adb 授权密钥都落在这里
+      - MIRRORDOCK_DATA=/var/lib/mirrordock
+      - TZ=Asia/Shanghai
+
+    volumes:
+      # 数据卷：录像与截图（建议放在 NAS 的大容量存储池上）
+      - ./data:/var/lib/mirrordock
+      # adb 授权密钥持久化。不做这一项，容器每次重建都要在手机上重新点
+      # 「允许 USB 调试」——而 NAS 通常离人很远，重新授权极其麻烦。
+      - ./adbkeys:/root/.android
+      # USB 设备节点。privileged 已包含，显式写出便于排错。
+      - /dev/bus/usb:/dev/bus/usb
+
+    # 本地构建的镜像可换成 image: mirrordock-nas:latest
+    # build:
+    #   context: ./server
+    #   dockerfile: ../Dockerfile

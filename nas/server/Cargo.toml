@@ -1,0 +1,29 @@
+# NAS 版服务端。
+#
+# 依赖刻意保持精简：服务端只做「薄编排层」——真正的判据逻辑都在 md-core，
+# 与桌面端同源（设备去重/通道优先级/结构化错误），避免两端实现漂移。
+[package]
+name = "mirrordock-nas"
+version = "0.4.24"
+edition = "2021"
+description = "MirrorDock NAS 版服务端：常开机 + USB 直连 + 录制归档 + Web 访问"
+publish = false
+
+[[bin]]
+name = "mirrordock-nas"
+path = "src/main.rs"
+
+[dependencies]
+md-core = { path = "../../crates/md-core" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# rt-multi-thread：HTTP 服务与后台录制监视线程共用；process 用于拉起 scrcpy/adb。
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "process", "io-util", "sync", "net", "fs"] }
+axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio", "macros", "query"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# libc：仅在 Unix 下用于重置子进程信号处置（见 record.rs 的 X10-95 说明）。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

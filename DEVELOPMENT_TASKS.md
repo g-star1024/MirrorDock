@@ -967,3 +967,54 @@
   - **中途取舍**：起初在后端加了 `resolve_connection_preference` 命令 + `resolve_usb_preference`/`UsbPreference`，后发现前端纯函数已能实现、后端那套成死代码，**已删除**（命令、handler 注册、5 个后端测试），收敛为前端单一实现。反向验证：破坏 suggest 的 ready 判定 → 测试变红，恢复 → 转绿。
   - **测试**：前端 `usbPreference` describe 2 例（徽标判定 / suggest 仅在「首选无线+USB ready」时触发，覆盖 USB 首选不提示、USB offline 不提示、纯无线不提示）。cargo 213 ✅、clippy 零告警、前端 84 ✅、tsc+vite ✅。
   - **未验证面**：真机上「插着 USB 走无线」时「改用有线」按钮是否如期出现 + 点击后是否走 USB——需用户在双通道场景实测（沙箱无真机）。A 方向（USB 插入自动迁移）未做，涉及重建会话+游戏重登，待用户后续再议。
+
+## X10-113 · NAS 版立项与首轮实现（2026-10-11 凌晨，用户拍板）
+
+**立项场景**：NAS 常开机 + USB 直连 + 24h 录制归档 + 远程 web 访问。
+组织形式：同一仓库（不新建仓库、不开长期分支），`nas/` 子目录 + `crates/md-core` 共享库。
+
+### 已完成
+- **md-core 抽取**：devices（11 个判据函数 + 4 个类型）、error（AppError）、base32。
+  桌面端通过 `pub use md_core::...` re-export，既有调用路径一字未改。
+- **workspace 设计**：根 `Cargo.toml` 显式 `exclude = ["src-tauri"]`，使 `src-tauri/target/`
+  路径不变，CI 四平台打包/发版链路零改动。
+- **NAS 服务端**（`nas/server`，axum）：设备列表、headless 录制启停、录像归档列表/删除、
+  截图、手机文件列表、/files 静态服务（支持 Range，MP4 可直接拖动播放）。
+- **Web 界面**（`nas/web/index.html`，单文件无构建）：复用桌面端设计语言与
+  「首选 USB / 首选 无线」徽标语义。
+- **Dockerfile**：三阶段（scrcpy v4.1 + SDL3 release-3.4.16 + platform-tools r34.0.5，
+  哈希与 build.yml 逐字一致 + 官方 release digest 动态校验）。
+- **CI**：新增独立 `.github/workflows/nas-image.yml`（不改动 build.yml，风险隔离）。
+
+### 真机验证（macOS + 实机 qc8d8tonbmmzm7qs）
+- 设备列表正确识别，首选通道判定为 USB（与桌面端一致）✅
+- 录制启停产出 156 KB MP4，**moov 索引完整可播放**（X10-95 的 SIGINT 教训在 NAS 端复现成功）✅
+- 真机截图 PNG ✅ · /sdcard 文件列表 ✅ · 路径穿越被拒 ✅
+- cargo：桌面端 213 全绿、md-core 无回归、NAS 端 7 个新测试通过；clippy 零告警。
+
+### 未验证（沙箱/当前环境无法覆盖，需真机）
+- USB 透传进容器后 adb 识别（需真 NAS）
+- 飞牛 fnOS Docker 面板实际部署
+- 24 小时连续录制稳定性
+- 无显示器场景下的首次 RSA 授权完整流程
+
+### 明确不做（留待下一轮）
+- **实时视频画面**：需实装 scrcpy v4.1 协议转发 + 浏览器 WebCodecs。工作量与风险都大，
+  且不能凭记忆猜协议（元教训：猜 = 错的做法），需先拿到协议权威定义再实现。
+- **companion_pairing 抽取**：内部有 4 处 `tauri::async_runtime::spawn`，迁到跨平台 crate
+  必须改成 tokio::spawn（属改业务逻辑），违背「不破坏桌面端」铁律，故本轮不搬。
+- **升级为完整 Cargo workspace（含 src-tauri）**：会让 target 路径改变、波及四平台发版，
+  收益不抵风险，暂保持 exclude 方案。
+
+### 本轮踩到的坑（记录以免重犯）
+1. **zsh 的 extended-glob**：`^fn xxx` 这类 grep 模式在 zsh 下被当成取反，导致
+   「函数不存在」的假阴性——差点误判代码缺失。本项目里定位代码一律用 Python 或非锚定 grep。
+2. **抽取必须求依赖闭包**：手工划行号区间搬运会漏掉散落在前后的辅助函数
+   （`device_has_usb`/`state_rank`/`merge_offline_shadows`…），逐个靠编译器报不可收敛。
+   改为自动求调用闭包后一次搬干净。
+3. **搬 struct 要连带搬上方 `#[derive]`**：漏搬会留下孤儿属性挂到下一个 item，
+   表现为「SessionPhase 的 Debug 重复派生」这种看不出根因的报错。
+4. **跨 crate 后私有字段/方法不可访问**：struct 字段、`impl` 里的 `fn new` 都要补 pub。
+5. **Debian slim 缺 `make`**：CMake 报「CMAKE_C_COMPILER not set」极易误判成编译器没装
+   （CI 的 Ubuntu runner 自带 make，容器里没有）。已在 Dockerfile 加工具链自检。
+6. **axum 0.8 路径参数是 `{name}` 不是 `:name`**：编译期不报错，只有真跑起来才崩。

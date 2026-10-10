@@ -1,0 +1,14 @@
+# X10-113：Rust workspace —— 桌面端与 NAS 端共用同一套业务逻辑。
+#
+# 【为什么把 src-tauri 显式 exclude】
+# 若把 src-tauri 纳为普通 member，Cargo 会把构建产物统一输出到 workspace 根目录的
+# target/，而 CI（build.yml）里四处引用 `src-tauri/target/<triple>/release/bundle`
+# 做打包、版本核验与 SBOM——路径一旦改变，四平台发版会直接失败。
+#
+# exclude 之后 src-tauri 仍是自己的 workspace root，`src-tauri/target/` 原样不变，
+# CI 一行都不用改。这是「不得破坏已有桌面端」铁律的直接体现：共享用 path 依赖做，
+# 不用牺牲桌面端的构建布局去换形式上的统一。
+[workspace]
+members = ["crates/md-core", "nas/server"]
+exclude = ["src-tauri"]
+resolver = "2"

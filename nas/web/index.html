@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MirrorDock · NAS 版</title>
+<style>
+  :root {
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --line: #e6e8ef;
+    --text: #1f2329;
+    --muted: #6b7280;
+    --accent: #2f6df6;
+    --ok: #1d9e75;
+    --warn: #ba7517;
+    --danger: #c0392b;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 24px 64px;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  header { margin-bottom: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 20px; margin-bottom: 16px;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button, select {
+    font: inherit; font-size: 14px; padding: 8px 16px; border-radius: 10px;
+    border: 1px solid var(--line); background: #fff; cursor: pointer; color: var(--text);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); border-color: #f2c9c3; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .badge {
+    display: inline-block; font-size: 12px; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid transparent; margin-left: 8px;
+  }
+  .badge.usb { background: #e1f5ee; color: #0f6e56; border-color: #9fe1cb; }
+  .badge.wireless { background: #faeeda; color: #854f0b; border-color: #fac775; }
+  .badge.ready { background: #e1f5ee; color: #0f6e56; }
+  .badge.unauthorized { background: #fcebeb; color: #a32d2d; }
+  .badge.offline { background: #f1efe8; color: #5f5e5a; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li.item {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 0; border-bottom: 1px solid var(--line);
+  }
+  li.item:last-child { border-bottom: none; }
+  .name { font-size: 14px; word-break: break-all; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .msg {
+    margin-top: 12px; padding: 12px 14px; border-radius: 12px;
+    font-size: 13px; background: #f6f7fb; border: 1px solid var(--line); white-space: pre-wrap;
+  }
+  .msg.error { background: #fcebeb; border-color: #f2c9c3; color: #7d2620; }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MirrorDock · NAS 版</h1>
+    <div class="sub" id="status-line">正在连接…</div>
+  </header>
+
+  <section class="card">
+    <div class="card-head"><h2>手机</h2><button id="refresh-devices">刷新</button></div>
+    <ul id="devices"><li class="empty">读取中…</li></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>录制</h2><span id="rec-state" class="meta">未在录制</span></div>
+    <div class="row">
+      <select id="rec-serial"></select>
+      <select id="rec-quality">
+        <option value="balanced">标准 1080p</option>
+        <option value="smooth">流畅 1024</option>
+        <option value="sharp">高清 2560</option>
+      </select>
+      <button class="primary" id="rec-start">开始录制</button>
+      <button id="rec-stop" disabled>结束录制</button>
+    </div>
+    <div class="msg" id="rec-msg" hidden></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>录像归档</h2><button id="refresh-rec">刷新</button></div>
+    <ul id="recordings"><li class="empty">暂无录像</li></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>截图</h2><button id="shot">立即截图</button></div>
+    <div class="sub">容器没有画面窗口，截图是远程查看手机当前界面的主要方式。</div>
+    <div id="shot-preview" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>手机文件</h2><button id="refresh-files">刷新</button></div>
+    <div class="row" style="margin-bottom:10px">
+      <select id="file-serial"></select>
+      <input id="file-path" value="/sdcard" style="flex:1;min-width:180px;padding:8px 12px;border-radius:10px;border:1px solid var(--line)">
+      <button id="list-files">列出</button>
+    </div>
+    <ul id="files"><li class="empty">尚未列出</li></ul>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let devices = [];
+
+function show(el, text, isError) {
+  el.hidden = false;
+  el.textContent = text;
+  el.className = 'msg' + (isError ? ' error' : '');
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // 后端返回的是与桌面端同形的 AppError：code + message + recovery。
+    const e = new Error((body.message || '请求失败') + '\n' + (body.recovery || ''));
+    e.code = body.code;
+    throw e;
+  }
+  return body;
+}
+
+async function loadStatus() {
+  try {
+    const s = await api('/api/status');
+    $('status-line').textContent =
+      `v${s.version} · 数据目录 ${s.data_dir} · adb ${s.adb}${s.recording ? ' · 录制中' : ''}`;
+  } catch (e) { $('status-line').textContent = '无法连接服务端'; }
+}
+
+async function loadDevices() {
+  const ul = $('devices');
+  ul.innerHTML = '<li class="empty">读取中…</li>';
+  try {
+    const data = await api('/api/devices');
+    devices = data.devices || [];
+    if (!devices.length) {
+      ul.innerHTML = '<li class="empty">没有检测到手机。请确认已插好数据线、'
+        + '容器已透传 USB，并且手机上已允许本机调试（首次连接会出现授权弹窗）。</li>';
+    } else {
+      ul.innerHTML = '';
+      devices.forEach((d) => {
+        const li = document.createElement('li');
+        li.className = 'item';
+        li.innerHTML =
+          `<div><span class="name">${d.label}</span>` +
+          `<span class="badge ${d.preferred_usb ? 'usb' : 'wireless'}">` +
+          `${d.preferred_usb ? '首选 USB' : '首选 无线'}</span>` +
+          `<span class="badge ${d.state}">${d.state}</span>` +
+          `<div class="meta">${d.channels.join(' / ')}</div></div>`;
+        ul.appendChild(li);
+      });
+    }
+    syncSerialSelects();
+  } catch (e) {
+    ul.innerHTML = '<li class="empty">读取设备列表失败：' + e.message + '</li>';
+  }
+}
+
+function syncSerialSelects() {
+  ['rec-serial', 'file-serial'].forEach((id) => {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.innerHTML = '';
+    devices.forEach((d) => {
+      const o = document.createElement('option');
+      o.value = d.serial;
+      o.textContent = `${d.label}${d.preferred_usb ? '（USB）' : '（无线）'}`;
+      sel.appendChild(o);
+    });
+    if (devices.some((d) => d.serial === keep)) sel.value = keep;
+  });
+}
+
+async function loadRecordings() {
+  const ul = $('recordings');
+  try {
+    const data = await api('/api/recordings');
+    const items = data.recordings || [];
+    if (!items.length) { ul.innerHTML = '<li class="empty">暂无录像</li>'; return; }
+    ul.innerHTML = '';
+    items.forEach((r) => {
+      const li = document.createElement('li');
+      li.className = 'item';
+      const mb = (r.bytes / 1048576).toFixed(1);
+      const when = r.modified ? new Date(r.modified * 1000).toLocaleString('zh-CN') : '';
+      li.innerHTML = `<div><span class="name">${r.name}</span>
+        <div class="meta">${mb} MB · ${when}</div></div>
+        <div class="row">
+          <a href="/files/recordings/${encodeURIComponent(r.name)}" target="_blank">
+            <button>播放/下载</button></a>
+          <button class="danger" data-del="${r.name}">删除</button>
+        </div>`;
+      ul.appendChild(li);
+    });
+    ul.querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('确定删除这份录像？')) return;
+        try {
+          await api('/api/recordings/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+          loadRecordings();
+        } catch (e) { alert(e.message); }
+      };
+    });
+  } catch (e) { ul.innerHTML = '<li class="empty">读取失败：' + e.message + '</li>'; }
+}
+
+async function startRecord() {
+  const serial = $('rec-serial').value;
+  if (!serial) { show($('rec-msg'), '请先连接一台手机。', true); return; }
+  try {
+    const r = await api('/api/record/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serial, quality: $('rec-quality').value }),
+    });
+    $('rec-state').textContent = '录制中：' + r.file;
+    $('rec-start').disabled = true;
+    $('rec-stop').disabled = false;
+    show($('rec-msg'), '已开始录制：' + r.file);
+  } catch (e) { show($('rec-msg'), e.message, true); }
+}
+
+async function stopRecord() {
+  try {
+    const r = await api('/api/record/stop', { method: 'POST' });
+    $('rec-state').textContent = '未在录制';
+    $('rec-start').disabled = false;
+    $('rec-stop').disabled = true;
+    show($('rec-msg'), '录制已结束：' + r.file);
+    loadRecordings();
+  } catch (e) { show($('rec-msg'), e.message, true); }
+}
+
+async function takeShot() {
+  const serial = $('file-serial').value || $('rec-serial').value;
+  if (!serial) { alert('请先连接一台手机。'); return; }
+  try {
+    const r = await api('/api/screenshot?serial=' + encodeURIComponent(serial));
+    $('shot-preview').innerHTML =
+      `<img src="/files/screenshots/${encodeURIComponent(r.file)}"
+            style="max-width:100%;border-radius:12px;border:1px solid var(--line)">`;
+  } catch (e) { alert(e.message); }
+}
+
+async function listFiles() {
+  const serial = $('file-serial').value;
+  const ul = $('files');
+  if (!serial) { ul.innerHTML = '<li class="empty">请先连接一台手机</li>'; return; }
+  try {
+    const r = await api('/api/files?serial=' + encodeURIComponent(serial)
+      + '&path=' + encodeURIComponent($('file-path').value));
+    const entries = r.entries || [];
+    ul.innerHTML = entries.length
+      ? entries.map((e) => `<li class="item"><span class="name">${e}</span></li>`).join('')
+      : '<li class="empty">该目录下没有内容</li>';
+  } catch (e) { ul.innerHTML = '<li class="empty">' + e.message + '</li>'; }
+}
+
+$('refresh-devices').onclick = loadDevices;
+$('refresh-rec').onclick = loadRecordings;
+$('refresh-files').onclick = listFiles;
+$('rec-start').onclick = startRecord;
+$('rec-stop').onclick = stopRecord;
+$('shot').onclick = takeShot;
+$('list-files').onclick = listFiles;
+
+loadStatus();
+loadDevices();
+loadRecordings();
+setInterval(loadStatus, 15000);
+</script>
+</body>
+</html>
