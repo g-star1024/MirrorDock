@@ -55,6 +55,8 @@ import App, {
   screenshotFileName,
   sessionShortcutKeys,
   sessionStatus,
+  suggestedUsbSerial,
+  preferredChannelLabel,
   supportText,
   writeDeviceNickname,
   type DeviceCapabilities,
@@ -135,6 +137,41 @@ beforeEach(() => {
   localStorage.clear();
   invokeMock.mockReset();
   invokeMock.mockImplementation(baseInvoke);
+});
+
+// X10-111（B+C）：USB 优先判定——首选通道徽标 + 「改用有线」提示。
+describe("usbPreference", () => {
+  const conn = (serial: string, kind: "usb" | "wireless", state: "ready" | "offline" | "unauthorized" | "unknown") => ({ serial, kind, state });
+  const dev = (serial: string, connections: ReturnType<typeof conn>[]) => ({
+    serial, label: "M2104K10AC", state: "ready" as const, physical_serial: "PHYS-1", connections,
+  });
+
+  it("labels_preferred_channel_from_primary_serial", () => {
+    expect(preferredChannelLabel(dev("79j7kn9tkjt8rwss", [conn("79j7kn9tkjt8rwss", "usb", "ready")]))).toBe("首选 USB");
+    expect(preferredChannelLabel(dev("192.168.2.90:41901", [conn("192.168.2.90:41901", "wireless", "ready")]))).toBe("首选 无线");
+    expect(preferredChannelLabel(dev("adb-x._adb-tls-connect._tcp", [conn("adb-x._adb-tls-connect._tcp", "wireless", "ready")]))).toBe("首选 无线");
+  });
+
+  it("suggests_usb_only_when_primary_wireless_and_usb_ready", () => {
+    // 首选无线 + 有 ready USB ⇒ 提示该 USB。
+    const dual = dev("192.168.2.90:41901", [
+      conn("192.168.2.90:41901", "wireless", "ready"),
+      conn("79j7kn9tkjt8rwss", "usb", "ready"),
+    ]);
+    expect(suggestedUsbSerial(dual)).toBe("79j7kn9tkjt8rwss");
+    // 首选已是 USB ⇒ 不提示。
+    const usbFirst = dev("79j7kn9tkjt8rwss", [conn("79j7kn9tkjt8rwss", "usb", "ready")]);
+    expect(suggestedUsbSerial(usbFirst)).toBeNull();
+    // 首选无线、USB offline ⇒ 不提示（休眠的 USB 不作数）。
+    const usbSleeping = dev("192.168.2.90:41901", [
+      conn("192.168.2.90:41901", "wireless", "ready"),
+      conn("79j7kn9tkjt8rwss", "usb", "offline"),
+    ]);
+    expect(suggestedUsbSerial(usbSleeping)).toBeNull();
+    // 纯无线（无 USB）⇒ 不提示。
+    const wirelessOnly = dev("192.168.2.90:41901", [conn("192.168.2.90:41901", "wireless", "ready")]);
+    expect(suggestedUsbSerial(wirelessOnly)).toBeNull();
+  });
 });
 
 describe("sessionStatus", () => {

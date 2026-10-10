@@ -959,3 +959,11 @@
     - B. **点连接前唤醒 USB**：用户点「开始镜像」时，若同物理设备有 USB 端点但 offline，先尝试唤醒/重连 USB，成功则优先用 USB，失败再回落无线。
     - C. **仅 UI 明示**：设备卡上标注「当前首选通道：USB/无线」，让用户一眼看清将要走哪条。
   - **现状**：逻辑已证正确，无行为改动；仅补测试 + 台账。等用户选定 A/B/C 再实现。
+
+- [ ] ⏳ **X10-112 USB 优先提示落地（2026-10-10 上午，用户拍板「B 为主 + C 辅助」）**：
+  - **实现（前端纯函数，单一实现，零新增 IPC）**：数据已在合并后的 `device.serial`（首选通道）与 `device.connections`（含各通道 ready 状态）里，前端本地推导即可，不加新 Tauri 命令。
+    - **C（首选通道徽标）**：`preferredChannelLabel(device)`——首选是 USB 显「首选 USB」（绿），是无线显「首选 无线」（琥珀）。设备卡标题旁新增 `pref-badge`，一眼看清本次点「开始镜像」会走哪条。
+    - **B（改用有线入口）**：`suggestedUsbSerial(device)`——当前首选是无线、但同组**存在 ready 的 USB 端点**时，在「开始镜像」旁给「改用有线」按钮，点击即以该 USB serial 直接启动（有线更稳）。**判据全基于 ready 状态**：offline/休眠的 USB 不作数，杜绝「USB 休眠被误当可切」的误判——这是对原 B 方案「点连接前唤醒 offline USB」的更安全修正（不引入"等待 offline USB 被戳醒"的不确定性，只认已 ready 的 USB）。
+  - **中途取舍**：起初在后端加了 `resolve_connection_preference` 命令 + `resolve_usb_preference`/`UsbPreference`，后发现前端纯函数已能实现、后端那套成死代码，**已删除**（命令、handler 注册、5 个后端测试），收敛为前端单一实现。反向验证：破坏 suggest 的 ready 判定 → 测试变红，恢复 → 转绿。
+  - **测试**：前端 `usbPreference` describe 2 例（徽标判定 / suggest 仅在「首选无线+USB ready」时触发，覆盖 USB 首选不提示、USB offline 不提示、纯无线不提示）。cargo 213 ✅、clippy 零告警、前端 84 ✅、tsc+vite ✅。
+  - **未验证面**：真机上「插着 USB 走无线」时「改用有线」按钮是否如期出现 + 点击后是否走 USB——需用户在双通道场景实测（沙箱无真机）。A 方向（USB 插入自动迁移）未做，涉及重建会话+游戏重登，待用户后续再议。

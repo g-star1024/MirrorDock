@@ -67,6 +67,22 @@ function connectionLabel(device: Device) {
   if (kinds.has("usb")) return "USB";
   return "";
 }
+
+// X10-111（C）：首选通道徽标——本次点「开始镜像」实际会走的通道。
+// 后端 dedup 后 device.serial 即首选通道（USB 优先），与后端 is_wireless_endpoint 同口径判定。
+export function preferredChannelLabel(device: Device): string {
+  return looksLikeWirelessEndpoint(device.serial) ? "首选 无线" : "首选 USB";
+}
+// X10-111（B）：是否提示「可改用有线」——当前首选是无线、但同组存在 ready 的 USB 端点。
+// 返回该 USB 的 serial（供「改用有线」按钮直接以它启动）；不该提示时返回 null。
+// 判据全基于 ready 状态：offline 的 USB 不作数（杜绝「USB 休眠被误当成可切」的误判）。
+export function suggestedUsbSerial(device: Device): string | null {
+  if (!looksLikeWirelessEndpoint(device.serial)) return null; // 首选已是 USB，无需提示
+  const usb = device.connections.find(
+    (connection) => connection.kind === "usb" && connection.state === "ready"
+  );
+  return usb ? usb.serial : null;
+}
 // 同型号多台设备会显示相同名称（如两台 M2104K10AC），追加 -1、-2 后缀便于区分。
 // 以设备在列表中的出现顺序统一编号，key 用实际端点 serial。
 function buildDisplayLabels(devices: Device[]): Record<string, string> {
@@ -2646,6 +2662,9 @@ function App() {
                     const own = sessionFor(device.serial);
                     const owned = own?.phase === "connecting" || own?.phase === "streaming";
                     const favorite = favoriteDevices.includes(device.serial);
+                    // X10-111（C+B）：首选通道徽标 + 「可改用有线」提示（仅未在镜像时给切换入口）。
+                    const prefBadge = device.state === "ready" ? preferredChannelLabel(device) : null;
+                    const usbAlt = device.state === "ready" && !owned ? suggestedUsbSerial(device) : null;
                     return (
                       <div className={`device-card ${owned ? "device-card-active" : ""}`} key={device.serial}>
                         <span className={`status-dot ${owned ? "ready" : device.state}`} aria-hidden="true" />
@@ -2654,6 +2673,14 @@ function App() {
                             {favorite && <span className="fav-star" aria-hidden="true">★ </span>}
                             {displayLabels[device.serial] ?? device.label}
                             {badge && <span className="conn-badge inline">{badge}</span>}
+                            {prefBadge && (
+                              <span
+                                className={`conn-badge inline pref-badge ${looksLikeWirelessEndpoint(device.serial) ? "wireless" : "usb"}`}
+                                title="本次点「开始镜像」实际会走的通道（USB 更稳）"
+                              >
+                                {prefBadge}
+                              </span>
+                            )}
                             {lockStamp && <span className="conn-badge inline lock-badge">{lockTag(lockStamp)}</span>}
                             {/* X10-88：自定义备注编辑（铅笔按钮）。备注以 physical_serial 为键。 */}
                             <button
@@ -2748,9 +2775,23 @@ function App() {
                                   {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
                                 </button>
                               ) : (
-                                <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
-                                  {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
-                                </button>
+                                <>
+                                  <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
+                                    {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
+                                  </button>
+                                  {/* X10-111（B）：首选是无线但有 ready USB 时，给一键改用有线的入口。 */}
+                                  {usbAlt && (
+                                    <button
+                                      className="secondary-button"
+                                      type="button"
+                                      disabled={!scrcpyReady || isLaunching || isStopping}
+                                      title="检测到你插着数据线——有线更稳、不易断连，点击改走 USB 启动镜像"
+                                      onClick={() => void startMirroring(usbAlt)}
+                                    >
+                                      {launchingSerial === usbAlt ? "正在启动…" : "改用有线"}
+                                    </button>
+                                  )}
+                                </>
                               )}
                             </>
                           )}

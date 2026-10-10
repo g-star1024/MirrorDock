@@ -289,6 +289,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .conn-badge { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; background: #eaf0fb; color: #2f6bd8; font-size: 12px; font-weight: 650; line-height: 1.6; white-space: nowrap; }
 .conn-badge:last-child { margin-left: auto; }
 .conn-badge.inline { margin-left: 6px; padding: 1px 7px; font-size: 11px; line-height: 1.5; }
+/* X10-111（C）：首选通道徽标——有线=绿（稳），无线=琥珀（提醒易断）。 */
+.conn-badge.pref-badge.usb { background: #e6f6ec; color: #1f8a4c; }
+.conn-badge.pref-badge.wireless { background: #fdf1e0; color: #b06a00; }
 
 .capability-panel { display: grid; gap: 8px; align-content: start; margin-top: 14px; padding: 14px 16px; border: 1px solid #e6eaf2; border-radius: 14px; background: #fbfcfe; }
 .capability-panel > strong { color: #253041; font-size: 14px; }
