@@ -8,8 +8,10 @@
 
 mod adb;
 mod api;
+mod mirror_ws;
 mod record;
 mod retention;
+mod scrcpy_proto;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
@@ -26,6 +28,8 @@ pub struct State {
     recording: Mutex<Option<record::Recording>>,
     /// 归档保留天数（启动时解析一次，与启动日志和 /api/status 同源）。
     retention_days: u64,
+    /// 实时镜像会话表（serial → 会话）。一台设备同一时刻只一路镜像。
+    mirrors: std::sync::Arc<mirror_ws::MirrorManager>,
 }
 
 fn data_dir() -> PathBuf {
@@ -88,6 +92,7 @@ async fn main() {
         data_dir: data.clone(),
         recording: Mutex::new(None),
         retention_days,
+        mirrors: std::sync::Arc::new(mirror_ws::MirrorManager::default()),
     });
 
     // 开机自检：scrcpy 缺 server 时，设备识别与截图（走 adb 通道）全都正常，
@@ -114,7 +119,9 @@ async fn main() {
         .route("/api/record/stop", post(api::stop_record))
         .route("/api/recordings", get(api::recordings))
         .route("/api/recordings/{name}", delete(api::delete_recording))
-        .route("/api/files", get(api::list_files));
+        .route("/api/files", get(api::list_files))
+        .route("/api/stream/ws", get(mirror_ws::stream_ws))
+        .route("/api/stream/stop", post(api::stop_mirror));
 
     // 录像/截图下载。用现成的静态服务而不是自写下载接口：它天然支持 Range 请求，
     // 浏览器能直接拖动 MP4 进度条播放，这是「24h 录制归档」场景里用户真正要的

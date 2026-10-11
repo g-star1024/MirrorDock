@@ -20,9 +20,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # rt-multi-thread：HTTP 服务与后台录制监视线程共用；process 用于拉起 scrcpy/adb。
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "process", "io-util", "sync", "net", "fs"] }
-axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio", "macros", "query"] }
+axum = { version = "0.8", default-features = false, features = ["json", "http1", "tokio", "macros", "query", "ws"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# 实时镜像：视频帧 base64 编码（WS 文本帧），futures-util 提供 WS stream/sink 工具。
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 # libc：仅在 Unix 下用于重置子进程信号处置（见 record.rs 的 X10-95 说明）。
 [target.'cfg(unix)'.dependencies]

@@ -261,6 +261,21 @@ pub async fn list_files(Query(q): Query<FileQuery>) -> ApiResult {
     }
 }
 
+/// 主动停止某设备的实时镜像。镜像本身会随浏览器全部断开而闲置，但设备端
+/// scrcpy-server 仍在编码耗电——提供一个显式关闭入口，避免「网页关了手机还在投屏」。
+#[derive(Deserialize)]
+pub struct MirrorStopQuery {
+    pub serial: String,
+}
+
+pub async fn stop_mirror(
+    AxumState(state): AxumState<Arc<State>>,
+    Query(q): Query<MirrorStopQuery>,
+) -> ApiResult {
+    let stopped = state.mirrors.stop(&q.serial).await;
+    Ok(Json(serde_json::json!({ "stopped": stopped, "serial": q.serial })))
+}
+
 pub async fn delete_recording(
     AxumState(state): AxumState<Arc<State>>,
     Path(name): Path<String>,
