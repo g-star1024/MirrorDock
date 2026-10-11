@@ -82,6 +82,25 @@
   #mirror-stage.live #mirror-placeholder { display: none; }
   .mirror-toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 12px; }
   .mirror-toolbar button { font-size: 13px; padding: 7px 12px; }
+
+  /* 截图画廊 */
+  .shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 12px; }
+  .shot-cell { position: relative; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #0b0d12; aspect-ratio: 9/19; }
+  .shot-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .shot-cell .shot-del {
+    position: absolute; top: 6px; right: 6px; padding: 3px 8px; font-size: 12px;
+    background: rgba(0,0,0,.55); color: #fff; border: none; border-radius: 8px;
+  }
+  .shot-cell .shot-name {
+    position: absolute; left: 0; right: 0; bottom: 0; font-size: 11px; color: #e8eaf0;
+    background: linear-gradient(transparent, rgba(0,0,0,.7)); padding: 14px 8px 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* 文件项操作按钮 */
+  .file-acts button { font-size: 12px; padding: 5px 10px; margin-left: 6px; }
+  input[type=file] { font-size: 13px; }
+  .app-item .badge.tp { background: #e1f5ee; color: #0f6e56; }
+  .app-item .badge.sys { background: #f1efe8; color: #5f5e5a; }
 </style>
 </head>
 <body>
@@ -145,9 +164,15 @@
   </section>
 
   <section class="card">
-    <div class="card-head"><h2>截图</h2><button id="shot">立即截图</button></div>
-    <div class="sub">容器没有画面窗口，截图是远程查看手机当前界面的主要方式。</div>
-    <div id="shot-preview" style="margin-top:12px"></div>
+    <div class="card-head">
+      <h2>截图画廊</h2>
+      <div class="row">
+        <button id="shot">立即截图</button>
+        <button id="refresh-shots">刷新</button>
+      </div>
+    </div>
+    <div class="sub">容器没有画面窗口，截图是远程查看手机当前界面的主要方式。新截的图会进入下方画廊。</div>
+    <div class="shot-grid" id="shot-grid"><div class="empty">暂无截图</div></div>
   </section>
 
   <section class="card">
@@ -157,7 +182,30 @@
       <input id="file-path" value="/sdcard" style="flex:1;min-width:180px;padding:8px 12px;border-radius:10px;border:1px solid var(--line)">
       <button id="list-files">列出</button>
     </div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="file" id="file-upload-input" style="flex:1;min-width:180px">
+      <button id="file-upload">上传到当前目录</button>
+    </div>
+    <div class="msg" id="file-msg" hidden></div>
     <ul id="files"><li class="empty">尚未列出</li></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>应用</h2>
+      <div class="row">
+        <label class="meta" style="display:flex;align-items:center;gap:4px">
+          <input type="checkbox" id="apps-system"> 含系统应用
+        </label>
+        <button id="refresh-apps">刷新</button>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="file" id="apk-input" accept=".apk" style="flex:1;min-width:180px">
+      <button id="apk-install">安装 APK</button>
+    </div>
+    <div class="msg" id="apps-msg" hidden></div>
+    <ul id="apps"><li class="empty">尚未列出</li></ul>
   </section>
 </div>
 
@@ -306,17 +354,46 @@ async function stopRecord() {
   } catch (e) { show($('rec-msg'), e.message, true); }
 }
 
+// ===================== 截图画廊 =====================
 async function takeShot() {
-  const serial = $('file-serial').value || $('rec-serial').value;
+  const serial = $('file-serial').value || $('rec-serial').value || $('mirror-serial').value;
   if (!serial) { alert('请先连接一台手机。'); return; }
   try {
-    const r = await api('/api/screenshot?serial=' + encodeURIComponent(serial));
-    $('shot-preview').innerHTML =
-      `<img src="/files/screenshots/${encodeURIComponent(r.file)}"
-            style="max-width:100%;border-radius:12px;border:1px solid var(--line)">`;
+    await api('/api/screenshot?serial=' + encodeURIComponent(serial));
+    loadScreenshots();
   } catch (e) { alert(e.message); }
 }
 
+async function loadScreenshots() {
+  const grid = $('shot-grid');
+  try {
+    const data = await api('/api/screenshots');
+    const items = data.screenshots || [];
+    if (!items.length) { grid.innerHTML = '<div class="empty">暂无截图</div>'; return; }
+    grid.innerHTML = '';
+    items.forEach((s) => {
+      const cell = document.createElement('div');
+      cell.className = 'shot-cell';
+      cell.innerHTML =
+        `<img loading="lazy" src="/files/screenshots/${encodeURIComponent(s.name)}" alt="${s.name}">` +
+        `<button class="shot-del" data-del="${s.name}">删</button>` +
+        `<div class="shot-name">${s.name}</div>`;
+      cell.querySelector('img').onclick = () =>
+        window.open('/files/screenshots/' + encodeURIComponent(s.name), '_blank');
+      cell.querySelector('[data-del]').onclick = async (ev) => {
+        ev.stopPropagation();
+        if (!confirm('删除这张截图？')) return;
+        try {
+          await api('/api/screenshots/' + encodeURIComponent(s.name), { method: 'DELETE' });
+          loadScreenshots();
+        } catch (e) { alert(e.message); }
+      };
+      grid.appendChild(cell);
+    });
+  } catch (e) { grid.innerHTML = '<div class="empty">读取失败：' + e.message + '</div>'; }
+}
+
+// ===================== 手机文件（列表 + 上传/下载/删除）=====================
 async function listFiles() {
   const serial = $('file-serial').value;
   const ul = $('files');
@@ -325,10 +402,115 @@ async function listFiles() {
     const r = await api('/api/files?serial=' + encodeURIComponent(serial)
       + '&path=' + encodeURIComponent($('file-path').value));
     const entries = r.entries || [];
-    ul.innerHTML = entries.length
-      ? entries.map((e) => `<li class="item"><span class="name">${e}</span></li>`).join('')
-      : '<li class="empty">该目录下没有内容</li>';
+    if (!entries.length) { ul.innerHTML = '<li class="empty">该目录下没有内容</li>'; return; }
+    ul.innerHTML = '';
+    entries.forEach((name) => {
+      const li = document.createElement('li');
+      li.className = 'item';
+      const full = ($('file-path').value.replace(/\/+$/, '') + '/' + name);
+      li.innerHTML =
+        `<span class="name">${name}</span>` +
+        `<span class="file-acts">` +
+        `<button data-dl="${full}">下载</button>` +
+        `<button class="danger" data-rm="${full}">删除</button>` +
+        `</span>`;
+      ul.appendChild(li);
+    });
+    ul.querySelectorAll('[data-dl]').forEach((b) => {
+      b.onclick = () => downloadFile(b.dataset.dl);
+    });
+    ul.querySelectorAll('[data-rm]').forEach((b) => {
+      b.onclick = () => deleteFile(b.dataset.rm);
+    });
   } catch (e) { ul.innerHTML = '<li class="empty">' + e.message + '</li>'; }
+}
+
+async function uploadFile() {
+  const serial = $('file-serial').value;
+  const input = $('file-upload-input');
+  if (!serial) { show($('file-msg'), '请先连接一台手机。', true); return; }
+  if (!input.files || !input.files.length) { show($('file-msg'), '请先选择要上传的文件。', true); return; }
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const dir = $('file-path').value || '/sdcard/Download';
+  show($('file-msg'), '上传中…');
+  try {
+    const res = await fetch('/api/files/upload?serial=' + encodeURIComponent(serial)
+      + '&path=' + encodeURIComponent(dir), { method: 'POST', body: fd });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body.message || '上传失败') + '\n' + (body.recovery || ''));
+    show($('file-msg'), '已上传到 ' + (body.dir || dir));
+    input.value = '';
+    listFiles();
+  } catch (e) { show($('file-msg'), e.message, true); }
+}
+
+async function downloadFile(remote) {
+  const serial = $('file-serial').value;
+  show($('file-msg'), '从手机拉取中…');
+  try {
+    const r = await api('/api/files/download?serial=' + encodeURIComponent(serial)
+      + '&remote=' + encodeURIComponent(remote));
+    show($('file-msg'), '已下载，开始保存到本机…');
+    const a = document.createElement('a');
+    a.href = r.url;
+    a.download = r.file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) { show($('file-msg'), e.message, true); }
+}
+
+async function deleteFile(remote) {
+  const serial = $('file-serial').value;
+  if (!confirm('删除手机上的这个文件？\n' + remote)) return;
+  try {
+    await api('/api/files/delete?serial=' + encodeURIComponent(serial)
+      + '&remote=' + encodeURIComponent(remote), { method: 'POST' });
+    show($('file-msg'), '已删除：' + remote);
+    listFiles();
+  } catch (e) { show($('file-msg'), e.message, true); }
+}
+
+// ===================== 应用管理 =====================
+async function loadApps() {
+  const serial = $('file-serial').value || $('rec-serial').value || $('mirror-serial').value;
+  const ul = $('apps');
+  if (!serial) { ul.innerHTML = '<li class="empty">请先连接一台手机</li>'; return; }
+  const sys = $('apps-system').checked ? '&system=1' : '';
+  ul.innerHTML = '<li class="empty">读取中…</li>';
+  try {
+    const r = await api('/api/apps?serial=' + encodeURIComponent(serial) + sys);
+    const apps = r.apps || [];
+    if (!apps.length) { ul.innerHTML = '<li class="empty">没有应用</li>'; return; }
+    ul.innerHTML = '';
+    apps.forEach((a) => {
+      const li = document.createElement('li');
+      li.className = 'item app-item';
+      li.innerHTML = `<span class="name">${a.package}</span>` +
+        `<span class="badge ${a.third_party ? 'tp' : 'sys'}">${a.third_party ? '第三方' : '系统'}</span>`;
+      ul.appendChild(li);
+    });
+  } catch (e) { ul.innerHTML = '<li class="empty">' + e.message + '</li>'; }
+}
+
+async function installApk() {
+  const serial = $('file-serial').value || $('rec-serial').value || $('mirror-serial').value;
+  const input = $('apk-input');
+  if (!serial) { show($('apps-msg'), '请先连接一台手机。', true); return; }
+  if (!input.files || !input.files.length) { show($('apps-msg'), '请先选择 .apk 文件。', true); return; }
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  show($('apps-msg'), '安装中（大 APK 可能需要几十秒）…');
+  try {
+    const res = await fetch('/api/apps/install?serial=' + encodeURIComponent(serial),
+      { method: 'POST', body: fd });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body.message || '安装失败') + '\n' + (body.recovery || ''));
+    show($('apps-msg'), '安装完成。');
+    input.value = '';
+    loadApps();
+  } catch (e) { show($('apps-msg'), e.message, true); }
 }
 
 // ===================== 实时镜像（WebCodecs + WebSocket）=====================
@@ -522,14 +704,19 @@ bindMirrorControl();
 $('refresh-devices').onclick = loadDevices;
 $('refresh-rec').onclick = loadRecordings;
 $('refresh-files').onclick = listFiles;
+$('refresh-shots').onclick = loadScreenshots;
+$('refresh-apps').onclick = loadApps;
 $('rec-start').onclick = startRecord;
 $('rec-stop').onclick = stopRecord;
 $('shot').onclick = takeShot;
 $('list-files').onclick = listFiles;
+$('file-upload').onclick = uploadFile;
+$('apk-install').onclick = installApk;
 
 loadStatus();
 loadDevices();
 loadRecordings();
+loadScreenshots();
 setInterval(loadStatus, 15000);
 </script>
 </body>
