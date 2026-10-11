@@ -105,7 +105,10 @@ impl Recording {
             .arg(format!("--max-size={max_size}"))
             .arg(format!("--video-bit-rate={bit_rate}"))
             .arg("--video-codec=h264")
-            .stdout(Stdio::piped())
+            // stdout 用不上（scrcpy 的输出都在 stderr）：留着 piped 却没人读，
+            // 管道缓冲区一旦写满 scrcpy 会被 write 阻塞——卡在一个与录制无关的
+            // 系统调用上，SIGINT 处理器也跑不完，15 秒超时被强杀。
+            .stdout(Stdio::null())
             .stderr(Stdio::piped());
 
         // X10-95（桌面端血的教训）：父进程可能继承「忽略 SIGINT」的信号处置，
@@ -163,34 +166,55 @@ impl Recording {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
+
+        // 【为什么不用 Command::new("kill")】容器里（debian slim）没有 /usr/bin/kill
+        // 二进制——`kill` 只是 shell 内建命令，而 exec 不经过 shell。此前在这里
+        // spawn 失败、错误又被 `let _ =` 吞掉，SIGINT 从未送达，15 秒后被迫
+        // SIGKILL，mp4 永远缺 moov（2026-10-11 飞牛真机实锤）。libc::kill 是
+        // 直接系统调用，不依赖任何外部程序。
+        #[cfg(unix)]
         if let Some(pid) = child.id() {
-            // 用外部 kill 发 INT：tokio 的 Child 没有直接的 signal 接口。
-            let _ = Command::new("kill")
-                .args(["-INT", &pid.to_string()])
-                .status()
-                .await;
+            // SAFETY: kill(2) 是普通系统调用，仅向目标进程发送信号。
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGINT);
+            }
         }
         match tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await {
-            Ok(Ok(_)) => {
-                // 如实验收：文件必须真的写出来了，否则报错并带上 scrcpy 的输出。
-                match tokio::fs::metadata(&self.path).await {
-                    Ok(m) if m.len() > 0 => Ok(()),
-                    Ok(_) => Err(format!(
-                        "录制文件为空（0 字节）。scrcpy 输出：{}",
-                        self.stderr_tail.lock().await
-                    )),
-                    Err(e) => Err(format!(
-                        "录制文件未生成（{e}）。scrcpy 输出：{}",
-                        self.stderr_tail.lock().await
-                    )),
-                }
+            Ok(Ok(_)) => return self.verify_output().await,
+            Ok(Err(e)) => return Err(format!("等待录制进程退出失败：{e}")),
+            // SIGINT 超时才升级 SIGTERM——scrcpy 对它的清理路径同样会写 moov。
+            Err(_) => {}
+        }
+
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
             }
-            Ok(Err(e)) => Err(format!("等待录制进程退出失败：{e}")),
-            // 超时才动用 SIGKILL——此时 moov 已经写不出来，只能如实告知。
-            Err(_) => {
-                let _ = child.kill().await;
-                Err("录制进程未能在 15 秒内优雅退出，已强制结束（文件可能不完整）。".into())
-            }
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await {
+            Ok(Ok(_)) => return self.verify_output().await,
+            Ok(Err(e)) => return Err(format!("等待录制进程退出失败：{e}")),
+            Err(_) => {}
+        }
+
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        Err("录制进程未能在 18 秒内优雅退出，已强制结束（文件可能不完整）。".into())
+    }
+
+    /// 停止后的如实验收：文件必须真的写出来了，否则报错并附上 scrcpy 的输出。
+    async fn verify_output(&self) -> Result<(), String> {
+        match tokio::fs::metadata(&self.path).await {
+            Ok(m) if m.len() > 0 => Ok(()),
+            Ok(_) => Err(format!(
+                "录制文件为空（0 字节）。scrcpy 输出：{}",
+                self.stderr_tail.lock().await
+            )),
+            Err(e) => Err(format!(
+                "录制文件未生成（{e}）。scrcpy 输出：{}",
+                self.stderr_tail.lock().await
+            )),
         }
     }
 }
