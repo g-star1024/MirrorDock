@@ -97,7 +97,11 @@ impl MirrorManager {
     /// 起解复用泵把视频事件灌进广播通道。已存在则直接复用。
     ///
     /// 返回该会话句柄；浏览器随后 `subscribe()` 收视频。
-    async fn ensure(self: &Arc<Self>, serial: &str, max_size: u16) -> io::Result<Arc<ActiveMirror>> {
+    async fn ensure(
+        self: &Arc<Self>,
+        serial: &str,
+        max_size: u16,
+    ) -> io::Result<Arc<ActiveMirror>> {
         // 快路径：已有会话直接复用（多个标签页看同一台）。
         if let Some(m) = self.get(serial).await {
             return Ok(m);
@@ -108,7 +112,8 @@ impl MirrorManager {
             return Ok(m.clone());
         }
 
-        let session = scrcpy_proto::start_mirror(serial, mirror_local_port(serial), max_size).await?;
+        let session =
+            scrcpy_proto::start_mirror(serial, mirror_local_port(serial), max_size).await?;
         let (video, control_sock, _scid, _port, server_child) = session.into_parts();
         // server_child 必须活到会话结束：把它连同解复用泵一起 move 进后台任务，
         // 任务结束（设备断开/广播无人收）时 drop 即 kill_on_drop 杀掉设备端 server。
@@ -411,7 +416,9 @@ async fn handle_ws(sock: WebSocket, state: Arc<State>, serial: String, max_size:
             let Ok(client) = serde_json::from_str::<ClientMsg>(&text) else {
                 continue;
             };
-            let Some(ctrl) = client.to_control() else { continue };
+            let Some(ctrl) = client.to_control() else {
+                continue;
+            };
             let mut buf = Vec::new();
             control::serialize(&ctrl, &mut buf);
             let mut guard = control.lock().await;
@@ -525,12 +532,7 @@ mod tests {
             height: 0,
         }));
         let mut rx = tx.subscribe();
-        let pump = tokio::spawn(pump_video(
-            video,
-            tx,
-            screen.clone(),
-            "test".to_owned(),
-        ));
+        let pump = tokio::spawn(pump_video(video, tx, screen.clone(), "test".to_owned()));
 
         // 期望序列：Meta → Session → Video
         let m1 = rx.recv().await.unwrap();

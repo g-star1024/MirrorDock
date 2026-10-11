@@ -249,7 +249,8 @@ pub mod control {
                 out[start + 14..start + 18].copy_from_slice(&y.to_be_bytes());
                 out[start + 18..start + 20].copy_from_slice(&screen.width.to_be_bytes());
                 out[start + 20..start + 22].copy_from_slice(&screen.height.to_be_bytes());
-                out[start + 22..start + 24].copy_from_slice(&float_to_u16fp(*pressure).to_be_bytes());
+                out[start + 22..start + 24]
+                    .copy_from_slice(&float_to_u16fp(*pressure).to_be_bytes());
                 out[start + 24..start + 28].copy_from_slice(&action_button.to_be_bytes());
                 out[start + 28..start + 32].copy_from_slice(&buttons.to_be_bytes());
             }
@@ -267,8 +268,10 @@ pub mod control {
                 out[start + 5..start + 9].copy_from_slice(&y.to_be_bytes());
                 out[start + 9..start + 11].copy_from_slice(&screen.width.to_be_bytes());
                 out[start + 11..start + 13].copy_from_slice(&screen.height.to_be_bytes());
-                out[start + 13..start + 15].copy_from_slice(&scroll_to_i16fp(*hscroll).to_be_bytes());
-                out[start + 15..start + 17].copy_from_slice(&scroll_to_i16fp(*vscroll).to_be_bytes());
+                out[start + 13..start + 15]
+                    .copy_from_slice(&scroll_to_i16fp(*hscroll).to_be_bytes());
+                out[start + 15..start + 17]
+                    .copy_from_slice(&scroll_to_i16fp(*vscroll).to_be_bytes());
                 out[start + 17..start + 21].copy_from_slice(&buttons.to_be_bytes());
             }
             ControlMessage::BackOrScreenOn(action) => {
@@ -304,15 +307,7 @@ pub struct MirrorSession {
 
 impl MirrorSession {
     /// 拆出部件，供 WS 层把子进程 move 进保活任务。
-    pub fn into_parts(
-        self,
-    ) -> (
-        TcpStream,
-        TcpStream,
-        u32,
-        u16,
-        tokio::process::Child,
-    ) {
+    pub fn into_parts(self) -> (TcpStream, TcpStream, u32, u16, tokio::process::Child) {
         (
             self.video,
             self.control,
@@ -342,10 +337,7 @@ async fn run_adb(args: &[&str]) -> io::Result<()> {
         .status()
         .await?;
     if !status.success() {
-        return Err(io::Error::other(format!(
-            "adb {:?} 失败：{status}",
-            args
-        )));
+        return Err(io::Error::other(format!("adb {:?} 失败：{status}", args)));
     }
     Ok(())
 }
@@ -354,7 +346,11 @@ async fn run_adb(args: &[&str]) -> io::Result<()> {
 ///
 /// `local_port` 为宿主机转发端口（NAS 单设备可用固定值，如 27183）。
 /// `max_size` 限制视频宽高最大值（0 = 不限制）。
-pub async fn start_mirror(serial: &str, local_port: u16, max_size: u16) -> io::Result<MirrorSession> {
+pub async fn start_mirror(
+    serial: &str,
+    local_port: u16,
+    max_size: u16,
+) -> io::Result<MirrorSession> {
     let scid = scid();
     let srv = server_path();
 
@@ -446,12 +442,7 @@ impl MirrorSession {
     /// 结束会话：杀掉设备端 server 子进程并移除 adb forward。
     pub async fn stop(mut self) {
         let _ = self.server_child.start_kill();
-        let _ = run_adb(&[
-            "forward",
-            "--remove",
-            &format!("tcp:{}", self.local_port),
-        ])
-        .await;
+        let _ = run_adb(&["forward", "--remove", &format!("tcp:{}", self.local_port)]).await;
     }
 }
 
