@@ -12,6 +12,7 @@
 - **手机文件双向传输**：浏览目录、上传文件到手机、从手机下载、删除手机文件。
 - **应用管理**：列出第三方/系统应用、上传 APK 安装。
 - **归档保留策略**：按天数自动回收最旧录像与截图（见环境变量 `MIRRORDOCK_RETENTION_DAYS`）。
+- **应用内访问鉴权**（X10-119）：设置页可设访问密码，登录后会话保持 12 小时；挂公网前请务必开启，详见 [docs/remote-access.md](docs/remote-access.md)。
 
 ---
 
@@ -101,6 +102,22 @@ nas/
 | `/api/screenshots/{name}` | DELETE | 删除单张截图 |
 | `/api/settings` | GET / PUT | 可视化设置：`quality`（smooth/balanced/sharp）、`retention_days`。PUT 保存即生效；`retention_locked_by_env=true` 时保留天数被环境变量锁定 |
 
+## 鉴权接口（X10-119）
+
+未设置访问密码时全部接口开放（局域网默认）；设置后以下三个端点以外的
+`/api/*` 与 `/files/*` 一律要求 `Authorization: Bearer <token>`
+（WebSocket 与文件直链可用 `?token=` 查询参数）。
+
+| 接口 | 方法 | 说明 |
+|---|---|---|
+| `/api/auth/state` | GET | 查询鉴权是否启用（`auth_enabled` / `password_locked_by_env`），未登录可用 |
+| `/api/auth/login` | POST | `{password}` → `{token}`。按来源 IP 限速：1 分钟错 5 次锁 1 分钟（429） |
+| `/api/auth/logout` | POST | 注销当前会话 |
+| `/api/settings/password` | POST | `{current, new}` 设置/清除访问密码（`new` 为空 = 关闭鉴权；已启用时必填 `current`）。密码仅存 PBKDF2 哈希 |
+
+远程访问（Tailscale 组网 / 反代 HTTPS / 应用内密码）的完整部署指南见
+[docs/remote-access.md](docs/remote-access.md)。
+
 WS 报文详见 `server/src/mirror_ws.rs` 顶部注释。视频为 H.264 Annex-B 裸流，
 base64 装在 `video` 帧的 `data` 字段；前端参考实现见 `web/index.html`。
 
@@ -115,6 +132,7 @@ base64 装在 `video` 帧的 `data` 字段；前端参考实现见 `web/index.ht
 | `MIRRORDOCK_DATA` | `/var/lib/mirrordock` | 数据目录（录像/截图/adb 密钥） |
 | `MIRRORDOCK_WEB` | `/opt/mirrordock/web` | 前端静态站目录 |
 | `MIRRORDOCK_RETENTION_DAYS` | `7` | 归档保留天数。`0` 表示不自动清理；非整数值按「不清理」处理（清错不可逆，磁盘满只是可恢复告警）。每 6 小时扫一次 `recordings/*.mp4` 与 `screenshots/*.png`，删除超过 N 天的文件。**显式设置后网页「设置」中的保留天数将被锁定**（防止部署值被访客改掉）；不设此变量时可在网页直接改 |
+| `MIRRORDOCK_ACCESS_PASSWORD` | 空 | 访问密码。**显式设置后以 env 为准，Web 修改无效**；不设置时可在网页「设置」里开启/修改 |
 | `ADB` | `/opt/scrcpy/adb` | adb 路径 |
 | `SCRCPY` | `/opt/scrcpy/scrcpy` | scrcpy 路径 |
 

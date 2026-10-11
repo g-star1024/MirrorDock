@@ -101,12 +101,39 @@
   input[type=file] { font-size: 13px; }
   .app-item .badge.tp { background: #e1f5ee; color: #0f6e56; }
   .app-item .badge.sys { background: #f1efe8; color: #5f5e5a; }
+  /* 登录遮罩（X10-119） */
+  #login-gate {
+    position: fixed; inset: 0; z-index: 100; display: flex;
+    align-items: center; justify-content: center;
+    background: var(--bg); padding: 24px;
+  }
+  .login-box {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 28px 24px; width: 100%; max-width: 360px;
+  }
+  .login-box input[type=password] {
+    width: 100%; font: inherit; font-size: 14px; padding: 10px 12px;
+    border-radius: 10px; border: 1px solid var(--line);
+  }
 </style>
 </head>
 <body>
+<!-- 登录遮罩：启用访问密码后，未登录只见此层（X10-119）。 -->
+<div id="login-gate" hidden>
+  <div class="login-box">
+    <h1 style="font-size:20px;margin-bottom:4px">MirrorDock · NAS 版</h1>
+    <div class="sub" style="margin-bottom:16px">此实例已启用访问密码，请输入后继续。</div>
+    <input type="password" id="login-password" placeholder="访问密码" autocomplete="current-password">
+    <button class="primary" id="login-submit" style="width:100%;margin-top:10px">登录</button>
+    <div class="msg error" id="login-msg" hidden style="margin-top:10px"></div>
+  </div>
+</div>
 <div class="wrap">
   <header>
-    <h1>MirrorDock · NAS 版</h1>
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <h1>MirrorDock · NAS 版</h1>
+      <button id="logout-btn" hidden style="font-size:13px;padding:6px 12px">退出登录</button>
+    </div>
     <div class="sub" id="status-line">正在连接…</div>
   </header>
 
@@ -229,6 +256,25 @@
       <span class="meta">天（0 = 不自动清理）</span>
     </div>
     <div class="msg" id="settings-msg" hidden></div>
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+    <div class="sub" style="margin-bottom:10px">
+      访问密码：设置后打开本页需要登录。<b>挂公网（DDNS/反代）前务必设置。</b>
+      忘记密码可在 compose 里用 MIRRORDOCK_ACCESS_PASSWORD 覆盖后重建容器。
+    </div>
+    <div class="row" style="margin-bottom:10px" id="pw-current-row">
+      <label class="meta" for="pw-current" style="min-width:72px">当前密码</label>
+      <input id="pw-current" type="password" autocomplete="current-password"
+             placeholder="已启用时必填"
+             style="flex:1;min-width:180px;padding:8px 12px;border-radius:10px;border:1px solid var(--line)">
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <label class="meta" for="pw-new" style="min-width:72px">新密码</label>
+      <input id="pw-new" type="password" autocomplete="new-password"
+             placeholder="留空并保存 = 关闭登录保护"
+             style="flex:1;min-width:180px;padding:8px 12px;border-radius:10px;border:1px solid var(--line)">
+      <button id="pw-save">更新密码</button>
+    </div>
+    <div class="msg" id="pw-msg" hidden></div>
   </section>
 </div>
 
@@ -242,8 +288,82 @@ function show(el, text, isError) {
   el.className = 'msg' + (isError ? ' error' : '');
 }
 
+// ---------------------------------------------------------------------------
+// 访问鉴权（X10-119）
+// ---------------------------------------------------------------------------
+//
+// 会话 Token 存 localStorage：同源页面共享，关浏览器不清（12h 服务端过期）。
+// 鉴权未启用时 token 恒为 null，请求与此前完全一致——局域网老用户零感知。
+const TOKEN_KEY = 'mirrordock-token';
+let authToken = localStorage.getItem(TOKEN_KEY) || null;
+
+function setToken(t) {
+  authToken = t;
+  if (t) localStorage.setItem(TOKEN_KEY, t);
+  else localStorage.removeItem(TOKEN_KEY);
+  $('logout-btn').hidden = !t;
+}
+
+// 文件直链（<img>/<a> 不能带请求头）统一从这里出，带 token 查询参数。
+function fileUrl(path) {
+  return authToken ? path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken) : path;
+}
+
+function showLogin(show, message) {
+  $('login-gate').hidden = !show;
+  if (message) {
+    const m = $('login-msg');
+    m.textContent = message;
+    m.hidden = false;
+  }
+  if (show) setTimeout(() => $('login-password').focus(), 50);
+}
+
+async function doLogin() {
+  const m = $('login-msg');
+  m.hidden = true;
+  const password = $('login-password').value;
+  if (!password) { m.textContent = '请输入访问密码。'; m.hidden = false; return; }
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { m.textContent = body.message || '登录失败'; m.hidden = false; return; }
+    setToken(body.token);
+    $('login-password').value = '';
+    showLogin(false);
+    boot();
+  } catch (e) { m.textContent = '无法连接服务端'; m.hidden = false; }
+}
+
+async function doLogout() {
+  if (authToken) {
+    await fetch('/api/auth/logout', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + authToken },
+    }).catch(() => {});
+  }
+  setToken(null);
+  location.reload();
+}
+
 async function api(path, options) {
+  options = options || {};
+  if (authToken) {
+    options.headers = Object.assign({}, options.headers, {
+      Authorization: 'Bearer ' + authToken,
+    });
+  }
   const res = await fetch(path, options);
+  if (res.status === 401) {
+    // Token 失效（过期/改密码作废）：清掉本地凭证，弹登录框。
+    setToken(null);
+    showLogin(true, '登录已过期，请重新输入访问密码。');
+    const e = new Error('需要登录');
+    e.code = 'auth_required';
+    throw e;
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     // 后端返回的是与桌面端同形的 AppError：code + message + recovery。
@@ -333,7 +453,7 @@ async function loadRecordings() {
       li.innerHTML = `<div><span class="name">${r.name}</span>
         <div class="meta">${mb} MB · ${when}</div></div>
         <div class="row">
-          <a href="/files/recordings/${encodeURIComponent(r.name)}" target="_blank">
+          <a href="${fileUrl('/files/recordings/' + encodeURIComponent(r.name))}" target="_blank">
             <button>播放/下载</button></a>
           <button class="danger" data-del="${r.name}">删除</button>
         </div>`;
@@ -398,11 +518,11 @@ async function loadScreenshots() {
       const cell = document.createElement('div');
       cell.className = 'shot-cell';
       cell.innerHTML =
-        `<img loading="lazy" src="/files/screenshots/${encodeURIComponent(s.name)}" alt="${s.name}">` +
+        `<img loading="lazy" src="${fileUrl('/files/screenshots/' + encodeURIComponent(s.name))}" alt="${s.name}">` +
         `<button class="shot-del" data-del="${s.name}">删</button>` +
         `<div class="shot-name">${s.name}</div>`;
       cell.querySelector('img').onclick = () =>
-        window.open('/files/screenshots/' + encodeURIComponent(s.name), '_blank');
+        window.open(fileUrl('/files/screenshots/' + encodeURIComponent(s.name)), '_blank');
       cell.querySelector('[data-del]').onclick = async (ev) => {
         ev.stopPropagation();
         if (!confirm('删除这张截图？')) return;
@@ -459,7 +579,11 @@ async function uploadFile() {
   show($('file-msg'), '上传中…');
   try {
     const res = await fetch('/api/files/upload?serial=' + encodeURIComponent(serial)
-      + '&path=' + encodeURIComponent(dir), { method: 'POST', body: fd });
+      + '&path=' + encodeURIComponent(dir), {
+      method: 'POST', body: fd,
+      headers: authToken ? { Authorization: 'Bearer ' + authToken } : {},
+    });
+    if (res.status === 401) { setToken(null); showLogin(true, '登录已过期，请重新输入访问密码。'); return; }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((body.message || '上传失败') + '\n' + (body.recovery || ''));
     show($('file-msg'), '已上传到 ' + (body.dir || dir));
@@ -476,7 +600,7 @@ async function downloadFile(remote) {
       + '&remote=' + encodeURIComponent(remote));
     show($('file-msg'), '已下载，开始保存到本机…');
     const a = document.createElement('a');
-    a.href = r.url;
+    a.href = fileUrl(r.url);
     a.download = r.file;
     document.body.appendChild(a);
     a.click();
@@ -526,8 +650,11 @@ async function installApk() {
   fd.append('file', input.files[0]);
   show($('apps-msg'), '安装中（大 APK 可能需要几十秒）…');
   try {
-    const res = await fetch('/api/apps/install?serial=' + encodeURIComponent(serial),
-      { method: 'POST', body: fd });
+    const res = await fetch('/api/apps/install?serial=' + encodeURIComponent(serial), {
+      method: 'POST', body: fd,
+      headers: authToken ? { Authorization: 'Bearer ' + authToken } : {},
+    });
+    if (res.status === 401) { setToken(null); showLogin(true, '登录已过期，请重新输入访问密码。'); return; }
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((body.message || '安装失败') + '\n' + (body.recovery || ''));
     show($('apps-msg'), '安装完成。');
@@ -673,7 +800,10 @@ function mirrorStart() {
   // 选定解码模式：有 WebCodecs 用硬解，没有则 WASM 软解（局域网 HTTP 兜底）。
   mirrorEnsureDecoder();
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/api/stream/ws?serial=${encodeURIComponent(serial)}`);
+  // WebSocket 不能自定义请求头，会话 Token 只能走 ?token= 查询参数（服务端中间件兜底提取）。
+  const wsUrl = `${proto}://${location.host}/api/stream/ws?serial=${encodeURIComponent(serial)}`
+    + (authToken ? '&token=' + encodeURIComponent(authToken) : '');
+  const ws = new WebSocket(wsUrl);
   mirror.ws = ws;
   mirrorSetState('连接中…', false);
   ws.onmessage = (ev) => {
@@ -786,7 +916,49 @@ async function loadSettings() {
       msg.style.color = '#b45309';
       msg.hidden = false;
     }
+    // 访问密码区：env 锁定时禁用并说明；未启用时提示当前无保护。
+    const pwMsg = $('pw-msg');
+    if (s.password_locked_by_env) {
+      $('pw-current').disabled = true;
+      $('pw-new').disabled = true;
+      $('pw-save').disabled = true;
+      pwMsg.textContent = '访问密码由环境变量 MIRRORDOCK_ACCESS_PASSWORD 钉死，网页修改不生效。';
+      pwMsg.style.color = '#b45309';
+      pwMsg.hidden = false;
+    } else if (!s.auth_enabled) {
+      pwMsg.textContent = '当前未设置访问密码，任何能访问本页的人都能操控手机。挂公网前请务必设置。';
+      pwMsg.style.color = '#b45309';
+      pwMsg.hidden = false;
+    }
   } catch (e) { /* 设置加载失败不阻塞页面其余功能 */ }
+}
+
+async function savePassword() {
+  const msg = $('pw-msg');
+  msg.hidden = true;
+  const body = {
+    current: $('pw-current').value || null,
+    new: $('pw-new').value || null,
+  };
+  try {
+    const s = await api('/api/settings/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    $('pw-current').value = '';
+    $('pw-new').value = '';
+    msg.textContent = s.auth_enabled
+      ? '访问密码已更新。其他已登录的设备需要重新登录。'
+      : '访问密码已清除，本页不再需要登录。';
+    msg.style.color = '#15803d';
+    msg.hidden = false;
+    if (!s.auth_enabled) setToken(null);
+    loadSettings();
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.style.color = '#b91c1c';
+    msg.hidden = false;
+  }
 }
 
 async function saveSettings() {
@@ -814,13 +986,35 @@ async function saveSettings() {
 }
 
 $('settings-save').onclick = saveSettings;
+$('pw-save').onclick = savePassword;
+$('login-submit').onclick = doLogin;
+$('login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('logout-btn').onclick = doLogout;
 
-loadStatus();
-loadDevices();
-loadRecordings();
-loadScreenshots();
-loadSettings();
-setInterval(loadStatus, 15000);
+// 启动门：先问服务端「要不要登录」。
+// - 未启用鉴权：直接进页面；
+// - 已启用且本地有 Token：先放行（首个 401 会自动弹回登录框）；
+// - 已启用且无 Token：只显示登录遮罩。
+async function boot() {
+  try {
+    const s = await api('/api/auth/state');
+    if (s.auth_enabled && !authToken) { showLogin(true); return; }
+  } catch (e) {
+    if (e.code === 'auth_required') return; // showLogin 已弹出
+    // 连不上服务端也照常进页面，状态栏会显示连接失败。
+  }
+  showLogin(false);
+  loadStatus();
+  loadDevices();
+  loadRecordings();
+  loadScreenshots();
+  loadSettings();
+}
+
+setToken(authToken); // 同步退出按钮可见性
+boot();
+// 状态轮询用守卫包装：401（未登录）时静默跳过，避免每 15 秒刷一次登录框。
+setInterval(() => { if (!$('login-gate') || $('login-gate').hidden) loadStatus(); }, 15000);
 </script>
 </body>
 </html>

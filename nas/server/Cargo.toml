@@ -26,6 +26,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # 实时镜像：视频帧 base64 编码（WS 文本帧），futures-util 提供 WS stream/sink 工具。
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# 应用内鉴权（X10-119）：PBKDF2-HMAC-SHA256 密码哈希 + 系统随机会话 Token。
+# 选 ring 而不是 args 散装的 sha2+pbkdf2+rand 三件套：一个 crate 全覆盖，
+# 且恒定时间比较由 ring 内部保证。
+ring = "0.17"
 
 # libc：仅在 Unix 下用于重置子进程信号处置（见 record.rs 的 X10-95 说明）。
 [target.'cfg(unix)'.dependencies]

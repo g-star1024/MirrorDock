@@ -78,6 +78,60 @@ pub async fn update_settings(
     Json(serde_json::to_value(view).unwrap_or_default())
 }
 
+// ---------------------------------------------------------------------------
+// 访问密码（X10-119）
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct SetPassword {
+    /// 当前密码。已启用鉴权时必须提供且正确（防「别人已登录的浏览器被拿来改密码」）。
+    #[serde(default)]
+    pub current: Option<String>,
+    /// 新密码。空串 / null = 清除密码、关闭鉴权。
+    #[serde(default)]
+    pub new: Option<String>,
+}
+
+pub async fn set_password(
+    AxumState(state): AxumState<Arc<State>>,
+    Json(body): Json<SetPassword>,
+) -> ApiResult {
+    // 已启用时改/清除密码必须先验当前密码——否则任何拿到已登录会话所在
+    // 浏览器的人都能一句话改掉密码把主人锁在门外。
+    if state.auth.enabled() {
+        let ok = matches!(&body.current, Some(c) if state.auth.verify_password(c));
+        if !ok {
+            return Err(err(AppError::new(
+                "auth_bad_password",
+                "当前密码不正确",
+                "输入现在正在使用的访问密码。",
+            )));
+        }
+    }
+    let new_hash = match body.new.as_deref().map(str::trim) {
+        Some("") | None => None,
+        Some(p) if p.len() < 6 => {
+            return Err(err(AppError::new(
+                "password_too_short",
+                "密码至少 6 位",
+                "请设置 6 位以上的访问密码。",
+            )));
+        }
+        Some(p) => Some(crate::auth::hash_password(p)),
+    };
+    if let Err(msg) = state.auth.apply_password_change(new_hash.clone()) {
+        return Err(err(AppError::new(
+            "password_locked_by_env",
+            msg,
+            "修改 compose 里的 MIRRORDOCK_ACCESS_PASSWORD 后重建容器。",
+        )));
+    }
+    state.settings.set_password_hash(new_hash).await;
+    Ok(Json(
+        serde_json::to_value(state.settings.view().await).unwrap_or_default(),
+    ))
+}
+
 /// 设备列表。去重与「USB 优先」由 md-core 决定，与桌面端给出同一份答案。
 pub async fn devices() -> ApiResult {
     match adb::list_devices().await {

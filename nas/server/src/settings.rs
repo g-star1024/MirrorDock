@@ -59,11 +59,14 @@ impl QualityPreset {
 ///
 /// `retention_days` 为 None 表示「跟随环境变量/默认值」——只在用户于 Web 上
 /// 显式改过之后才写入具体值。
+/// `access_password` 存的是 PBKDF2 哈希（auth.rs），**绝不是明文**——settings.json
+/// 在数据目录里，挂载卷谁都能读，明文密码等于没设。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct FileSettings {
     quality: Option<QualityPreset>,
     retention_days: Option<u64>,
+    access_password: Option<String>,
 }
 
 /// 对外暴露的完整设置视图（含生效值与来源标注）。
@@ -75,6 +78,10 @@ pub struct SettingsView {
     pub retention_days: u64,
     /// 保留天数是否被环境变量钉死（true 时 Web 修改无效）。
     pub retention_locked_by_env: bool,
+    /// 是否已设置访问密码（鉴权启用中）。
+    pub auth_enabled: bool,
+    /// 访问密码是否被环境变量 MIRRORDOCK_ACCESS_PASSWORD 钉死。
+    pub password_locked_by_env: bool,
 }
 
 /// 全局设置句柄：内存缓存 + 落盘持久化。
@@ -124,12 +131,31 @@ impl Settings {
     }
 
     /// 完整视图（给 /api/settings GET）。
+    ///
+    /// auth_enabled / password_locked_by_env 由 main 在启动后按 auth 模块的
+    /// 实际状态回填（密码可能在 env 里，settings 自己不知道）。
     pub async fn view(&self) -> SettingsView {
         SettingsView {
             quality: self.quality().await,
             retention_days: self.retention_days().await,
             retention_locked_by_env: self.retention_locked_by_env,
+            auth_enabled: self.inner.read().await.access_password.is_some(),
+            password_locked_by_env: std::env::var("MIRRORDOCK_ACCESS_PASSWORD")
+                .ok()
+                .filter(|p| !p.is_empty())
+                .is_some(),
         }
+    }
+
+    /// 已存的访问密码哈希（启动时装配进 auth 模块）。
+    pub async fn password_hash(&self) -> Option<String> {
+        self.inner.read().await.access_password.clone()
+    }
+
+    /// 写入新的访问密码哈希（None = 清除）。原子落盘。
+    pub async fn set_password_hash(&self, hash: Option<String>) {
+        self.inner.write().await.access_password = hash;
+        self.persist().await;
     }
 
     /// Web 提交的修改。返回修改后的完整视图。

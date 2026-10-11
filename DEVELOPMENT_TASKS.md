@@ -1213,3 +1213,18 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - 关键架构：video.data 已是剥掉 scrcpy 12 字节头的纯 NAL，单 scrcpy 会话单编码器，无需独立 raw 流，控制天然复用。
 **验证**：30 单测绿；容器稳定版 fmt+clippy 双验干净；ServeDir 实测 wasm=`application/wasm`、mjs 可加载。**待真机点验：局域网 HTTP 出画面（WASM）、Chrome flags 解锁出画面（WebCodecs）、early eof 是否因 baseline 修复。**
 **约束记牢**：tinyh264 只 baseline/constrained-baseline、只 I/P 帧（无 B 帧）、输入完整 AU 的 NAL。
+
+### X10-119 · 应用内访问鉴权 + 远程访问三方案（2026-10-11）
+**背景**：用户问「支持飞牛 NAS 远程访问么」——网络层早已就绪（WS/直链都走 location），真正缺口是**零鉴权**：拿到地址=完全控制手机。用户拍板「三种方式都实现」。
+**落地**：
+- 方案 A（Tailscale 组网）+ 方案 B（反代 HTTPS + Basic Auth）为纯部署方案，零代码，产出配置指南 `nas/docs/remote-access.md`。
+- 方案 C（应用内鉴权）为本次开发主体：
+  - `server/src/auth.rs`：PBKDF2-HMAC-SHA256（ring，600k 迭代、随机 16B 盐、恒定时间比较）；128 位随机会话 Token（内存表，12h 滑动过期）；登录按 IP 限速（5 次/分钟 → 429）。
+  - 密码源：`MIRRORDOCK_ACCESS_PASSWORD` env > settings.json；都没有 = 鉴权停用（局域网零感知）。
+  - axum `from_fn_with_state` 中间件保护全部 `/api/*` 与 `/files/*`（静态站放行）；`/api/auth/login|logout|state` 三个端点在保护层外。
+  - Token 传递：HTTP `Authorization: Bearer`；WS 与 `<img>`/下载直链走 `?token=`（浏览器无法自定义 WS/img 请求头，中间件兜底提取）。
+  - 改密码必须先验当前密码（防「已登录浏览器被拿来改密码反锁主人」）；改/清密码立即作废旧会话。
+  - 前端：登录遮罩 + localStorage Token + api() 统一带 Bearer + 401 自动清凭证弹登录 + 设置页「访问密码」区（含 env 锁定与未启用警示）。
+  - `axum::serve` 改 `into_make_service_with_connect_info`（登录限速要来源 IP）。
+**验证**：38 单测绿（含哈希往返/随机盐/会话生命周期/换密码作废/限速/token 提取优先级）；docker rust:1.88-slim fmt+clippy(-D warnings)+test 三验干净。**待真机点验：设置密码后登录流程、WS 镜像带 token、录像/截图直链带 token、反代后限速按反代 IP 计数的预期行为。**
+**纪律**：密码/哈希/Token 一律不进日志（工程铁律）；settings.json 只存哈希——挂载卷谁都能读，明文=没设。

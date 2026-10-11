@@ -8,6 +8,7 @@
 
 mod adb;
 mod api;
+mod auth;
 mod mirror_ws;
 mod record;
 mod retention;
@@ -24,6 +25,8 @@ use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
 
+pub use auth::AuthState;
+
 pub struct State {
     data_dir: PathBuf,
     /// 同一时刻只允许一条录制。NAS 常开机的价值在于长时间稳定录像，
@@ -33,6 +36,8 @@ pub struct State {
     mirrors: std::sync::Arc<mirror_ws::MirrorManager>,
     /// Web 可视化设置（画质 + 保留天数），落盘 settings.json。
     settings: std::sync::Arc<settings::Settings>,
+    /// 应用内访问鉴权（X10-119）：会话表 + 登录限速。
+    auth: std::sync::Arc<auth::AuthState>,
 }
 
 fn data_dir() -> PathBuf {
@@ -108,11 +113,18 @@ async fn main() {
         });
     }
 
+    // 访问鉴权（X10-119）：env 密码 > settings.json 里 Web 设置的密码；都没有 = 不启用。
+    let auth = std::sync::Arc::new(auth::AuthState::new(settings.password_hash().await));
+    if !auth.enabled() {
+        println!("  访问鉴权：未启用（局域网开放访问；挂公网前请在设置页设置访问密码）");
+    }
+
     let state = Arc::new(State {
         data_dir: data.clone(),
         recording: Mutex::new(None),
         mirrors: std::sync::Arc::new(mirror_ws::MirrorManager::default()),
         settings,
+        auth,
     });
 
     // 开机自检：scrcpy 缺 server 时，设备识别与截图（走 adb 通道）全都正常，
@@ -162,16 +174,39 @@ async fn main() {
         .route(
             "/api/settings",
             get(api::get_settings).put(api::update_settings),
-        );
+        )
+        // 访问密码设置（X10-119）。
+        .route("/api/settings/password", post(api::set_password))
+        // 鉴权中间件：保护全部业务接口。未设密码时零开销直通。
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
+    // 鉴权自身的三个端点不能进上面的保护层：登录本来就没有 Token，
+    // state 查询是给前端决定「要不要弹登录框」用的。
+    let auth_routes = Router::new()
+        .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/state", get(auth::auth_state));
 
     // 录像/截图下载。用现成的静态服务而不是自写下载接口：它天然支持 Range 请求，
     // 浏览器能直接拖动 MP4 进度条播放，这是「24h 录制归档」场景里用户真正要的
     // 用法——录完不用下载几十 GB 文件就能回看。
-    let files = ServeDir::new(&data);
+    //
+    // 下载同样过鉴权：录像/截图可能比实时画面更敏感（24h 归档）。
+    // 浏览器 <img>/<a> 不带自定义头，前端会把 ?token= 拼进 URL（中间件兜底提取）。
+    let files = Router::new()
+        .nest_service("/files", ServeDir::new(&data))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     let app = Router::new()
+        .merge(auth_routes)
         .merge(api)
-        .nest_service("/files", files)
+        .merge(files)
         // 兜底静态服务必须放在 merge 之后：顺序颠倒会吞掉 /api 前缀，表现为
         // 接口返回 index.html——在浏览器里很难看出这是路由顺序问题。
         .fallback_service(ServeDir::new(&web))
@@ -188,5 +223,11 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("端口绑定失败");
-    axum::serve(listener, app).await.expect("HTTP 服务异常退出");
+    // into_make_service_with_connect_info：登录限速按来源 IP 计数，需要拿到对端地址。
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("HTTP 服务异常退出");
 }
