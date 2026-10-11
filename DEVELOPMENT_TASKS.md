@@ -1168,3 +1168,20 @@ Done(1)                      # 进程秒退
 - 22 单测全绿：协议字节布局（keycode/touch/scroll/session）、fake-scrcpy 解复用集成测试、WS 视频扇出合成流测试、ClientMsg→ControlMessage 映射。
 - CI 同口径：`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 全绿（verify job 的 `cargo test --workspace` 自动覆盖新增测试，无需另起无法真跑的容器门禁）。
 - **待真机点验**：浏览器真出画面（Annex-B 解码）、触控坐标对准、多标签页共看。沙箱无真机，无法覆盖端到端。
+
+### X10-116 · P1 轻量补全：文件双向传输 + 应用管理 + 截图画廊（2026-10-11，用户拍板）
+**需求**：把桌面端 53 命令里对 NAS 有意义的轻量能力补齐（实时镜像 X10-115 已先行）。
+**范围**：文件双向传输（上传/下载/删除）、应用管理（列表/装 APK）、截图画廊（列表/删除）。全部走 adb 通道，与镜像的 scrcpy 通道互不干扰。
+**落地**：
+- `transfer.rs`（新）：push/pull/delete 手机文件、pm list/install、screenshots 列表。
+  · `safe_file_name` 纯文件名校验防 NAS 侧路径穿越（X10-95 防护延伸）；
+  · pull 用 `exec-out cat` 流式落盘（大文件不入内存），push/install 后清理暂存与设备临时文件；
+  · install_apk：push 到 `/data/local/tmp` + `pm install -r` + 清临时，Success 判定看输出（部分机型退出码不可靠）。
+- `api.rs`：8 个端点（upload/download/delete 文件、list/install 应用、list/delete 截图）。
+- `main.rs`：注册路由，上传/装 APK 放宽 body 上限到 2GB，建 `uploads/`/`inbox/` 目录。
+- `web/index.html`：截图卡片升级为画廊（缩略图网格/点图放大/单删/即截入画廊）、文件项加下载/删除 + 顶部上传、新增应用卡片（第三方/系统切换 + APK 安装）。
+**验证**：
+- 26 单测全绿（transfer 4 项新：纯文件名/穿越拒绝/包名解析/截图过滤排序）；
+- CI 同口径 `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 全绿；
+- **端到端冒烟（真起服务）**：`/api/screenshots` 返回列表、`/api/apps` 无设备时回结构化错误（非 404/崩溃）、`/api/files/download` 缺 remote 回缺参错误、静态站含全部新 UI 区块（截图画廊/应用/手机文件/安装 APK/实时镜像）。
+- **待真机点验**：真设备上传/下载/删除、APK 真安装、应用列表真解析。沙箱无真机。

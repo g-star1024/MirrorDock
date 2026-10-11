@@ -8,8 +8,9 @@
 
 - **实时镜像**：浏览器里看手机实时画面（WebCodecs 解码），在画面上点按/拖动即可远程操控，工具栏含返回/主页/多任务/电源/旋转。多标签页可同时看同一台。
 - **录制归档**：三档画质（流畅/标准/高清）长时间录像，落盘即可在线拖进度条回放。
-- **截图**：远程抓取手机当前界面 PNG。
-- **手机文件**：浏览 `/sdcard` 等目录。
+- **截图画廊**：远程抓取手机当前界面 PNG，缩略图网格浏览、点图放大、单张删除。
+- **手机文件双向传输**：浏览目录、上传文件到手机、从手机下载、删除手机文件。
+- **应用管理**：列出第三方/系统应用、上传 APK 安装。
 - **归档保留策略**：按天数自动回收最旧录像与截图（见环境变量 `MIRRORDOCK_RETENTION_DAYS`）。
 
 ---
@@ -85,6 +86,19 @@ nas/
 |---|---|---|
 | `/api/stream/ws?serial=<序列号>&max_size=<边长>` | GET（WS 升级） | 实时镜像通道。视频/会话事件经文本帧 JSON 下行，触控/键鼠经文本帧 JSON 上行 |
 | `/api/stream/stop?serial=<序列号>` | POST | 主动停止某设备镜像（关广播，设备端 server 随连接断开退出） |
+
+## 文件 / 应用 / 截图接口（P1）
+
+| 接口 | 方法 | 说明 |
+|---|---|---|
+| `/api/files?serial=&path=` | GET | 列出手机目录 |
+| `/api/files/upload?serial=&path=` | POST(multipart) | 上传文件到手机目录（字段名 `file`，≤2GB） |
+| `/api/files/download?serial=&remote=` | GET | 从手机下载文件（经 NAS inbox 落盘，返回可下载 URL） |
+| `/api/files/delete?serial=&remote=` | POST | 删除手机上一个文件 |
+| `/api/apps?serial=&system=1` | GET | 应用列表（默认只第三方；`system=1` 含系统） |
+| `/api/apps/install?serial=` | POST(multipart) | 上传 `.apk` 安装（字段名 `file`） |
+| `/api/screenshots` | GET | 截图画廊列表 |
+| `/api/screenshots/{name}` | DELETE | 删除单张截图 |
 
 WS 报文详见 `server/src/mirror_ws.rs` 顶部注释。视频为 H.264 Annex-B 裸流，
 base64 装在 `video` 帧的 `data` 字段；前端参考实现见 `web/index.html`。
