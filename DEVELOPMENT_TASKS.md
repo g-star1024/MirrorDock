@@ -1185,3 +1185,18 @@ Done(1)                      # 进程秒退
 - CI 同口径 `cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 全绿；
 - **端到端冒烟（真起服务）**：`/api/screenshots` 返回列表、`/api/apps` 无设备时回结构化错误（非 404/崩溃）、`/api/files/download` 缺 remote 回缺参错误、静态站含全部新 UI 区块（截图画廊/应用/手机文件/安装 APK/实时镜像）。
 - **待真机点验**：真设备上传/下载/删除、APK 真安装、应用列表真解析。沙箱无真机。
+
+### X10-117 · P3 Web 设置界面：画质预设 + 保留天数可视化（2026-10-11，用户拍板）
+**需求**：画质与保留天数此前只能 env 配置、改一次要重建容器——违背「浏览器远程管理」立项场景。
+**落地**：
+- `settings.rs`（新）：settings.json 持久化（tmp+rename 原子写），损坏回落默认；
+  env `MIRRORDOCK_RETENTION_DAYS` 显式设置时锁定保留天数（视图带 locked 标记），防止部署者钉死的值被网页访客改掉。
+- `api.rs`：GET/PUT `/api/settings`；`/api/status` 保留天数改取实时生效值；
+  录制未显式指定画质时跟随设置；`mirror_ws` 未带 max_size 时跟随设置。
+- `main.rs`：周期清理任务无条件常驻（0→N 改回不重启即恢复），每轮取实时天数。
+- `web`：设置卡片（画质三档 smooth/balanced/sharp + 保留天数），保存即生效；env 锁定时输入禁用+黄字提示。
+**验证**：30 单测全绿（settings 4 项新：默认/持久化重载/损坏回落/preset 值对齐 record::Quality）；
+**容器稳定版 rustfmt+clippy(-D warnings) 双验干净**——本地 rustfmt 1.95 与 CI stable 规则分歧（uninlined_format_args/derivable_impls）已按 CI 为准修复；
+e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置仍在。
+**元教训（第三条，2026-10-11）**：本地 fmt/clippy 过 ≠ CI 过。本地 rustfmt 1.95 与 CI stable 规则不同，
+两次「verify fmt 失败」都是这个根因。**以后 NAS 提交前一律用 `docker run rust:1.88-slim cargo fmt --check + clippy -D warnings` 双验**（已建立此校验法）。

@@ -99,6 +99,7 @@ nas/
 | `/api/apps/install?serial=` | POST(multipart) | 上传 `.apk` 安装（字段名 `file`） |
 | `/api/screenshots` | GET | 截图画廊列表 |
 | `/api/screenshots/{name}` | DELETE | 删除单张截图 |
+| `/api/settings` | GET / PUT | 可视化设置：`quality`（smooth/balanced/sharp）、`retention_days`。PUT 保存即生效；`retention_locked_by_env=true` 时保留天数被环境变量锁定 |
 
 WS 报文详见 `server/src/mirror_ws.rs` 顶部注释。视频为 H.264 Annex-B 裸流，
 base64 装在 `video` 帧的 `data` 字段；前端参考实现见 `web/index.html`。
@@ -113,7 +114,7 @@ base64 装在 `video` 帧的 `data` 字段；前端参考实现见 `web/index.ht
 | `PORT` | `8080` | Web 端口 |
 | `MIRRORDOCK_DATA` | `/var/lib/mirrordock` | 数据目录（录像/截图/adb 密钥） |
 | `MIRRORDOCK_WEB` | `/opt/mirrordock/web` | 前端静态站目录 |
-| `MIRRORDOCK_RETENTION_DAYS` | `7` | 归档保留天数。`0` 表示不自动清理；非整数值按「不清理」处理（清错不可逆，磁盘满只是可恢复告警）。每 6 小时扫一次 `recordings/*.mp4` 与 `screenshots/*.png`，删除超过 N 天的文件 |
+| `MIRRORDOCK_RETENTION_DAYS` | `7` | 归档保留天数。`0` 表示不自动清理；非整数值按「不清理」处理（清错不可逆，磁盘满只是可恢复告警）。每 6 小时扫一次 `recordings/*.mp4` 与 `screenshots/*.png`，删除超过 N 天的文件。**显式设置后网页「设置」中的保留天数将被锁定**（防止部署值被访客改掉）；不设此变量时可在网页直接改 |
 | `ADB` | `/opt/scrcpy/adb` | adb 路径 |
 | `SCRCPY` | `/opt/scrcpy/scrcpy` | scrcpy 路径 |
 
