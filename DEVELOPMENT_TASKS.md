@@ -1200,3 +1200,16 @@ Done(1)                      # 进程秒退
 e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置仍在。
 **元教训（第三条，2026-10-11）**：本地 fmt/clippy 过 ≠ CI 过。本地 rustfmt 1.95 与 CI stable 规则不同，
 两次「verify fmt 失败」都是这个根因。**以后 NAS 提交前一律用 `docker run rust:1.88-slim cargo fmt --check + clippy -D warnings` 双验**（已建立此校验法）。
+
+### X10-118 · 局域网 HTTP 实时镜像打通：WASM 软解兜底 + baseline 锁定 + 握手诊断（2026-10-11，真机实踩）
+**症状链**：① 局域网 `http://IP:8080` 报「不支持 WebCodecs」→ ② 用户 Chrome flags 解锁后报「镜像握手失败：early eof」。
+**根因（逐层核证，非猜）**：
+- WebCodecs 只在**安全上下文**（HTTPS/localhost）暴露，局域网 HTTP 非安全上下文 → 无 `VideoDecoder`（Tango ADB/Chromium 文档一致）。
+- early eof = 设备端 scrcpy-server 启动即崩，但 `start_mirror` 吞了 stderr，死因不可见（与「看不到编译器原文」同类）。
+**落地**：
+- 服务端锁 H.264 baseline+level4（`video_codec_options=profile=1,level=1024`，MediaCodec AVCProfileBaseline=1/AVCLevel4=1024；CodecOption 格式 `key:type=value` 已核）：WASM(tinyh264) 只认 baseline，WebCodecs 对 baseline 兼容，统一锁定两条链通用。
+- `start_mirror` 接管 server stdout/stderr，握手 EOF 带出真实输出。
+- 前端 WASM 兜底：内置 `@yume-chan/h264bsd`（wasm 121KB + mjs 47KB，Apache-2.0，离线）；无 VideoDecoder 自动切 WASM，自研 YUV420→RGB(BT.601) 零依赖渲染。
+  - 关键架构：video.data 已是剥掉 scrcpy 12 字节头的纯 NAL，单 scrcpy 会话单编码器，无需独立 raw 流，控制天然复用。
+**验证**：30 单测绿；容器稳定版 fmt+clippy 双验干净；ServeDir 实测 wasm=`application/wasm`、mjs 可加载。**待真机点验：局域网 HTTP 出画面（WASM）、Chrome flags 解锁出画面（WebCodecs）、early eof 是否因 baseline 修复。**
+**约束记牢**：tinyh264 只 baseline/constrained-baseline、只 I/P 帧（无 B 帧）、输入完整 AU 的 NAL。
