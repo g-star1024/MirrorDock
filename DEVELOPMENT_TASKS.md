@@ -1228,3 +1228,14 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - `axum::serve` 改 `into_make_service_with_connect_info`（登录限速要来源 IP）。
 **验证**：38 单测绿（含哈希往返/随机盐/会话生命周期/换密码作废/限速/token 提取优先级）；docker rust:1.88-slim fmt+clippy(-D warnings)+test 三验干净。**待真机点验：设置密码后登录流程、WS 镜像带 token、录像/截图直链带 token、反代后限速按反代 IP 计数的预期行为。**
 **纪律**：密码/哈希/Token 一律不进日志（工程铁律）；settings.json 只存哈希——挂载卷谁都能读，明文=没设。
+
+### X10-120 · 检查更新 + Watchtower 自动在线更新（2026-10-11）
+**背景**：用户截图问「我们的镜像为什么不支持在线更新」——飞牛「有新版本」徽标只适配 Docker Hub，对 ghcr.io 不比对，永远显示「已是最新」（真机实踩）。实测 GHCR 上 `mirrordock-nas:latest` 匿名可拉（manifest 200，公共可见），digest `f60fb6a3` 即 X10-119 新版——**镜像没问题，是飞牛检测机制识别不到 ghcr.io**。用户拍板「检查更新做进页面 + Watchtower 自动更新」。
+**落地**：
+- **检查更新**（`server/src/update.rs`）：服务端匿名调 GHCR（token→HEAD manifest 取 digest→子 manifest 取 OCI revision），比对本地 `MIRRORDOCK_IMAGE_DIGEST`/`MIRRORDOCK_REVISION`（容器运行时经 compose env 注入），结论含 update_available + 人话 message。reqwest rustls（容器无 libssl）。结果缓存 1 小时，`?force=1` 强制重查——首屏自动查不拖慢，用户点按钮强制查。
+- **CI 注入版本标签**（nas-image.yml）：buildx `--label org.opencontainers.image.revision=$GITHUB_SHA`——此前镜像无 commit 标签，digest 比对不到时无人话版本号兜底。
+- **部署链路**：`scripts/nas-deploy.sh`（pull→`docker inspect` 读 RepoDigest 注入→`git rev-parse` 读 commit→up -d 四步合一）——「本地 digest」只能在 pull 后 up 前从宿主机读出注入，脚本把它固化。compose 加两个 env 透传 + 部署说明。
+- **Watchtower**（`docker-compose.watchtower.yml` 叠加文件）：containrrr/watchtower 只盯 mirrordock-nas 一个容器，6 小时轮询，CLEANUP=true 清旧镜像，TIMEOUT=30s 优雅退出（护 moov）。公共镜像无需 GHCR 凭据（与检查更新同一前提）。`WITH_WATCHTOWER=1 ./scripts/nas-deploy.sh` 一键带上。
+- **前端**：状态栏下加 `#update-line`——有新版橙色醒目 + 「请到 NAS 执行 nas-deploy.sh」，已最新绿色 ✓，可点「检查更新」强制重查。boot() 挂 checkUpdate(false) 首屏静默查。
+**验证**：42 单测绿（新增 4 个 conclude 判定分支）；docker rust:1.88-slim fmt+clippy+test 三验干净；node 校验页面 JS 语法与 6 个关键函数齐全（修掉一次编辑吞掉 loadStatus 声明的失误）。**待真机点验：状态栏更新提示、nas-deploy.sh 在飞牛上跑通 digest 注入、Watchtower 叠加启动。**
+**边界（如实记）**：本地 digest 依赖用户用 nas-deploy.sh（或手动 export）部署才注入；直接飞牛面板「重启/更新」不会带这两个 env，此时检查更新退化为按 commit 比对或「无法确定本地版本」——这是容器看不到宿主机镜像 digest 的固有限制，已在 compose 注释与 README 写明。

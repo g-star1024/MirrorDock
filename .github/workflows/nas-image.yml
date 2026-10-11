@@ -141,6 +141,8 @@ jobs:
             --platform "${PLATFORMS}" \
             --tag "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" \
             --tag "${{ steps.meta.outputs.image }}:latest" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --cache-from type=gha \
             --cache-to type=gha,mode=max \
             --progress=plain \

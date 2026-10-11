@@ -132,6 +132,26 @@ pub async fn set_password(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// 检查更新（X10-120）
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct UpdateQuery {
+    /// 1 = 强制重查（用户点「检查更新」）；缺省走缓存（页面首屏自动查）。
+    #[serde(default)]
+    pub force: Option<String>,
+}
+
+pub async fn check_update(
+    AxumState(state): AxumState<Arc<State>>,
+    Query(q): Query<UpdateQuery>,
+) -> Json<serde_json::Value> {
+    let force = q.force.as_deref() == Some("1");
+    let info = state.updater.check(force).await;
+    Json(serde_json::to_value(info).unwrap_or_default())
+}
+
 /// 设备列表。去重与「USB 优先」由 md-core 决定，与桌面端给出同一份答案。
 pub async fn devices() -> ApiResult {
     match adb::list_devices().await {

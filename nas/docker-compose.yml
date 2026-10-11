@@ -37,6 +37,16 @@ services:
       # 0 = 不自动清理；非整数值按「不清理」处理。默认 7。
       - MIRRORDOCK_RETENTION_DAYS=7
       - TZ=Asia/Shanghai
+      # 检查更新（X10-120）：让容器知道自己跑的是哪个镜像 digest / 哪个 commit，
+      # 服务端据此与 GHCR 远端 latest 比对。不设置则退化为「无法确定本地版本」。
+      # docker compose 会自动把宿主机的这些变量值带进来（下面的 environment 同名引用）。
+      #
+      # 推荐：用 scripts/nas-deploy.sh 部署（它会先 pull 再自动注入这两个值），
+      # 或在 docker compose up 前手动执行：
+      #   export MIRRORDOCK_IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/g-star1024/mirrordock/mirrordock-nas:latest)
+      #   export MIRRORDOCK_REVISION=$(git -C /path/to/MirrorDock rev-parse --short HEAD 2>/dev/null || echo "")
+      - MIRRORDOCK_IMAGE_DIGEST=${MIRRORDOCK_IMAGE_DIGEST:-}
+      - MIRRORDOCK_REVISION=${MIRRORDOCK_REVISION:-}
 
     volumes:
       # 数据卷：录像与截图（建议放在 NAS 的大容量存储池上）

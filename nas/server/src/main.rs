@@ -15,6 +15,7 @@ mod retention;
 mod scrcpy_proto;
 mod settings;
 mod transfer;
+mod update;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
@@ -38,6 +39,8 @@ pub struct State {
     settings: std::sync::Arc<settings::Settings>,
     /// 应用内访问鉴权（X10-119）：会话表 + 登录限速。
     auth: std::sync::Arc<auth::AuthState>,
+    /// 检查更新（X10-120）：GHCR digest 比对，结果缓存。
+    updater: std::sync::Arc<update::UpdateChecker>,
 }
 
 fn data_dir() -> PathBuf {
@@ -125,6 +128,7 @@ async fn main() {
         mirrors: std::sync::Arc::new(mirror_ws::MirrorManager::default()),
         settings,
         auth,
+        updater: std::sync::Arc::new(update::UpdateChecker::default()),
     });
 
     // 开机自检：scrcpy 缺 server 时，设备识别与截图（走 adb 通道）全都正常，
@@ -177,6 +181,8 @@ async fn main() {
         )
         // 访问密码设置（X10-119）。
         .route("/api/settings/password", post(api::set_password))
+        // 检查更新（X10-120）。force=1 强制重查（用户点按钮），否则走缓存。
+        .route("/api/update/check", get(api::check_update))
         // 鉴权中间件：保护全部业务接口。未设密码时零开销直通。
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

@@ -30,6 +30,9 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 # 选 ring 而不是 args 散装的 sha2+pbkdf2+rand 三件套：一个 crate 全覆盖，
 # 且恒定时间比较由 ring 内部保证。
 ring = "0.17"
+# 检查更新（X10-120）：匿名调 GHCR 公共接口比对镜像 digest。
+# rustls 而非 openssl——容器精简镜像里不装 libssl，纯 Rust TLS 零系统依赖。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # libc：仅在 Unix 下用于重置子进程信号处置（见 record.rs 的 X10-95 说明）。
 [target.'cfg(unix)'.dependencies]

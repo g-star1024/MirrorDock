@@ -1,0 +1,43 @@
+# MirrorDock NAS 版 · Watchtower 自动在线更新（X10-120，可选）
+#
+# 【这是什么】
+# Watchtower 是一个「盯梢」容器：周期性检查你指定的镜像在 registry 上有没有
+# 新 digest，有就自动 pull 并用同样的参数重建容器——真正做到「无人值守在线更新」。
+# 它正是为了绕开「飞牛/GitHub Container Registry 不触发有新版本徽标」这个缺口。
+#
+# 【怎么用】
+# 这是 compose 的**叠加文件**（override），不是独立项目。与主 compose 一起启动：
+#   docker compose -f docker-compose.yml -f docker-compose.watchtower.yml up -d
+# 用 scripts/nas-deploy.sh 部署时，加环境变量即可带上：
+#   WITH_WATCHTOWER=1 ./scripts/nas-deploy.sh   （脚本会自动拼 -f 参数）
+#
+# 【GHCR 凭据】
+# 我们的镜像是公共可见的（匿名可拉），所以 Watchtower **不需要**任何凭据——
+# 直接留空 REPO_USER/REPO_PASS 即可。若哪天把镜像改成私有，再取消注释并填 PAT
+# （PAT 只需 packages:read 权限）。
+
+services:
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: mirrordock-watchtower
+    restart: unless-stopped
+    volumes:
+      # 必须能访问 docker socket 才能 pull 与重建其它容器。
+      # 这是 Watchtower 的工作方式，也是它需要的最小权限。
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Asia/Shanghai
+      # 每 6 小时检查一次（够及时，又不会频繁打扰 GHCR）。
+      - WATCHTOWER_POLL_INTERVAL=21600
+      # 只盯 mirrordock-nas 这一个容器，不碰 NAS 上的其它服务。
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      # 更新成功后清理旧镜像，避免磁盘被历史镜像占满。
+      - WATCHTOWER_CLEANUP=true
+      # 重建前给容器 30 秒优雅退出——录制中的 MP4 需要时间写 moov 索引，
+      # 直接 SIGKILL 会产生浏览器拒播的孤儿文件（X10-95 的教训在这里同样适用）。
+      - WATCHTOWER_TIMEOUT=30s
+      # 公共镜像，无需凭据。私有镜像时取消注释：
+      # - REPO_USER=你的GitHub用户名
+      # - REPO_PASS=你的PAT（packages:read）
+    # 只管理 mirrordock-nas 这一个容器（按容器名匹配）。
+    command: mirrordock-nas

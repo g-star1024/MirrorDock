@@ -13,6 +13,7 @@
 - **应用管理**：列出第三方/系统应用、上传 APK 安装。
 - **归档保留策略**：按天数自动回收最旧录像与截图（见环境变量 `MIRRORDOCK_RETENTION_DAYS`）。
 - **应用内访问鉴权**（X10-119）：设置页可设访问密码，登录后会话保持 12 小时；挂公网前请务必开启，详见 [docs/remote-access.md](docs/remote-access.md)。
+- **检查更新**（X10-120）：状态栏自动比对本地镜像与 GHCR 远端 latest，有新版即提示。飞牛对 ghcr.io 不显示「有新版本」，此功能绕开该缺口。
 
 ---
 
@@ -114,6 +115,23 @@ nas/
 | `/api/auth/login` | POST | `{password}` → `{token}`。按来源 IP 限速：1 分钟错 5 次锁 1 分钟（429） |
 | `/api/auth/logout` | POST | 注销当前会话 |
 | `/api/settings/password` | POST | `{current, new}` 设置/清除访问密码（`new` 为空 = 关闭鉴权；已启用时必填 `current`）。密码仅存 PBKDF2 哈希 |
+| `/api/update/check?force=1` | GET | 检查更新（X10-120）。匿名比对 GHCR 远端 latest digest；`force=1` 强制重查，缺省走 1 小时缓存 |
+
+## 更新部署
+
+**手动更新**（SSH 到 NAS）：
+```bash
+./scripts/nas-deploy.sh
+```
+拉取最新镜像 → 注入本地镜像 digest/commit（供检查更新比对）→ 重建容器，一步到位。
+
+**自动在线更新**（可选）：叠加 Watchtower，检测到新 digest 自动 pull + 重建：
+```bash
+WITH_WATCHTOWER=1 ./scripts/nas-deploy.sh
+```
+公共镜像无需 GHCR 凭据；Watchtower 只盯 `mirrordock-nas` 一个容器，每 6 小时检查，
+重建前给 30 秒优雅退出（保护录制中的 MP4 写 moov 索引）。详见
+`nas/docker-compose.watchtower.yml`。
 
 远程访问（Tailscale 组网 / 反代 HTTPS / 应用内密码）的完整部署指南见
 [docs/remote-access.md](docs/remote-access.md)。

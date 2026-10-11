@@ -135,6 +135,8 @@
       <button id="logout-btn" hidden style="font-size:13px;padding:6px 12px">退出登录</button>
     </div>
     <div class="sub" id="status-line">正在连接…</div>
+    <!-- 检查更新（X10-120）：有新版时显示醒目提示，平时一行小字。 -->
+    <div id="update-line" class="sub" style="margin-top:4px"></div>
   </header>
 
   <section class="card">
@@ -372,6 +374,33 @@ async function api(path, options) {
     throw e;
   }
   return body;
+}
+
+// ---------------------------------------------------------------------------
+// 检查更新（X10-120）
+// ---------------------------------------------------------------------------
+// 飞牛对 ghcr.io 不显示「有新版本」，自己在页面里做。首屏静默查一次（走缓存），
+// 用户可点「检查更新」强制重查。
+async function checkUpdate(force) {
+  const line = $('update-line');
+  try {
+    const info = await api('/api/update/check' + (force ? '?force=1' : ''));
+    if (!info.checked) {
+      line.innerHTML = '<span style="color:var(--muted)">更新检查：' + (info.message || '不可用') + '</span>'
+        + ' <a href="#" id="update-recheck" style="font-size:12px">重试</a>';
+    } else if (info.update_available) {
+      line.innerHTML = '<span style="color:var(--warn);font-weight:600">⬆ ' + info.message + '</span>'
+        + ' <span class="meta">请到 NAS 执行 <code>./scripts/nas-deploy.sh</code> 更新</span>'
+        + ' <a href="#" id="update-recheck" style="font-size:12px">重新检查</a>';
+    } else {
+      line.innerHTML = '<span style="color:var(--ok)">✓ ' + info.message + '</span>'
+        + ' <a href="#" id="update-recheck" style="font-size:12px">检查更新</a>';
+    }
+    const recheck = $('update-recheck');
+    if (recheck) recheck.onclick = (e) => { e.preventDefault(); checkUpdate(true); };
+  } catch (e) {
+    if (e.code !== 'auth_required') line.textContent = '';
+  }
 }
 
 async function loadStatus() {
@@ -1009,6 +1038,7 @@ async function boot() {
   loadRecordings();
   loadScreenshots();
   loadSettings();
+  checkUpdate(false); // 首屏静默查一次更新（走缓存，不拖慢）
 }
 
 setToken(authToken); // 同步退出按钮可见性
