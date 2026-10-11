@@ -24,9 +24,23 @@ services:
     # USB 透传（必需）。缺失则容器看不到任何手机。
     privileged: true
 
-    # 无线调试/mDNS 发现依赖局域网广播，桥接模式下 adb pair 会找不到手机。
-    # host 模式最省心；若必须隔离网络，改用 network_mode: bridge + ports 映射。
-    network_mode: host
+    # 网络模式二选一：
+    #
+    # 【桥接 + 端口映射（默认，推荐飞牛用户）】
+    # 飞牛的 Docker「快捷访问」🔗 图标只对声明了 ports 的容器显示；
+    # FN Connect 基础版不支持端口穿透（飞牛官方 2026-06 明确），远程访问
+    # MirrorDock 的唯一免费路径 = 管理面板登录 → Docker → 快捷访问点开。
+    # 代价：docker bridge 不转发组播，adb 无线配对的 mDNS 自动发现失效
+    # （手动输 IP:端口 的配对不受影响）；USB 有线调试完全不受影响。
+    network_mode: bridge
+    ports:
+      - "8080:8080"
+
+    # 【host 模式（备选）】
+    # 无线调试/mDNS 自动发现依赖局域网广播，host 模式下可用；
+    # 但飞牛面板不会显示快捷访问图标，FN Connect 免费版远程无门。
+    # 用下面的配置替换上面的 bridge + ports 两个键即可：
+    # network_mode: host
 
     environment:
       # Web 端口（host 网络模式下直接映射为宿主机端口）
