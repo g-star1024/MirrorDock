@@ -107,6 +107,10 @@
     align-items: center; justify-content: center;
     background: var(--bg); padding: 24px;
   }
+  /* 【hidden 失效陷阱】#login-gate 的 display:flex 会覆盖 hidden 属性的
+     默认 display:none（显式 CSS > 属性默认值），导致「DOM 上 hidden=true
+     但视觉上仍显示」。必须给 [hidden] 一条更高优先级的强制规则。 */
+  #login-gate[hidden] { display: none; }
   .login-box {
     background: var(--card); border: 1px solid var(--line);
     border-radius: var(--radius); padding: 28px 24px; width: 100%; max-width: 360px;
