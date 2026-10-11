@@ -29,6 +29,9 @@ pub struct Status {
     pub adb: String,
     pub scrcpy: String,
     pub recording: Option<String>,
+    /// 归档保留天数。0 = 不自动清理。前端据此显示「录像保留 N 天」，
+    /// 让用户一眼知道旧录像会被回收——不然某天文件不见了会以为是丢数据。
+    pub retention_days: u64,
 }
 
 pub async fn status(AxumState(state): AxumState<Arc<State>>) -> Json<Status> {
@@ -39,6 +42,7 @@ pub async fn status(AxumState(state): AxumState<Arc<State>>) -> Json<Status> {
         adb: adb::adb_binary(),
         scrcpy: adb::scrcpy_binary(),
         recording: guard.as_ref().map(|r| r.path.display().to_string()),
+        retention_days: state.retention_days,
     })
 }
 

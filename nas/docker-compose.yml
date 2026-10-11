@@ -33,6 +33,9 @@ services:
       - PORT=8080
       # 数据目录：录像、截图、adb 授权密钥都落在这里
       - MIRRORDOCK_DATA=/var/lib/mirrordock
+      # 归档保留天数：每 6 小时回收超过 N 天的录像/截图，避免 24h 录制把磁盘写满。
+      # 0 = 不自动清理；非整数值按「不清理」处理。默认 7。
+      - MIRRORDOCK_RETENTION_DAYS=7
       - TZ=Asia/Shanghai
 
     volumes:

@@ -142,8 +142,13 @@ async function api(path, options) {
 async function loadStatus() {
   try {
     const s = await api('/api/status');
+    // 保留策略要显式写在界面上：旧录像会被自动回收，不说明的话用户某天发现
+    // 文件少了会当成丢数据。0 = 不清理。
+    const keep = s.retention_days > 0
+      ? ` · 归档保留 ${s.retention_days} 天`
+      : ' · 归档不自动清理';
     $('status-line').textContent =
-      `v${s.version} · 数据目录 ${s.data_dir} · adb ${s.adb}${s.recording ? ' · 录制中' : ''}`;
+      `v${s.version} · 数据目录 ${s.data_dir} · adb ${s.adb}${keep}${s.recording ? ' · 录制中' : ''}`;
     // 【按钮状态必须跟服务端对齐】录制状态活在服务端进程里，按钮 disabled
     // 却只存在前端内存——页面一刷新两者就脱节：服务端明明在录，结束按钮
     // 却永远是灰的，那场录制就再也停不下来，产出一份没有 moov 索引、浏览器

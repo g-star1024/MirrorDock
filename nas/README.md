@@ -74,6 +74,7 @@ nas/
 | `PORT` | `8080` | Web 端口 |
 | `MIRRORDOCK_DATA` | `/var/lib/mirrordock` | 数据目录（录像/截图/adb 密钥） |
 | `MIRRORDOCK_WEB` | `/opt/mirrordock/web` | 前端静态站目录 |
+| `MIRRORDOCK_RETENTION_DAYS` | `7` | 归档保留天数。`0` 表示不自动清理；非整数值按「不清理」处理（清错不可逆，磁盘满只是可恢复告警）。每 6 小时扫一次 `recordings/*.mp4` 与 `screenshots/*.png`，删除超过 N 天的文件 |
 | `ADB` | `/opt/scrcpy/adb` | adb 路径 |
 | `SCRCPY` | `/opt/scrcpy/scrcpy` | scrcpy 路径 |
 

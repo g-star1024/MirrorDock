@@ -1139,3 +1139,16 @@ Done(1)                      # 进程秒退
   `recordings/qc8d8tonbmmzm7qs-20261011-064335.mp4` ✅
 - 待用户确认：归档列表里该 MP4 能否在线播放（moov 索引完整性 = X10-95 教训在
   NAS 场景的最终落点）；截图 / 手机文件浏览两接口待点验。
+
+### X10-114 · 归档保留策略：按天数自动回收最旧录像（2026-10-11，用户要求）
+**需求**：NAS 常开机 + 24h 录制，录像只增不减终将写满磁盘；写满后的表现是 scrcpy 写出半个 MP4、adbd 推送失败这类离根因很远的故障。需「按天数自动删除最旧录像」。
+**设计取向（刻意 fail-safe）**：
+- 默认开启、默认 7 天（`MIRRORDOCK_RETENTION_DAYS=0` 关闭；非整数值按「不清理」处理——清错不可逆，磁盘满只是可恢复告警）
+- 启动先扫一轮（NAS 常连几周没人看，重启时往往已堆几十 GB），再挂每 6 小时周期任务
+- 只删 `recordings/*.mp4` 与 `screenshots/*.png` 一层普通文件，不递归、不动其他扩展名（含用户自己放的 notes.txt）
+- 单个文件删失败只记录不中断
+**落地**：`nas/server/src/retention.rs`（新）+ `main.rs`（启动轮+周期任务+State.retention_days）+ `api.rs`（Status.retention_days，前端状态栏显示「归档保留 N 天」）+ `web/index.html`（状态栏同步）+ `docker-compose.yml`/`README.md`（env 文档）。
+**验证**：
+- 单测 12 项全绿（含 `retention::` 5 项：超龄才删 / 边界 7 天保留 / 0 天全留 / 非 mp4 与子目录不动 / 截图目录同样受管）
+- **真服务 e2e**：布置 30/20/10 天 mp4 + 1 天 fresh.mp4 + 100 天 notes.txt + 30 天 old.png，启动轮扫 5 个删 4 个，磁盘核对 = 删 30/20/10 天与 old.png、留 fresh.mp4 与 notes.txt ✅
+- `cargo build` / `cargo test -p mirrordock-nas` 通过；feature 待用户推镜像后在飞牛复验。

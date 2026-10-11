@@ -9,11 +9,13 @@
 mod adb;
 mod api;
 mod record;
+mod retention;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tower_http::services::ServeDir;
 
@@ -22,6 +24,8 @@ pub struct State {
     /// 同一时刻只允许一条录制。NAS 常开机的价值在于长时间稳定录像，
     /// 并发多录制会互相抢编码资源导致掉帧。
     recording: Mutex<Option<record::Recording>>,
+    /// 归档保留天数（启动时解析一次，与启动日志和 /api/status 同源）。
+    retention_days: u64,
 }
 
 fn data_dir() -> PathBuf {
@@ -37,9 +41,53 @@ async fn main() {
     let _ = tokio::fs::create_dir_all(data.join("recordings")).await;
     let _ = tokio::fs::create_dir_all(data.join("screenshots")).await;
 
+    // 归档保留策略：启动时先扫一轮，再挂周期任务。
+    //
+    // 启动这一轮很重要——NAS 可能连续跑几周没人看，重启时往往已经堆了几十 GB。
+    // 而「磁盘写满」在录制场景下的表现不是报错，是 scrcpy 写出半个 MP4、
+    // adbd 推送失败这类离根因很远的故障，所以宁可在启动时就先把水位降下来。
+    let retention_days = retention::retention_days();
+    if retention_days == 0 {
+        println!("  归档保留：不自动清理（MIRRORDOCK_RETENTION_DAYS=0）");
+    } else {
+        println!("  归档保留：{retention_days} 天（每 6 小时扫一次）");
+        let dir = data.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            retention::sweep(&dir, retention_days, SystemTime::now())
+        })
+        .await
+        .unwrap_or_default();
+        if !report.is_empty() {
+            println!("  启动清理：{}", report.summary());
+        }
+
+        let dir = data.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(retention::SWEEP_INTERVAL);
+            // interval 的首拍立即完成，这里先吃掉它——启动那轮已经跑过了。
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let dir = dir.clone();
+                match tokio::task::spawn_blocking(move || {
+                    retention::sweep(&dir, retention_days, SystemTime::now())
+                })
+                .await
+                {
+                    Ok(report) if !report.is_empty() => {
+                        println!("[归档保留] {}", report.summary())
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[归档保留] 清理任务异常：{e}"),
+                }
+            }
+        });
+    }
+
     let state = Arc::new(State {
         data_dir: data.clone(),
         recording: Mutex::new(None),
+        retention_days,
     });
 
     // 开机自检：scrcpy 缺 server 时，设备识别与截图（走 adb 通道）全都正常，
