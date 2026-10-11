@@ -12,7 +12,9 @@ mod mirror_ws;
 mod record;
 mod retention;
 mod scrcpy_proto;
+mod transfer;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::path::PathBuf;
@@ -44,6 +46,9 @@ async fn main() {
     // 录像/截图目录要在首次请求前就备好，否则第一次录制会因竞态失败。
     let _ = tokio::fs::create_dir_all(data.join("recordings")).await;
     let _ = tokio::fs::create_dir_all(data.join("screenshots")).await;
+    // 文件传输的暂存与下载落地目录。
+    let _ = tokio::fs::create_dir_all(data.join("uploads")).await;
+    let _ = tokio::fs::create_dir_all(data.join("inbox")).await;
 
     // 归档保留策略：启动时先扫一轮，再挂周期任务。
     //
@@ -120,6 +125,22 @@ async fn main() {
         .route("/api/recordings", get(api::recordings))
         .route("/api/recordings/{name}", delete(api::delete_recording))
         .route("/api/files", get(api::list_files))
+        // 文件双向传输（上传/下载放宽到 2GB，APK 与视频可能很大）。
+        .route(
+            "/api/files/upload",
+            post(api::upload_to_device).layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024)),
+        )
+        .route("/api/files/download", get(api::download_from_device))
+        .route("/api/files/delete", post(api::delete_device_file))
+        // 应用管理。
+        .route("/api/apps", get(api::list_apps))
+        .route(
+            "/api/apps/install",
+            post(api::install_apk).layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024)),
+        )
+        // 截图画廊。
+        .route("/api/screenshots", get(api::list_screenshots))
+        .route("/api/screenshots/{name}", delete(api::delete_screenshot))
         .route("/api/stream/ws", get(mirror_ws::stream_ws))
         .route("/api/stream/stop", post(api::stop_mirror));
 
