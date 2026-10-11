@@ -965,9 +965,11 @@ async function loadSettings() {
 async function savePassword() {
   const msg = $('pw-msg');
   msg.hidden = true;
+  // 密码不 trim：与后端保持一致（X10-121），只拦「全空白=清除」。
+  const newPw = $('pw-new').value;
   const body = {
     current: $('pw-current').value || null,
-    new: $('pw-new').value || null,
+    new: (newPw && newPw.trim() !== '') ? newPw : null,
   };
   try {
     const s = await api('/api/settings/password', {

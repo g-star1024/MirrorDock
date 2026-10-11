@@ -1239,3 +1239,18 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **前端**：状态栏下加 `#update-line`——有新版橙色醒目 + 「请到 NAS 执行 nas-deploy.sh」，已最新绿色 ✓，可点「检查更新」强制重查。boot() 挂 checkUpdate(false) 首屏静默查。
 **验证**：42 单测绿（新增 4 个 conclude 判定分支）；docker rust:1.88-slim fmt+clippy+test 三验干净；node 校验页面 JS 语法与 6 个关键函数齐全（修掉一次编辑吞掉 loadStatus 声明的失误）。**待真机点验：状态栏更新提示、nas-deploy.sh 在飞牛上跑通 digest 注入、Watchtower 叠加启动。**
 **边界（如实记）**：本地 digest 依赖用户用 nas-deploy.sh（或手动 export）部署才注入；直接飞牛面板「重启/更新」不会带这两个 env，此时检查更新退化为按 commit 比对或「无法确定本地版本」——这是容器看不到宿主机镜像 digest 的固有限制，已在 compose 注释与 README 写明。
+
+### X10-121 · 修复「访问密码怎么设置都不对」（2026-10-11）
+
+**背景**：用户在局域网 `http://192.168.1.45:8080` 设置访问密码后登录始终 401。Console 取证确认请求带密码、服务端返回 401（密码不匹配），排除限速（429）与未启用（400）。
+
+**根因（不对称 trim）**：`api.rs set_password` 设置时对 `new` 做 `.map(str::trim)` 后再哈希；而 `auth.rs login` 校验时用 `&body.password` 原样比对。若用户从剪贴板复制密码带前导/尾随空格，**存进去的是 trim 后的哈希，登录输入的是带空格的原文** → 永不匹配。这是「设置端悄悄改用户输入、登录端严格比对」的经典不对称 bug。
+
+**修复**：
+- `api.rs`：设置端不再 trim，密码原样哈希；只拦截「全空白 = 清除」与「字符数 < 6」（空格计入长度，与登录端完全一致）。
+- `index.html savePassword`：前端同步不 trim，仅拦全空白。
+
+**迁移**：旧数据若曾带空格被 trim 过，需**重置一次密码**（env `MIRRORDOCK_ACCESS_PASSWORD` 覆盖，或删 settings.json 的 `access_password` 字段后重启），之后设置=登录同规则永不再发。不引入「登录时也试 trim 版本」的兼容——避免一个密码两种哈希可登的口径分裂。
+
+**验证**：42 单测绿；docker rust:1.88-slim fmt+clippy(-D warnings)+test 三验干净。**待真机点验：重置后设置新密码 → 登录成功；带空格密码设置后带空格登录成功。**
+**纪律（元教训）**：凡是「设置时归一化、校验时原样比」的字段（密码/用户名/密钥），两端必须同规则——宁可都不归一化，不可只归一化一端。

@@ -108,13 +108,17 @@ pub async fn set_password(
             )));
         }
     }
-    let new_hash = match body.new.as_deref().map(str::trim) {
-        Some("") | None => None,
-        Some(p) if p.len() < 6 => {
+    // 【trim 陷阱】密码不做 trim——「设置时 trim、登录时原样比对」会让
+    // 复制带空格的密码设置成功却永远登不上（X10-121 实踩）。密码原样哈希，
+    // 只拦截「全是空白」和「长度不足」，其余字符（含空格）一律尊重用户输入。
+    let new_hash = match body.new.as_deref() {
+        None => None,
+        Some(p) if p.trim().is_empty() => None, // 全空白 = 清除密码
+        Some(p) if p.chars().count() < 6 => {
             return Err(err(AppError::new(
                 "password_too_short",
                 "密码至少 6 位",
-                "请设置 6 位以上的访问密码。",
+                "请设置 6 位以上的访问密码（空格也计入长度）。",
             )));
         }
         Some(p) => Some(crate::auth::hash_password(p)),
