@@ -129,7 +129,7 @@
       <canvas id="mirror-canvas"></canvas>
       <div id="mirror-placeholder">
         <div style="font-size:32px">📱</div>
-        <div>选择手机后点「开始镜像」，画面会实时显示在这里。<br>在画面上点按/拖动即可操作手机。</div>
+        <div>选择手机后点「开始镜像」，画面会实时显示在这里。<br>在画面上点按/拖动即可操作手机。<br><span class="meta">安全上下文用硬件解码，局域网 HTTP 自动切换软件解码（更耗 CPU）。</span></div>
         <div id="mirror-hint" class="meta"></div>
       </div>
     </div>
@@ -539,7 +539,9 @@ async function installApk() {
 // ===================== 实时镜像（WebCodecs + WebSocket）=====================
 const mirror = {
   ws: null,
-  decoder: null,
+  decoder: null,      // WebCodecs VideoDecoder（安全上下文）
+  wasm: null,         // WASM 软解实例（局域网 HTTP 兜底）
+  mode: null,         // 'webcodecs' | 'wasm'
   canvas: $('mirror-canvas'),
   ctx: null,
   screenW: 0,
@@ -548,6 +550,23 @@ const mirror = {
   queue: [],
 };
 mirror.ctx = mirror.canvas.getContext('2d');
+
+// WASM 软解兜底：WebCodecs 只在安全上下文（HTTPS/localhost）暴露，
+// 局域网 http://IP:8080 没有它——此时用 WASM 在 CPU 解 baseline H.264。
+let wasmModulePromise = null;
+async function mirrorEnsureWasm() {
+  if (mirror.wasm) return true;
+  try {
+    if (!wasmModulePromise) wasmModulePromise = import('./wasm-decoder.mjs');
+    const m = await wasmModulePromise;
+    mirror.wasm = new m.WasmDecoder();
+    await mirror.wasm.init();
+    return true;
+  } catch (e) {
+    show($('mirror-msg'), '软解加载失败：' + e.message, true);
+    return false;
+  }
+}
 
 const KEYCODES = { back: 4, home: 3, recents: 187, power: 26 };
 
@@ -566,11 +585,13 @@ function b64ToBytes(b64) {
 }
 
 function mirrorEnsureDecoder() {
-  if (mirror.decoder) return;
+  if (mirror.decoder || mirror.mode === 'wasm') return;
   if (!('VideoDecoder' in window)) {
-    show($('mirror-msg'), '当前浏览器不支持 WebCodecs，无法解码实时画面。请用较新的 Chrome/Edge。', true);
+    // 非安全上下文（局域网 HTTP）→ 标记走 WASM，不在这里报错打断。
+    mirror.mode = 'wasm';
     return;
   }
+  mirror.mode = 'webcodecs';
   mirror.decoder = new VideoDecoder({
     output: (frame) => {
       // 直接画到 canvas。createImageBitmap 异步会乱序，drawImage(frame) 同步最稳。
@@ -597,12 +618,24 @@ function mirrorHandle(msg) {
       if (mirror.decoder && mirror.decoder.state !== 'closed') {
         try { mirror.decoder.reset(); } catch (_) {}
       }
+      if (mirror.wasm) { mirror.wasm.reset(); }
       mirror.configured = false;
       break;
     case 'video': {
+      const data = b64ToBytes(msg.data);
+      if (mirror.mode === 'wasm' || (!('VideoDecoder' in window))) {
+        // WASM 软解：config(SPS/PPS) 帧与普通帧一起按序喂,tinyh264 自取参数集。
+        mirrorEnsureWasm().then((ok) => {
+          if (!ok || !mirror.wasm) return;
+          mirror.wasm.decodePacket(data, msg.config, msg.keyframe, (img, w, h) => {
+            if (mirror.canvas.width !== w) { mirror.canvas.width = w; mirror.canvas.height = h; }
+            mirror.ctx.putImageData(img, 0, 0);
+          });
+        });
+        break;
+      }
       mirrorEnsureDecoder();
       if (!mirror.decoder || mirror.decoder.state === 'closed') return;
-      const data = b64ToBytes(msg.data);
       // scrcpy-server 用 MediaCodec 输出的是 H.264 **Annex-B 裸流**（Tango ADB 官方
       // 文档确认），SPS/PPS 内联在流里。浏览器解 Annex-B 时**不给 description**
       // （那是 AVCC 格式专用），只声明 codec 让解码器自行从流里读参数集。
@@ -637,8 +670,8 @@ function mirrorHandle(msg) {
 function mirrorStart() {
   const serial = $('mirror-serial').value;
   if (!serial) { show($('mirror-msg'), '请先连接一台手机。', true); return; }
+  // 选定解码模式：有 WebCodecs 用硬解，没有则 WASM 软解（局域网 HTTP 兜底）。
   mirrorEnsureDecoder();
-  if (!mirror.decoder) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/api/stream/ws?serial=${encodeURIComponent(serial)}`);
   mirror.ws = ws;
@@ -653,6 +686,7 @@ function mirrorStart() {
 function mirrorStop() {
   const serial = $('mirror-serial').value;
   if (mirror.ws) { try { mirror.ws.close(); } catch (_) {} mirror.ws = null; }
+  if (mirror.wasm) { mirror.wasm.dispose(); mirror.wasm = null; }
   if (mirror.decoder && mirror.decoder.state !== 'closed') {
     try { mirror.decoder.close(); } catch (_) {}
   }

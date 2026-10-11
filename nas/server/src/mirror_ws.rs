@@ -114,7 +114,7 @@ impl MirrorManager {
 
         let session =
             scrcpy_proto::start_mirror(serial, mirror_local_port(serial), max_size).await?;
-        let (video, control_sock, _scid, _port, server_child) = session.into_parts();
+        let (video, control_sock, _scid, _port, server_child, server_log) = session.into_parts();
         // server_child 必须活到会话结束：把它连同解复用泵一起 move 进后台任务，
         // 任务结束（设备断开/广播无人收）时 drop 即 kill_on_drop 杀掉设备端 server。
 
@@ -136,7 +136,7 @@ impl MirrorManager {
         tokio::spawn(async move {
             let _server_child = server_child; // 保活：任务存活期间设备端 server 不被杀
             let _control_read = control_read; // 目前不收设备→客户端的控制回包
-            pump_video(video, tx_pump, screen_ref, serial_owned).await;
+            pump_video(video, tx_pump, screen_ref, serial_owned, server_log).await;
         });
 
         guard.insert(serial.to_owned(), active.clone());
@@ -155,6 +155,7 @@ async fn pump_video(
     tx: broadcast::Sender<ServerMsg>,
     screen: Arc<Mutex<control::ScreenSize>>,
     serial: String,
+    server_log: Arc<Mutex<String>>,
 ) {
     let demux = match scrcpy_proto::VideoDemux::new(video).handshake().await {
         Ok((d, name, cid)) => {
@@ -173,9 +174,15 @@ async fn pump_video(
             d
         }
         Err(e) => {
-            let _ = tx.send(ServerMsg::Error {
-                message: format!("镜像握手失败：{e}"),
-            });
+            // 握手 EOF 多半是设备端 server 启动即崩——把它的真实输出一并带出，
+            // 否则用户只看到一个莫名其妙的 "early eof"，无从排查。
+            let log = server_log.lock().await.clone();
+            let detail = if log.is_empty() {
+                format!("镜像握手失败：{e}。设备端 scrcpy-server 无输出，可能在启动前就已退出。")
+            } else {
+                format!("镜像握手失败：{e}。设备端 scrcpy-server 输出：{log}")
+            };
+            let _ = tx.send(ServerMsg::Error { message: detail });
             return;
         }
     };
@@ -536,7 +543,14 @@ mod tests {
             height: 0,
         }));
         let mut rx = tx.subscribe();
-        let pump = tokio::spawn(pump_video(video, tx, screen.clone(), "test".to_owned()));
+        let server_log = Arc::new(Mutex::new(String::new()));
+        let pump = tokio::spawn(pump_video(
+            video,
+            tx,
+            screen.clone(),
+            "test".to_owned(),
+            server_log,
+        ));
 
         // 期望序列：Meta → Session → Video
         let m1 = rx.recv().await.unwrap();

@@ -303,17 +303,29 @@ pub struct MirrorSession {
     pub scid: u32,
     pub local_port: u16,
     server_child: tokio::process::Child,
+    /// server 子进程输出（尾部），握手失败时用来还原死因。
+    server_log: std::sync::Arc<tokio::sync::Mutex<String>>,
 }
 
 impl MirrorSession {
     /// 拆出部件，供 WS 层把子进程 move 进保活任务。
-    pub fn into_parts(self) -> (TcpStream, TcpStream, u32, u16, tokio::process::Child) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        TcpStream,
+        TcpStream,
+        u32,
+        u16,
+        tokio::process::Child,
+        std::sync::Arc<tokio::sync::Mutex<String>>,
+    ) {
         (
             self.video,
             self.control,
             self.scid,
             self.local_port,
             self.server_child,
+            self.server_log,
         )
     }
 }
@@ -380,7 +392,16 @@ pub async fn start_mirror(
     } else {
         format!(" max_size={max_size}")
     };
-    let server_child = ProcCommand::new(crate::adb::adb_binary())
+    // 锁定 H.264 baseline profile + level 4：WASM 软解（tinyh264）只认 baseline，
+    // 而 WebCodecs 硬解对 baseline 同样兼容——统一锁定让两条解码链都能用同一条流，
+    // 避免「设备默认 high profile → WASM 解不出」这类只在软解路径才暴露的问题。
+    // MediaCodec 常量：AVCProfileBaseline=1，AVCLevel4=1024（scrcpy video_codec_options
+    // 格式 key:type=value，int 可省略 :int）。
+    let codec_opts = " video_codec_options=profile=1,level=1024";
+    // server 的报错（参数不识别 / 编码器缺失 / app_process 崩溃）全走 stderr。
+    // 不接管的话，进程一旦启动即崩，死因会被吞掉，客户端只在握手时拿到一个
+    // 莫名其妙的 "early eof"——2026-10-11 真机实踩。这里 piped 收下来，失败时带出。
+    let mut server_child = ProcCommand::new(crate::adb::adb_binary())
         .args([
             "-s",
             serial,
@@ -398,13 +419,56 @@ pub async fn start_mirror(
             "video_codec=h264",
         ])
         .args(max_size_arg.split_whitespace().filter(|s| !s.is_empty()))
+        .args(codec_opts.split_whitespace().filter(|s| !s.is_empty()))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
 
+    // 后台把 server 输出收进一个共享缓冲（尾部 800 字节），握手失败时用来还原死因。
+    let server_log: std::sync::Arc<tokio::sync::Mutex<String>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+    {
+        let mut out = server_child.stdout.take();
+        let mut err = server_child.stderr.take();
+        let log = server_log.clone();
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if let Some(mut e) = err.take() {
+                let _ = e.read_to_end(&mut buf).await;
+            }
+            if let Some(mut o) = out.take() {
+                let _ = o.read_to_end(&mut buf).await;
+            }
+            let text = String::from_utf8_lossy(&buf).into_owned();
+            let start = text.len().saturating_sub(800);
+            *log.lock().await = text[start..].trim().to_string();
+        });
+    }
+
     // 4. 连 video（首 socket，含 dummy+meta+codec）与 control（次 socket）
-    //    设备端 server 启动有延迟，连不上就重试。
-    let video = connect_retry(local_port).await?;
-    let control = connect_retry(local_port).await?;
+    //    设备端 server 启动有延迟，连不上就重试。连上了也要能区分「握手被 EOF」，
+    //    把 server 输出一起带回错误，否则无法分辨是参数错还是编码器崩。
+    let video = match connect_retry(local_port).await {
+        Ok(v) => v,
+        Err(e) => {
+            let log = server_log.lock().await.clone();
+            return Err(io::Error::new(
+                e.kind(),
+                format!("无法连接 scrcpy-server：{e}。server 输出：{log}"),
+            ));
+        }
+    };
+    let control = match connect_retry(local_port).await {
+        Ok(c) => c,
+        Err(e) => {
+            let log = server_log.lock().await.clone();
+            return Err(io::Error::new(
+                e.kind(),
+                format!("无法连接 scrcpy-server 控制通道：{e}。server 输出：{log}"),
+            ));
+        }
+    };
 
     Ok(MirrorSession {
         video,
@@ -412,6 +476,7 @@ pub async fn start_mirror(
         scid,
         local_port,
         server_child,
+        server_log,
     })
 }
 
@@ -428,6 +493,10 @@ async fn connect_retry(port: u16) -> io::Result<TcpStream> {
     }
     Err(last.unwrap_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "连接 scrcpy-server 超时")))
 }
+
+// 说明：WASM 软解前端的「纯 NAL」不在服务端另开流，而是由 WS 层在同一条
+// baseline 镜像会话上把 12 字节帧头剥掉后转发（见 mirror_ws）。这样单设备
+// 单编码会话、无端口冲突，控制也天然复用。
 
 impl MirrorSession {
     /// 发送一条控制消息到设备。
