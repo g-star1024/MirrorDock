@@ -337,7 +337,7 @@ async fn run_adb(args: &[&str]) -> io::Result<()> {
         .status()
         .await?;
     if !status.success() {
-        return Err(io::Error::other(format!("adb {:?} 失败：{status}", args)));
+        return Err(io::Error::other(format!("adb {args:?} 失败：{status}")));
     }
     Ok(())
 }

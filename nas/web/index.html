@@ -207,6 +207,29 @@
     <div class="msg" id="apps-msg" hidden></div>
     <ul id="apps"><li class="empty">尚未列出</li></ul>
   </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>设置</h2>
+      <button id="settings-save">保存</button>
+    </div>
+    <div class="sub">改动保存后立即生效：新开始的镜像与录制按新画质，保留天数下一轮清理生效。</div>
+    <div class="row" style="margin-bottom:10px">
+      <label class="meta" for="settings-quality" style="min-width:72px">画质预设</label>
+      <select id="settings-quality" style="flex:1;min-width:180px">
+        <option value="smooth">流畅（1024p · 2Mbps，省带宽）</option>
+        <option value="balanced">均衡（1920p · 8Mbps，默认）</option>
+        <option value="sharp">清晰（2560p · 16Mbps，本地网络）</option>
+      </select>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <label class="meta" for="settings-retention" style="min-width:72px">保留天数</label>
+      <input id="settings-retention" type="number" min="0" max="3650" step="1"
+             style="flex:1;min-width:180px;padding:8px 12px;border-radius:10px;border:1px solid var(--line)">
+      <span class="meta">天（0 = 不自动清理）</span>
+    </div>
+    <div class="msg" id="settings-msg" hidden></div>
+  </section>
 </div>
 
 <script>
@@ -713,10 +736,56 @@ $('list-files').onclick = listFiles;
 $('file-upload').onclick = uploadFile;
 $('apk-install').onclick = installApk;
 
+// ---------------------------------------------------------------------------
+// 设置（画质 + 保留天数）
+// ---------------------------------------------------------------------------
+
+async function loadSettings() {
+  try {
+    const s = await api('/api/settings');
+    $('settings-quality').value = s.quality || 'balanced';
+    $('settings-retention').value = s.retention_days;
+    if (s.retention_locked_by_env) {
+      $('settings-retention').disabled = true;
+      const msg = $('settings-msg');
+      msg.textContent = '保留天数由部署环境变量 MIRRORDOCK_RETENTION_DAYS 钉死，网页修改不生效。';
+      msg.style.color = '#b45309';
+      msg.hidden = false;
+    }
+  } catch (e) { /* 设置加载失败不阻塞页面其余功能 */ }
+}
+
+async function saveSettings() {
+  const msg = $('settings-msg');
+  msg.hidden = true;
+  const body = {
+    quality: $('settings-quality').value,
+    retention_days: Math.max(0, parseInt($('settings-retention').value, 10) || 0),
+  };
+  try {
+    const s = await api('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    msg.textContent = `已保存：画质 ${s.quality}，录像保留 ${s.retention_days} 天。` +
+      (s.retention_locked_by_env ? '（保留天数受环境变量控制，未改动）' : '');
+    msg.style.color = '#15803d';
+    msg.hidden = false;
+    loadStatus(); // 状态栏的「归档保留 N 天」立即刷新
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.style.color = '#b91c1c';
+    msg.hidden = false;
+  }
+}
+
+$('settings-save').onclick = saveSettings;
+
 loadStatus();
 loadDevices();
 loadRecordings();
 loadScreenshots();
+loadSettings();
 setInterval(loadStatus, 15000);
 </script>
 </body>

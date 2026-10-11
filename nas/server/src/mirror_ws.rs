@@ -360,7 +360,11 @@ pub async fn stream_ws(
     AxumState(state): AxumState<Arc<State>>,
 ) -> impl IntoResponse {
     let serial = q.serial.clone();
-    let max_size = q.max_size.unwrap_or(1920);
+    // 未显式指定分辨率时跟随 Web 设置的画质预设（而非硬编码 1920）。
+    let max_size = match q.max_size {
+        Some(v) => v,
+        None => state.settings.quality().await.max_size() as u16,
+    };
     ws.on_upgrade(move |sock| handle_ws(sock, state, serial, max_size))
 }
 

@@ -43,8 +43,39 @@ pub async fn status(AxumState(state): AxumState<Arc<State>>) -> Json<Status> {
         adb: adb::adb_binary(),
         scrcpy: adb::scrcpy_binary(),
         recording: guard.as_ref().map(|r| r.path.display().to_string()),
-        retention_days: state.retention_days,
+        // 取实时生效值而非启动快照：Web 改了保留天数后状态栏立即反映。
+        retention_days: state.settings.retention_days().await,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Web 可视化设置
+// ---------------------------------------------------------------------------
+
+pub async fn get_settings(AxumState(state): AxumState<Arc<State>>) -> Json<serde_json::Value> {
+    let view = state.settings.view().await;
+    Json(serde_json::to_value(view).unwrap_or_default())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateSettings {
+    /// smooth / balanced / sharp；缺省表示不改。
+    #[serde(default)]
+    pub quality: Option<crate::settings::QualityPreset>,
+    /// 保留天数（0=不清理）；缺省表示不改。被 env 锁定时服务端忽略。
+    #[serde(default)]
+    pub retention_days: Option<u64>,
+}
+
+pub async fn update_settings(
+    AxumState(state): AxumState<Arc<State>>,
+    Json(body): Json<UpdateSettings>,
+) -> Json<serde_json::Value> {
+    let view = state
+        .settings
+        .update(body.quality, body.retention_days)
+        .await;
+    Json(serde_json::to_value(view).unwrap_or_default())
 }
 
 /// 设备列表。去重与「USB 优先」由 md-core 决定，与桌面端给出同一份答案。
@@ -144,10 +175,12 @@ pub async fn start_record(
             "请先结束当前录制再开始新的录制。",
         )));
     }
+    // 显式指定优先；未指定时跟随 Web 设置里的画质预设（不再硬编码 Balanced）。
     let quality = match body.quality.as_deref() {
         Some("smooth") => Quality::Smooth,
         Some("sharp") => Quality::Sharp,
-        _ => Quality::Balanced,
+        Some("balanced") => Quality::Balanced,
+        _ => Quality::from(state.settings.quality().await),
     };
     let dir = state.data_dir.join("recordings");
     let started = Recording::start(

@@ -12,6 +12,7 @@ mod mirror_ws;
 mod record;
 mod retention;
 mod scrcpy_proto;
+mod settings;
 mod transfer;
 
 use axum::extract::DefaultBodyLimit;
@@ -28,10 +29,10 @@ pub struct State {
     /// 同一时刻只允许一条录制。NAS 常开机的价值在于长时间稳定录像，
     /// 并发多录制会互相抢编码资源导致掉帧。
     recording: Mutex<Option<record::Recording>>,
-    /// 归档保留天数（启动时解析一次，与启动日志和 /api/status 同源）。
-    retention_days: u64,
     /// 实时镜像会话表（serial → 会话）。一台设备同一时刻只一路镜像。
     mirrors: std::sync::Arc<mirror_ws::MirrorManager>,
+    /// Web 可视化设置（画质 + 保留天数），落盘 settings.json。
+    settings: std::sync::Arc<settings::Settings>,
 }
 
 fn data_dir() -> PathBuf {
@@ -55,9 +56,12 @@ async fn main() {
     // 启动这一轮很重要——NAS 可能连续跑几周没人看，重启时往往已经堆了几十 GB。
     // 而「磁盘写满」在录制场景下的表现不是报错，是 scrcpy 写出半个 MP4、
     // adbd 推送失败这类离根因很远的故障，所以宁可在启动时就先把水位降下来。
-    let retention_days = retention::retention_days();
+    // 可视化设置（settings.json）先于保留策略加载：保留天数的生效值在这里确定。
+    let settings = std::sync::Arc::new(settings::Settings::load(&data).await);
+    let retention_days = settings.retention_days().await;
+
     if retention_days == 0 {
-        println!("  归档保留：不自动清理（MIRRORDOCK_RETENTION_DAYS=0）");
+        println!("  归档保留：当前不自动清理（保留天数=0，Web 上改回正数即恢复）");
     } else {
         println!("  归档保留：{retention_days} 天（每 6 小时扫一次）");
         let dir = data.clone();
@@ -69,17 +73,28 @@ async fn main() {
         if !report.is_empty() {
             println!("  启动清理：{}", report.summary());
         }
+    }
 
+    // 周期任务无条件常驻：保留天数为 0 时每轮空转（成本可忽略），
+    // 这样 Web 上从 0 改回 N 不需要重启服务就能恢复清理。
+    {
         let dir = data.clone();
+        let settings_bg = settings.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(retention::SWEEP_INTERVAL);
             // interval 的首拍立即完成，这里先吃掉它——启动那轮已经跑过了。
             tick.tick().await;
             loop {
                 tick.tick().await;
+                // 每轮取当时的生效值：Web 上改了保留天数，下一轮清理即生效，
+                // 无需重启服务。
+                let days = settings_bg.retention_days().await;
+                if days == 0 {
+                    continue;
+                }
                 let dir = dir.clone();
                 match tokio::task::spawn_blocking(move || {
-                    retention::sweep(&dir, retention_days, SystemTime::now())
+                    retention::sweep(&dir, days, SystemTime::now())
                 })
                 .await
                 {
@@ -96,8 +111,8 @@ async fn main() {
     let state = Arc::new(State {
         data_dir: data.clone(),
         recording: Mutex::new(None),
-        retention_days,
         mirrors: std::sync::Arc::new(mirror_ws::MirrorManager::default()),
+        settings,
     });
 
     // 开机自检：scrcpy 缺 server 时，设备识别与截图（走 adb 通道）全都正常，
@@ -142,7 +157,12 @@ async fn main() {
         .route("/api/screenshots", get(api::list_screenshots))
         .route("/api/screenshots/{name}", delete(api::delete_screenshot))
         .route("/api/stream/ws", get(mirror_ws::stream_ws))
-        .route("/api/stream/stop", post(api::stop_mirror));
+        .route("/api/stream/stop", post(api::stop_mirror))
+        // Web 可视化设置。
+        .route(
+            "/api/settings",
+            get(api::get_settings).put(api::update_settings),
+        );
 
     // 录像/截图下载。用现成的静态服务而不是自写下载接口：它天然支持 Range 请求，
     // 浏览器能直接拖动 MP4 进度条播放，这是「24h 录制归档」场景里用户真正要的
