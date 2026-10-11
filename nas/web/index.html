@@ -66,6 +66,22 @@
   .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+
+  /* 实时镜像 */
+  #mirror-stage {
+    position: relative; width: 100%; max-width: 420px; margin: 0 auto;
+    background: #0b0d12; border-radius: 14px; overflow: hidden;
+    border: 1px solid var(--line); aspect-ratio: 9 / 19.5;
+  }
+  #mirror-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #mirror-placeholder {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 8px;
+    color: #8a90a0; font-size: 13px; text-align: center; padding: 20px;
+  }
+  #mirror-stage.live #mirror-placeholder { display: none; }
+  .mirror-toolbar { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 12px; }
+  .mirror-toolbar button { font-size: 13px; padding: 7px 12px; }
 </style>
 </head>
 <body>
@@ -78,6 +94,34 @@
   <section class="card">
     <div class="card-head"><h2>手机</h2><button id="refresh-devices">刷新</button></div>
     <ul id="devices"><li class="empty">读取中…</li></ul>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>实时镜像</h2>
+      <span id="mirror-state" class="meta">未连接</span>
+    </div>
+    <div class="row" style="margin-bottom:12px;justify-content:center">
+      <select id="mirror-serial"></select>
+      <button class="primary" id="mirror-start">开始镜像</button>
+      <button id="mirror-stop" disabled>停止</button>
+    </div>
+    <div id="mirror-stage">
+      <canvas id="mirror-canvas"></canvas>
+      <div id="mirror-placeholder">
+        <div style="font-size:32px">📱</div>
+        <div>选择手机后点「开始镜像」，画面会实时显示在这里。<br>在画面上点按/拖动即可操作手机。</div>
+        <div id="mirror-hint" class="meta"></div>
+      </div>
+    </div>
+    <div class="mirror-toolbar">
+      <button data-act="back">返回</button>
+      <button data-act="home">主页</button>
+      <button data-act="recents">多任务</button>
+      <button data-act="power">电源</button>
+      <button data-act="rotate">旋转</button>
+    </div>
+    <div class="msg" id="mirror-msg" hidden></div>
   </section>
 
   <section class="card">
@@ -189,7 +233,7 @@ async function loadDevices() {
 }
 
 function syncSerialSelects() {
-  ['rec-serial', 'file-serial'].forEach((id) => {
+  ['rec-serial', 'file-serial', 'mirror-serial'].forEach((id) => {
     const sel = $(id);
     const keep = sel.value;
     sel.innerHTML = '';
@@ -286,6 +330,194 @@ async function listFiles() {
       : '<li class="empty">该目录下没有内容</li>';
   } catch (e) { ul.innerHTML = '<li class="empty">' + e.message + '</li>'; }
 }
+
+// ===================== 实时镜像（WebCodecs + WebSocket）=====================
+const mirror = {
+  ws: null,
+  decoder: null,
+  canvas: $('mirror-canvas'),
+  ctx: null,
+  screenW: 0,
+  screenH: 0,
+  configured: false,
+  queue: [],
+};
+mirror.ctx = mirror.canvas.getContext('2d');
+
+const KEYCODES = { back: 4, home: 3, recents: 187, power: 26 };
+
+function mirrorSetState(text, live) {
+  $('mirror-state').textContent = text;
+  $('mirror-stage').classList.toggle('live', !!live);
+  $('mirror-start').disabled = !!live;
+  $('mirror-stop').disabled = !live;
+}
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function mirrorEnsureDecoder() {
+  if (mirror.decoder) return;
+  if (!('VideoDecoder' in window)) {
+    show($('mirror-msg'), '当前浏览器不支持 WebCodecs，无法解码实时画面。请用较新的 Chrome/Edge。', true);
+    return;
+  }
+  mirror.decoder = new VideoDecoder({
+    output: (frame) => {
+      // 直接画到 canvas。createImageBitmap 异步会乱序，drawImage(frame) 同步最稳。
+      if (mirror.canvas.width !== frame.displayWidth) {
+        mirror.canvas.width = frame.displayWidth;
+        mirror.canvas.height = frame.displayHeight;
+      }
+      mirror.ctx.drawImage(frame, 0, 0);
+      frame.close();
+    },
+    error: (e) => show($('mirror-msg'), '解码器异常：' + e.message, true),
+  });
+}
+
+function mirrorHandle(msg) {
+  switch (msg.t) {
+    case 'meta':
+      mirrorSetState(`已连接 ${msg.device}（${msg.codec}）`, true);
+      break;
+    case 'session':
+      mirror.screenW = msg.width;
+      mirror.screenH = msg.height;
+      // 分辨率变化要重置解码器，否则旧 SPS 解新分辨率会花屏。
+      if (mirror.decoder && mirror.decoder.state !== 'closed') {
+        try { mirror.decoder.reset(); } catch (_) {}
+      }
+      mirror.configured = false;
+      break;
+    case 'video': {
+      mirrorEnsureDecoder();
+      if (!mirror.decoder || mirror.decoder.state === 'closed') return;
+      const data = b64ToBytes(msg.data);
+      // scrcpy-server 用 MediaCodec 输出的是 H.264 **Annex-B 裸流**（Tango ADB 官方
+      // 文档确认），SPS/PPS 内联在流里。浏览器解 Annex-B 时**不给 description**
+      // （那是 AVCC 格式专用），只声明 codec 让解码器自行从流里读参数集。
+      if (!mirror.configured) {
+        if (!msg.config) return; // 首个 config(SPS/PPS) 包到来前的帧没法解,先丢
+        mirror.decoder.configure({
+          codec: 'avc1.640028',        // H.264 High@4.0,宽容声明,实际以流内 SPS 为准
+          optimizeForLatency: true,    // 实时镜像优先低延迟而非画质
+          hardwareAcceleration: 'prefer-hardware',
+        });
+        mirror.configured = true;
+      }
+      // config 包通常紧跟一个 IDR,是同一条 Access Unit——configure 后本帧要继续喂,
+      // 不能丢,否则首个关键帧被吃掉会导致开局黑屏直到下一个 IDR。
+      const chunk = new EncodedVideoChunk({
+        type: msg.keyframe ? 'key' : 'delta',
+        timestamp: msg.pts || 0,
+        data,
+      });
+      try { mirror.decoder.decode(chunk); } catch (_) {}
+      break;
+    }
+    case 'state':
+      if (!msg.running) mirrorSetState('已断开', false);
+      break;
+    case 'error':
+      show($('mirror-msg'), msg.message, true);
+      break;
+  }
+}
+
+function mirrorStart() {
+  const serial = $('mirror-serial').value;
+  if (!serial) { show($('mirror-msg'), '请先连接一台手机。', true); return; }
+  mirrorEnsureDecoder();
+  if (!mirror.decoder) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/api/stream/ws?serial=${encodeURIComponent(serial)}`);
+  mirror.ws = ws;
+  mirrorSetState('连接中…', false);
+  ws.onmessage = (ev) => {
+    try { mirrorHandle(JSON.parse(ev.data)); } catch (_) {}
+  };
+  ws.onclose = () => { mirrorSetState('已断开', false); mirror.ws = null; };
+  ws.onerror = () => show($('mirror-msg'), '镜像连接失败。', true);
+}
+
+function mirrorStop() {
+  const serial = $('mirror-serial').value;
+  if (mirror.ws) { try { mirror.ws.close(); } catch (_) {} mirror.ws = null; }
+  if (mirror.decoder && mirror.decoder.state !== 'closed') {
+    try { mirror.decoder.close(); } catch (_) {}
+  }
+  mirror.decoder = null;
+  mirror.configured = false;
+  if (serial) {
+    api('/api/stream/stop?serial=' + encodeURIComponent(serial), { method: 'POST' }).catch(() => {});
+  }
+  mirrorSetState('未连接', false);
+}
+
+function mirrorSend(obj) {
+  if (mirror.ws && mirror.ws.readyState === WebSocket.OPEN) {
+    mirror.ws.send(JSON.stringify(obj));
+  }
+}
+
+// 把 canvas 上的指针坐标换算成设备像素坐标。
+function canvasToDevice(ev) {
+  const rect = mirror.canvas.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) * (mirror.screenW / rect.width);
+  const y = (ev.clientY - rect.top) * (mirror.screenH / rect.height);
+  return {
+    x: Math.max(0, Math.round(x)),
+    y: Math.max(0, Math.round(y)),
+  };
+}
+
+function bindMirrorControl() {
+  const c = mirror.canvas;
+  let touching = false;
+  c.addEventListener('pointerdown', (ev) => {
+    if (!mirror.ws) return;
+    touching = true;
+    c.setPointerCapture(ev.pointerId);
+    const p = canvasToDevice(ev);
+    mirrorSend({ t: 'touch', action: 'down', x: p.x, y: p.y, screenW: mirror.screenW, screenH: mirror.screenH, pressure: 1 });
+  });
+  c.addEventListener('pointermove', (ev) => {
+    if (!touching || !mirror.ws) return;
+    const p = canvasToDevice(ev);
+    mirrorSend({ t: 'touch', action: 'move', x: p.x, y: p.y, screenW: mirror.screenW, screenH: mirror.screenH, pressure: 1 });
+  });
+  const release = (ev) => {
+    if (!touching || !mirror.ws) return;
+    touching = false;
+    const p = canvasToDevice(ev);
+    mirrorSend({ t: 'touch', action: 'up', x: p.x, y: p.y, screenW: mirror.screenW, screenH: mirror.screenH, pressure: 1 });
+  };
+  c.addEventListener('pointerup', release);
+  c.addEventListener('pointercancel', release);
+
+  // 工具栏按键。
+  document.querySelectorAll('.mirror-toolbar [data-act]').forEach((b) => {
+    b.onclick = () => {
+      const act = b.dataset.act;
+      if (act === 'back') mirrorSend({ t: 'back' });
+      else if (act === 'rotate') mirrorSend({ t: 'rotate' });
+      else if (act === 'power') mirrorSend({ t: 'key', action: 'down', keycode: KEYCODES.power });
+      else if (KEYCODES[act] != null) {
+        mirrorSend({ t: 'key', action: 'down', keycode: KEYCODES[act] });
+        mirrorSend({ t: 'key', action: 'up', keycode: KEYCODES[act] });
+      }
+    };
+  });
+}
+
+$('mirror-start').onclick = mirrorStart;
+$('mirror-stop').onclick = mirrorStop;
+bindMirrorControl();
 
 $('refresh-devices').onclick = loadDevices;
 $('refresh-rec').onclick = loadRecordings;
