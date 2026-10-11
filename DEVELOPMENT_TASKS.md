@@ -1152,3 +1152,19 @@ Done(1)                      # 进程秒退
 - 单测 12 项全绿（含 `retention::` 5 项：超龄才删 / 边界 7 天保留 / 0 天全留 / 非 mp4 与子目录不动 / 截图目录同样受管）
 - **真服务 e2e**：布置 30/20/10 天 mp4 + 1 天 fresh.mp4 + 100 天 notes.txt + 30 天 old.png，启动轮扫 5 个删 4 个，磁盘核对 = 删 30/20/10 天与 old.png、留 fresh.mp4 与 notes.txt ✅
 - `cargo build` / `cargo test -p mirrordock-nas` 通过；feature 待用户推镜像后在飞牛复验。
+
+### X10-115 · 实时镜像上 Web：scrcpy 4.1 原生协议 + WebCodecs + 双向控制（2026-10-11，用户拍板路线 A）
+**需求**：把桌面端实时镜像能力接入 NAS——浏览器里看手机实时画面并远程操控（首版即含双向控制）。
+**路线（用户拍板）**：路线 A = Rust 原生实现 scrcpy 客户端协议，容器零新增运行时依赖（不 fork scrcpy、不引入 Node/ffmpeg/mediamtx），契合最小镜像 + fail-closed 铁律；ws-scrcpy-web 的协议设计作参考。
+**关键事实（调研坐实，非凭记忆）**：
+- scrcpy 4.1 官方客户端**不原生出 WebSocket/裸 H.264**，视频流是「设备编码 → adb 隧道自定义协议 → 客户端解复用」。协议逐字节取自 `doc/develop.md` + `control_msg.c` + `device_msg.c` + `receiver.c` + `net.h`。
+- scrcpy-server 用 Android MediaCodec 输出 **H.264 Annex-B 裸流**（Tango ADB 官方文档确认）→ 浏览器 WebCodecs 解 Annex-B 时**不给 description**（那是 AVCC 专用），仅声明 codec 让解码器从流内读 SPS/PPS。
+**落地**：
+- `nas/server/src/scrcpy_proto.rs`（新）：VideoDemux（dummy/meta/codec 握手 + session/media 解复用）、control（触控/键鼠/文本/滚轮/电源/旋转序列化，定点数与 scrcpy 一致）、start_mirror（push server + adb forward + 连 video/control socket + 保活子进程）。
+- `nas/server/src/mirror_ws.rs`（新）：会话管理（单设备单会话，broadcast 扇出视频给多标签页，控制共用 control socket）+ WS 端点 + ServerMsg/ClientMsg JSON 协议。
+- `nas/server/src/api.rs`：POST `/api/stream/stop` 显式关镜像（防「网页关了手机还在投屏」）。
+- `nas/web/index.html`：实时镜像卡片 + WebCodecs 播放器 + 指针坐标换算回控 + 工具栏按键注入。
+**验证**：
+- 22 单测全绿：协议字节布局（keycode/touch/scroll/session）、fake-scrcpy 解复用集成测试、WS 视频扇出合成流测试、ClientMsg→ControlMessage 映射。
+- CI 同口径：`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo fmt --all -- --check` 全绿（verify job 的 `cargo test --workspace` 自动覆盖新增测试，无需另起无法真跑的容器门禁）。
+- **待真机点验**：浏览器真出画面（Annex-B 解码）、触控坐标对准、多标签页共看。沙箱无真机，无法覆盖端到端。
