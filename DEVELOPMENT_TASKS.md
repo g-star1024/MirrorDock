@@ -1090,6 +1090,28 @@ Done(1)                      # 进程秒退
   server 双路径齐全、SCRCPY_SERVER_PATH 已设、启动日志打印
   「scrcpy-server 就绪」、Web 含按钮同步代码
 
+### 【第五个根因】SIGINT 从未送达 scrcpy（飞牛真机实锤，已闭环）
+- 现象：点「结束录制」报「录制进程未能在 15 秒内优雅退出，已强制结束」，MP4 缺 moov 拒播
+- 根因：`Command::new("kill")` 发 SIGINT，但 debian:12-slim 里 **/usr/bin/kill 不存在**
+  （`kill` 只是 dash 内建命令，而 exec 不经过 shell）→ spawn 静默失败、错误被 `let _ =` 吞掉
+  → 信号从未发出 → 15s 后 SIGKILL。**开发机 macOS 测不出来**（macOS 有 /bin/kill）
+- 修复（e9816ef）：`libc::kill()` 直接系统调用；升级链 SIGINT 15s → SIGTERM 3s → SIGKILL；
+  stdout 改 null（无人读的管道写满会把 scrcpy 卡在 write 上，同类隐患预防性排除）
+- **真容器端到端验证（无需真机）**：`scripts/nas-record-stop-gate.sh`
+  用 shell 冒充 scrcpy（经 SCRCPY 环境变量注入）走完整 start→stop：
+  | 场景 | 结果 |
+  |---|---|
+  | 旧镜像 + 正常替身（红队） | 15.025s 超时报错，产物 9 字节无 moov —— **完美复现用户故障** |
+  | 新镜像 + 正常替身（绿队） | **0.808s** 成功，产物 `MP4HEADERMOOVATOM` 17 字节 |
+  | 新镜像 + 忽略信号替身（对照） | 18.027s 如实报错，产物无 moov —— 证明门禁真在测信号送达 |
+- 门禁已接入 `nas-image.yml`（构建推送后立即用真容器跑，含 10 次重试拉取防 GHCR 一致性延迟）
+
+### 【环境事实】镜像内可用诊断命令
+- 只有 `/usr/bin/pidof`；**没有 ps / pgrep / top / curl / wget / busybox**，
+  也**没有 /usr/bin/kill 二进制**——容器内查进程只能用 pidof 或遍历 /proc/*/cmdline
+- bash 3.2（macOS）多字节解析 bug：`$VAR` 紧邻中文全角括号时会被并进变量名，
+  报 "unbound variable"。必须写 `${VAR}`
+
 ### CI 状态
 - `build`（桌面端验证门禁）：`656d7ed` / `5926861` / `20cfde9` / `294ff2b` /
   `7a478b0` / `2212c70` **全部 success**，打包与 Release 正确跳过

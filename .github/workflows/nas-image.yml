@@ -153,6 +153,27 @@ jobs:
           # 已发布的旧标签——开启 arm64 不会让 amd64 用户拿到坏镜像。
           PLATFORMS: linux/amd64,linux/arm64
 
+      # 【为什么要有这一步】
+      # 2026-10-11 飞牛真机实锤：SIGINT 从未送达 scrcpy——debian:12-slim 里
+      # /usr/bin/kill 不存在（kill 只是 shell 内建命令，而 exec 不经过 shell），
+      # Command::new("kill") 静默失败 → 15 秒后 SIGKILL → MP4 永远缺 moov、
+      # 浏览器拒播。而这个 bug 在开发机 macOS 上**测不出来**（macOS 有 /bin/kill），
+      # 所以门禁必须跑在与生产一致的容器里，不能只在开发机上跑。
+      #
+      # 脚本用 shell 冒充 scrcpy（经 SCRCPY 环境变量注入），走完整的
+      # /api/record/start → /api/record/stop 链路，并带一组「替身忽略 INT/TERM」
+      # 的反向对照——只做正向断言会退化成「进程恰好退出了」的假阳性。
+      - name: 录制停止信号链路门禁（真容器）
+        run: |
+          set -euo pipefail
+          # GHCR 推送后偶有短暂一致性延迟，重试拉取再判定。
+          for i in $(seq 1 10); do
+            if docker pull "${{ steps.meta.outputs.image }}:latest"; then break; fi
+            echo "镜像尚未可读，第 $i 次重试…"
+            sleep 20
+          done
+          ./scripts/nas-record-stop-gate.sh "${{ steps.meta.outputs.image }}:latest"
+
       # 摘要常驻：成功也能一眼看到产物摘要，失败时尾部即为报错现场。
       - name: 构建日志尾部
         if: always()
