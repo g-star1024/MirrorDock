@@ -8104,6 +8104,19 @@ pub fn run() {
                 // 空臂，行为与原来的 if 判断完全一致）。
                 // 副作用：macOS 的 Cmd+Q 也不再直接杀进程（与「明确出口只有一个」
                 // 的设计一致：误触 Cmd+Q 本会连带杀掉镜像会话）。
+                // 登录自启白屏修复（X10-124）：经 LaunchAgent 开机自启时 macOS
+                // **不会激活应用**（Accessory/隐藏 Dock 模式下尤甚），而 WKWebView
+                // 在应用从未成为活跃应用/Key 窗口前不执行首次绘制 → 用户看到纯
+                // 白窗口，只能退出重开（手动点图标启动会被激活，所以不复现）。
+                // Ready 只在事件循环就绪时触发一次：主动 show + set_focus，
+                // tao 的 set_focus 会做 activateIgnoringOtherApps + makeKeyOrderFront，
+                // 强制 WKWebView 首绘。正常启动重复调用无害（窗口本就可见）。
+                tauri::RunEvent::Ready => {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
                 tauri::RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
                     api.prevent_exit();
                 }

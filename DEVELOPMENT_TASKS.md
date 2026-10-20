@@ -1254,3 +1254,9 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 
 **验证**：42 单测绿；docker rust:1.88-slim fmt+clippy(-D warnings)+test 三验干净。**待真机点验：重置后设置新密码 → 登录成功；带空格密码设置后带空格登录成功。**
 **纪律（元教训）**：凡是「设置时归一化、校验时原样比」的字段（密码/用户名/密钥），两端必须同规则——宁可都不归一化，不可只归一化一端。
+
+## X10-124 修复「开机自启后白屏」（2026-10-20）
+- **现象（用户实拍）**：开机自启后主窗口纯白，什么都不展示，只能退出重开；手动启动不复现。
+- **根因**：LaunchAgent 自启时 macOS 不激活应用（Accessory/隐藏 Dock 模式尤甚），WKWebView 在应用从未成为活跃应用/Key 窗口前不执行首次绘制；启动链路此前无任何 show()/set_focus()，正常启动靠「用户点击 = 激活」碰巧掩盖。
+- **修复**：run 事件循环新增 `RunEvent::Ready` 分支（仅触发一次）→ 主窗口 `show() + set_focus()`（tao 会做 activateIgnoringOtherApps + makeKeyAndOrderFront，强制 WKWebView 首绘）；正常启动重复调用无害。
+- **验证**：cargo check/clippy/fmt 通过（fmt 既有偏差在 examples/，非本次文件）。GUI 真机验证：待用户开启自启后重启 Mac 确认首帧正常。**待验。**
