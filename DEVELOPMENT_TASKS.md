@@ -1260,3 +1260,8 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **根因**：LaunchAgent 自启时 macOS 不激活应用（Accessory/隐藏 Dock 模式尤甚），WKWebView 在应用从未成为活跃应用/Key 窗口前不执行首次绘制；启动链路此前无任何 show()/set_focus()，正常启动靠「用户点击 = 激活」碰巧掩盖。
 - **修复**：run 事件循环新增 `RunEvent::Ready` 分支（仅触发一次）→ 主窗口 `show() + set_focus()`（tao 会做 activateIgnoringOtherApps + makeKeyAndOrderFront，强制 WKWebView 首绘）；正常启动重复调用无害。
 - **验证**：cargo check/clippy/fmt 通过（fmt 既有偏差在 examples/，非本次文件）。GUI 真机验证：待用户开启自启后重启 Mac 确认首帧正常。**待验。**
+
+## X10-125 帮助中心默认折叠（2026-10-20）
+- **需求（用户实拍）**：帮助页长文滚动负担大，改为每篇默认只显示标题，点击标题展开/收起。
+- **实现**：`expandedHelpIds`（ReadonlySet）独立开合、不持久化；标题改为 `help-article-head` 按钮（aria-expanded + 箭头指示），正文仅展开时渲染；样式入 App.css。
+- **验证**：vitest 79/79 通过（App.test + helpContent.test）。GUI 视觉验收待用户。

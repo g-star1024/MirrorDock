@@ -171,6 +171,16 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .help-list { display: grid; gap: 14px; margin-bottom: 14px; }
 .help-list .capability-panel { margin-top: 0; }
 .help-article .capability-pending { line-height: 1.6; }
+/* 帮助中心折叠（X10-125）：标题是可点头部，正文默认隐藏，展开时显示。 */
+.help-article-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 0; margin: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; color: inherit; text-align: left;
+}
+.help-article-head:focus-visible { outline: 2px solid #2e6be6; outline-offset: 4px; border-radius: 6px; }
+.help-article-chevron { flex: 0 0 auto; color: #8a94a6; font-size: 12px; }
+.help-article-title { font-weight: 700; color: #253041; }
+.help-article-open .help-article-chevron { color: #2e6be6; }
 
 /* -- 设置页：每张卡一个主题，行式布局（名称+说明居左，控件居右） ---------- */
 

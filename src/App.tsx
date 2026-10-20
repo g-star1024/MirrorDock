@@ -861,6 +861,8 @@ function App() {
   // 拖拽安装 APK：拖入时显示全屏提示；安装结果以右下角浮层反馈（任何页签可见）。
   const [apkDragOver, setApkDragOver] = useState(false);
   const [dropInstallNotice, setDropInstallNotice] = useState<{ kind: "info" | "error"; text: string } | null>(null);
+  // 帮助中心折叠（X10-125）：默认全部只显示标题，点标题独立展开/收起。
+  const [expandedHelpIds, setExpandedHelpIds] = useState<ReadonlySet<string>>(new Set());
   // X10-27 并发多设备：后端按设备维护会话表；这里保留「主会话」视图供既有
   // 单会话 UI（顶栏、状态提示、设置应用）使用，各设备自己的状态按 serial 查询。
   const session = sessions.find((item) => item.phase === "streaming" || item.phase === "connecting") ?? sessions[0] ?? null;
@@ -3739,16 +3741,31 @@ function App() {
               <p className="intro">常用问题都在下面的帮助主题里；联系支持时先在这里预览诊断内容，确认无误后再导出。</p>
             </div>
 
-            {/* 内置帮助文档：随应用分发、离线可读。 */}
+            {/* 内置帮助文档：随应用分发、离线可读。默认折叠只显示标题（X10-125）。 */}
             <div className="help-list">
-              {helpArticles.map((article) => (
-                <div className="capability-panel help-article" key={article.id} aria-live="polite">
-                  <strong>{article.title}</strong>
-                  {article.paragraphs.map((paragraph, index) => (
-                    <p className="capability-pending" key={index}>{paragraph}</p>
-                  ))}
-                </div>
-              ))}
+              {helpArticles.map((article) => {
+                const expanded = expandedHelpIds.has(article.id);
+                return (
+                  <div className={`capability-panel help-article ${expanded ? "help-article-open" : ""}`} key={article.id} aria-live="polite">
+                    <button
+                      type="button"
+                      className="help-article-head"
+                      aria-expanded={expanded}
+                      onClick={() => setExpandedHelpIds((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(article.id)) { next.delete(article.id); } else { next.add(article.id); }
+                        return next;
+                      })}
+                    >
+                      <span className="help-article-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+                      <span className="help-article-title">{article.title}</span>
+                    </button>
+                    {expanded && article.paragraphs.map((paragraph, index) => (
+                      <p className="capability-pending" key={index}>{paragraph}</p>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
 
             <section className="connection-card" aria-live="polite">
