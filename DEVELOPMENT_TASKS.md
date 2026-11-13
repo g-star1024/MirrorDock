@@ -1272,3 +1272,10 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **代码防复发**：`heal_stale_launch_agent()` 在 setup 中、build_tray 之前执行：仅当①当前 exe 在 `.app/Contents/MacOS/`（正式版）②plist 已存在（用户开了自启）③plist 路径与当前 exe 不一致时，调用 autostart 插件 `enable()` 重写为当前正式版，并记诊断日志。**开发态绝不写登录项**（否则重演事故）。
 - **验证**：cargo test --lib 219/219；clippy 无告警；新增代码 fmt 零差异（仓库既有 211 处偏差未动）。**两轮反向验证**：整体移除 `should_heal_launch_agent` → `stale_launch_agent_is_actually_rewritten_on_disk` 变红；移除开发态守卫 → `heal_guards_*` 变红；恢复后全绿。含源码接线断言 `startup_wires_launch_agent_self_heal_before_tray`（删掉 setup 调用即红）。
 - **边界（如实标注）**：自愈只在「正式版被启动」时运行；若用户只在开发构建里开自启且从不手动打开正式版，仍会白屏。X10-124 的 show+set_focus 在本场景从未被真正验证（跑的一直是 debug 二进制），修正 plist 后首次由 LaunchAgent 拉起正式二进制才能验证——**真机待验**。
+
+## 发版 v0.4.27-beta（2026-11-13）
+- 承载 **X10-126**：开机自启白屏真因修复（陈旧 LaunchAgent 指向开发裸二进制）。该修复的本地 commit `ba0176f` 随本次一并推送。
+- 版本口径同步 6 处：`package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock`（仅 mirrordock 条目）/ `README.md` / `site/index.html`（29 处版本展示与下载链接，原停在 0.4.24）。`Cargo.lock` 中 `md-core 0.4.24` 是第三方 crate，未误改。
+- **未同步（有验收语义，待拍板）**：`site/compatibility.html` 与 `docs/compatibility-matrix.md` 的 `✅ v0.4.24-beta` 属「打包/安装验证」证据标记，矩阵表头明确「只写有证据的行」；CI 四平台产物核验前不擅自改为 0.4.27（避免把未验证写成已验证）。
+- 验证：`cargo check` 通过；`cargo metadata` 中 mirrordock = 0.4.27；X10-126 的 219/219 测试、clippy、两轮反向验证见上条。
+- 状态：tag 推送后 CI 四平台产物与 Release **待核验**；真机「重启 → 由自启拉起正式版 → 首帧正常」仍待用户验收。
