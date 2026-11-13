@@ -1278,4 +1278,6 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - 版本口径同步 6 处：`package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock`（仅 mirrordock 条目）/ `README.md` / `site/index.html`（29 处版本展示与下载链接，原停在 0.4.24）。`Cargo.lock` 中 `md-core 0.4.24` 是第三方 crate，未误改。
 - **未同步（有验收语义，待拍板）**：`site/compatibility.html` 与 `docs/compatibility-matrix.md` 的 `✅ v0.4.24-beta` 属「打包/安装验证」证据标记，矩阵表头明确「只写有证据的行」；CI 四平台产物核验前不擅自改为 0.4.27（避免把未验证写成已验证）。
 - 验证：`cargo check` 通过；`cargo metadata` 中 mirrordock = 0.4.27；X10-126 的 219/219 测试、clippy、两轮反向验证见上条。
-- 状态：tag 推送后 CI 四平台产物与 Release **待核验**；真机「重启 → 由自启拉起正式版 → 首帧正常」仍待用户验收。
+- 状态（2026-11-13 CI 完成后已核验）：**发版闭环完成**。Release id `443961119`，`draft=false` / prerelease，34 项资产齐全：macOS（aarch64/x64 dmg + 两份 `.app.tar.gz` 及 `.sig`）、Windows（setup.exe / msi 及 `.sig`）、Linux（AppImage / deb / rpm 及 `.sig`）、伴侣 APK、`latest.json`、4×SHA256SUMS、8×SBOM、4×version-check。自动更新端点 `updater/latest.json` 的 `version=0.4.27`，四平台签名 URL 均指向 v0.4.27-beta 资产。
+- **真机验收仍待用户**：「重启 → 由自启拉起正式版 → 首帧正常」未验证，按证据要求不标 ✅。
+- 待拍板：① 兼容性矩阵/公开兼容性页的 `✅ v0.4.24-beta` 证据标记是否在「打包」列更新为 v0.4.27-beta（安装/运行验证列维持 ❌）；② 空 tag `v0.4.25-beta` 是否清理；③ Release 说明通用模板中「伴侣 App 名为 `app-debug.apk`」与实际资产名不符、「未做自动更新」与实际已有自动更新矛盾，是否随下次 workflow 改动一并修正。
