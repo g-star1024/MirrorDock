@@ -2491,6 +2491,121 @@ fn save_app_settings(path: &Path, settings: &AppSettings) -> Result<(), AppError
     })
 }
 
+/// 从 LaunchAgent plist 里取出 `ProgramArguments` 的第一项（开机启动的程序路径）。
+/// 只做最小解析：plist 由 `auto-launch` 生成，结构固定，不引入 XML 依赖。
+fn launch_agent_program(plist: &str) -> Option<String> {
+    let tail = plist.split_once("<key>ProgramArguments</key>")?.1;
+    let start = tail.find("<string>")? + "<string>".len();
+    let rest = &tail[start..];
+    let end = rest.find("</string>")?;
+    Some(rest[..end].trim().to_owned())
+}
+
+/// 是否应该把陈旧的开机自启登录项重写为当前应用（X10-126）。
+///
+/// 2026-11-13 实踩：用户曾在**开发构建**（`target/debug/mirrordock`）里点开自启，
+/// 插件就把那个裸二进制写进 `~/Library/LaunchAgents/MirrorDock.plist`。之后装了正式
+/// `/Applications/MirrorDock.app`，plist 却从没更新——每次开机 launchd 拉起的是旧 debug
+/// 二进制，它走 `devUrl: http://localhost:1420`（开发服务器没跑）→ 整个窗口白屏。
+///
+/// 三条守卫，缺一不可：
+/// 1. **只有正式安装版**（可执行文件在 `.app/Contents/MacOS/` 内）才有资格纠正。
+///    开发态绝不写登录项，否则就是把事故再制造一遍；
+/// 2. 登录项必须已存在（用户开了自启）。不存在时什么都不做——不擅自替用户开启；
+/// 3. 已有路径与当前一致时不重写，避免每次启动无谓改动。
+fn should_heal_launch_agent(current_exe: &str, plist_program: Option<&str>) -> bool {
+    if !current_exe.contains(".app/Contents/MacOS/") {
+        return false;
+    }
+    match plist_program {
+        None => false,
+        Some(program) => program != current_exe,
+    }
+}
+
+/// 自愈结果，供测试断言「到底有没有真的调用重写」（防止只测纯函数不测接线）。
+#[derive(Debug, PartialEq, Eq)]
+enum LaunchAgentHealOutcome {
+    /// 开发构建，不碰登录项。
+    SkippedNotBundled,
+    /// 用户没开自启（plist 不存在/不可读），不擅自开启。
+    SkippedNotEnabled,
+    /// 已指向当前正式版，无需改动。
+    AlreadyCurrent,
+    /// 已重写为当前正式版。
+    Rewritten,
+    /// 重写失败（只记录，不阻塞启动）。
+    Failed(String),
+}
+
+/// 纠正陈旧的开机自启登录项。`rewrite` 是真正落盘的闭包（生产环境调用 autostart
+/// 插件的 `enable()`，会按当前可执行文件重写 plist），抽成参数便于真容器式接线测试。
+fn heal_launch_agent_at<F>(
+    current_exe: &str,
+    plist_path: &Path,
+    rewrite: F,
+) -> LaunchAgentHealOutcome
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    let plist_program = fs::read_to_string(plist_path)
+        .ok()
+        .and_then(|contents| launch_agent_program(&contents));
+    if !should_heal_launch_agent(current_exe, plist_program.as_deref()) {
+        return if current_exe.contains(".app/Contents/MacOS/") {
+            if plist_program.is_none() {
+                LaunchAgentHealOutcome::SkippedNotEnabled
+            } else {
+                LaunchAgentHealOutcome::AlreadyCurrent
+            }
+        } else {
+            LaunchAgentHealOutcome::SkippedNotBundled
+        };
+    }
+    match rewrite() {
+        Ok(()) => LaunchAgentHealOutcome::Rewritten,
+        Err(error) => LaunchAgentHealOutcome::Failed(error),
+    }
+}
+
+/// 生产入口：正式版启动时纠正陈旧登录项，并把结果写进诊断日志。
+/// 非 macOS 平台什么都不做。
+fn heal_stale_launch_agent(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let exe = match std::env::current_exe().and_then(|path| path.canonicalize()) {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(_) => return,
+        };
+        let home = match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home),
+            None => return,
+        };
+        let plist = home.join("Library/LaunchAgents/MirrorDock.plist");
+        let result = heal_launch_agent_at(&exe, &plist, || {
+            app.autolaunch().enable().map_err(|error| error.to_string())
+        });
+        let detail: String = match &result {
+            LaunchAgentHealOutcome::Rewritten => {
+                "开机自启登录项指向旧版程序，已自动修正为当前安装的正式版。".to_owned()
+            }
+            LaunchAgentHealOutcome::Failed(error) => {
+                format!("开机自启登录项需要修正，但重写失败：{error}")
+            }
+            _ => return,
+        };
+        if let Some(log) = app.try_state::<DiagnosticsLog>() {
+            log.record("autostart", "launch_agent_heal", &detail, &[]);
+        }
+        eprintln!("[mirrordock] {detail}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+    }
+}
+
 /// 按设置应用 macOS 的 Dock/菜单栏策略。
 ///
 /// 只在 macOS 上有意义；其他平台什么都不做（不报错——设置在那些平台本来就
@@ -7942,6 +8057,9 @@ pub fn run() {
                 .map_err(|_| "无法访问本机设置目录".to_string())?;
             let settings = load_app_settings(&path);
             apply_dock_icon_policy(app.handle(), &settings);
+            // X10-126：正式版启动时纠正指向旧版/开发构建的开机自启登录项，
+            // 必须在任何窗口展示前跑完（否则自启拉起的仍可能是白屏 debug 二进制）。
+            heal_stale_launch_agent(app.handle());
             build_tray(app)?;
             // 监视线程需要能独立还原无线亮屏补偿；系统实现固定可用。
             let _ = MONITOR_ADB.set(Box::new(SystemAdbRuntime));
@@ -13689,6 +13807,118 @@ mod tests {
         for event in log.snapshot() {
             assert!(!event.detail.contains(raw_key), "诊断不得回显许可证原文");
         }
+    }
+
+    // -- 开机自启登录项自愈（X10-126）---------------------------------------
+
+    fn launch_agent_plist(program: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>\n\
+             <key>Label</key><string>MirrorDock</string>\n\
+             <key>ProgramArguments</key><array><string>{program}</string></array>\n\
+             <key>UnitTest_argument_placeholder</key><string>ignored</string>\n\
+             <key>RunAtLoad</key><true/>\n</dict></plist>"
+        )
+    }
+
+    const INSTALLED_EXE: &str = "/Applications/MirrorDock.app/Contents/MacOS/mirrordock";
+    const DEBUG_EXE: &str = "/Users/me/project/src-tauri/target/debug/mirrordock";
+
+    #[test]
+    fn launch_agent_program_parses_the_first_program_argument() {
+        assert_eq!(
+            launch_agent_program(&launch_agent_plist(DEBUG_EXE)).as_deref(),
+            Some(DEBUG_EXE)
+        );
+        assert_eq!(launch_agent_program("<plist><dict></dict></plist>"), None);
+    }
+
+    #[test]
+    fn heal_guards_cover_dev_build_disabled_autostart_and_current_path() {
+        // 开发构建 + 陈旧 plist：绝不能修（否则会把登录项写回 debug 路径，正是事故源头）。
+        assert!(!should_heal_launch_agent(DEBUG_EXE, Some(INSTALLED_EXE)));
+        // 用户没开自启：不擅自开启。
+        assert!(!should_heal_launch_agent(INSTALLED_EXE, None));
+        // 已指向正式版：不无谓重写。
+        assert!(!should_heal_launch_agent(
+            INSTALLED_EXE,
+            Some(INSTALLED_EXE)
+        ));
+        // 只有「正式版 + 陈旧路径」才修。
+        assert!(should_heal_launch_agent(INSTALLED_EXE, Some(DEBUG_EXE)));
+    }
+
+    #[test]
+    fn stale_launch_agent_is_actually_rewritten_on_disk() {
+        let directory = scratch_dir("launch-agent-heal");
+        fs::create_dir_all(&directory).unwrap();
+        let plist = directory.join("MirrorDock.plist");
+        fs::write(&plist, launch_agent_plist(DEBUG_EXE)).unwrap();
+        let outcome = heal_launch_agent_at(INSTALLED_EXE, &plist, || {
+            fs::write(&plist, launch_agent_plist(INSTALLED_EXE)).map_err(|e| e.to_string())
+        });
+        assert_eq!(outcome, LaunchAgentHealOutcome::Rewritten);
+        // 关键：不只看返回值，还要看文件真的被改了（防止「只测实现不测接线」）。
+        assert_eq!(
+            launch_agent_program(&fs::read_to_string(&plist).unwrap()).as_deref(),
+            Some(INSTALLED_EXE)
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn rewrite_is_never_called_when_heal_does_not_apply() {
+        let directory = scratch_dir("launch-agent-noop");
+        fs::create_dir_all(&directory).unwrap();
+        let stale = directory.join("stale.plist");
+        fs::write(&stale, launch_agent_plist(INSTALLED_EXE)).unwrap();
+        let current = directory.join("current.plist");
+        fs::write(&current, launch_agent_plist(INSTALLED_EXE)).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let rewrite = || {
+            calls.set(calls.get() + 1);
+            Ok(())
+        };
+        assert_eq!(
+            heal_launch_agent_at(DEBUG_EXE, &stale, rewrite),
+            LaunchAgentHealOutcome::SkippedNotBundled
+        );
+        assert_eq!(calls.get(), 0, "开发构建绝不能重写登录项");
+        assert_eq!(
+            heal_launch_agent_at(INSTALLED_EXE, &current, rewrite),
+            LaunchAgentHealOutcome::AlreadyCurrent
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(
+            heal_launch_agent_at(INSTALLED_EXE, &directory.join("missing.plist"), rewrite),
+            LaunchAgentHealOutcome::SkippedNotEnabled
+        );
+        assert_eq!(calls.get(), 0);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn rewrite_failure_is_reported_instead_of_blocking_startup() {
+        let directory = scratch_dir("launch-agent-fail");
+        fs::create_dir_all(&directory).unwrap();
+        let plist = directory.join("MirrorDock.plist");
+        fs::write(&plist, launch_agent_plist(DEBUG_EXE)).unwrap();
+        assert_eq!(
+            heal_launch_agent_at(INSTALLED_EXE, &plist, || Err("权限不足".to_owned())),
+            LaunchAgentHealOutcome::Failed("权限不足".to_owned())
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// 接线断言：启动流程必须真的调用自愈，且在托盘/窗口构建之前。
+    /// 反向验证：把 setup 里那行删掉，本测试必须变红。
+    #[test]
+    fn startup_wires_launch_agent_self_heal_before_tray() {
+        let source = include_str!("lib.rs");
+        let call = "heal_stale_launch_agent(app.handle());";
+        let call_at = source.find(call).expect("setup 未调用自愈函数");
+        let tray_at = source.find("build_tray(app)?;").expect("未找到托盘构建");
+        assert!(call_at < tray_at, "自愈必须在托盘/窗口构建之前执行");
     }
 
     /// 真实密钥端到端：仅在本地设置了 MIRRORDOCK_LICENSE_SEED 时运行
