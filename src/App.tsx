@@ -13,6 +13,14 @@ import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
 import { helpArticles } from "./helpContent";
+import {
+  UI_THEMES,
+  applyUiTheme,
+  readUiTheme,
+  themeMeta,
+  writeUiTheme,
+  type UiThemeKey,
+} from "./uiTheme";
 import QRCode from "qrcode";
 import "./App.css";
 
@@ -681,6 +689,17 @@ export function groupTransferFiles(names: string[]): TransferGroup[] {
 
 function App() {
   const [tab, setTab] = useState<TabKey>("home");
+  const [uiTheme, setUiTheme] = useState<UiThemeKey>(() => readUiTheme());
+
+  // X10-127：主题只影响本机视觉，切换后立即写入 DOM 与 localStorage。
+  useEffect(() => {
+    applyUiTheme(uiTheme);
+  }, [uiTheme]);
+
+  const chooseUiTheme = (next: UiThemeKey) => {
+    setUiTheme(next);
+    writeUiTheme(next);
+  };
   const [check, setCheck] = useState<AdbCheck | null>(null);
   const [isChecking, setIsChecking] = useState(true);
   const [isLaunching, setIsLaunching] = useState(false);
@@ -2491,45 +2510,104 @@ function App() {
           : "未连接手机";
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand" aria-label="MirrorDock">
+    <div className="app-shell" data-theme={uiTheme}>
+      {/* X10-127 外观层：顶部一级导航 + 工具栏 + 设备树 + 工作区 + 右侧状态栏。
+          只是外壳与视觉；设备选择、页签、镜像按钮仍走原有状态机。 */}
+      <header className="titlebar">
+        <div className="title-brand">
           <span className="brand-mark" aria-hidden="true">M</span>
-          <span className="brand-name">MirrorDock</span>
+          <strong>MirrorDock</strong>
         </div>
-        <nav className="side-nav" aria-label="主导航">
+        <nav className="module-nav" aria-label="一级模块">
           {navItems.map((item) => (
             <button
               key={item.key}
               type="button"
-              className={tab === item.key ? "nav-item active" : "nav-item"}
+              className={tab === item.key ? "module-button active" : "module-button"}
+              aria-label={`一级模块：${item.key}`}
               aria-current={tab === item.key ? "page" : undefined}
               onClick={() => setTab(item.key)}
             >
               {item.icon}
-              <span>{item.label}</span>
+              <span aria-hidden="true">{item.label}</span>
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot">
-          <span className="edition-pill">{editionLabel(entitlement?.edition)}</span>
-          <span className="local-pill">仅在本机连接</span>
+        <div className="title-right">
+          <span className="theme-chip" title="外观主题仅在设置中调整">主题 · {themeMeta(uiTheme).label}</span>
+          <button className="title-button" type="button" onClick={() => setTab("help")}>帮助</button>
         </div>
-      </aside>
+      </header>
 
-      <div className="main-area">
-        <header className="topbar">
-          <div className="device-chip">
-            <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
-            <span>{topbarStatus}</span>
-          </div>
+      <div className="subbar">
+        <span className="crumb">MirrorDock / <b>{navItems.find((item) => item.key === tab)?.label}</b></span>
+        <span className="subbar-status">
+          <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
+          {topbarStatus}
+        </span>
+        <div className="subbar-actions">
+          <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
+            {isChecking ? "检查中…" : "重新检查"}
+          </button>
           {/* 单会话时设备卡片上已有唯一的「结束镜像」；顶栏只在多台同停时才出现。 */}
           {activeSessionCount > 1 && (
             <button className="secondary-button" type="button" onClick={() => void stopMirroring()} disabled={isStopping}>
               {isStopping ? "正在结束…" : `结束全部（${activeSessionCount} 台）`}
             </button>
           )}
-        </header>
+        </div>
+      </div>
+
+      <div className="workspace">
+        <aside className="sidebar">
+          <section className="device-tree" aria-label="设备列表">
+            <h3>我的设备 <small>{check?.devices.length ?? 0}</small></h3>
+            {(check?.devices ?? []).length === 0 ? (
+              <p className="tree-empty">未检测到设备</p>
+            ) : (
+              <ul>
+                {(check?.devices ?? []).map((device) => {
+                  const label = displayLabels[device.serial] ?? device.label;
+                  return (
+                    <li key={device.serial}>
+                      <button
+                        type="button"
+                        className={device.serial === selectedSerial ? "tree-device active" : "tree-device"}
+                        onClick={() => setSelectedSerial(device.serial)}
+                        aria-current={device.serial === selectedSerial ? "true" : undefined}
+                      >
+                        <span className={`status-dot ${device.state}`} aria-hidden="true" />
+                        <span className="tree-device-label">{label}</span>
+                        <small>{connectionLabel(device) || device.state}</small>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+          <nav className="side-nav" aria-label="功能导航">
+            <h3>功能</h3>
+            {navItems.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={tab === item.key ? "nav-item active" : "nav-item"}
+                aria-current={tab === item.key ? "page" : undefined}
+                onClick={() => setTab(item.key)}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-foot">
+            <span className="edition-pill">{editionLabel(entitlement?.edition)}</span>
+            <span className="local-pill">仅在本机连接</span>
+          </div>
+        </aside>
+
+        <div className="main-area">
 
         {/* 拖拽安装反馈浮层：右下角，任何页签都能看到结果。 */}
         {dropInstallNotice && (
@@ -3312,8 +3390,30 @@ function App() {
           <section className={`tab-panel ${tab === "settings" ? "" : "panel-hidden"}`} aria-label="设置">
             <div className="page-head">
               <h1>设置</h1>
-              <p className="intro">镜像窗口、快捷键与授权。</p>
+              <p className="intro">外观主题、镜像窗口、快捷键与授权。</p>
             </div>
+
+            <section className="settings-card theme-settings" aria-labelledby="theme-settings-title">
+              <header className="settings-card-head">
+                <div><h2 id="theme-settings-title">外观主题</h2><p>只改变这台电脑上的 MirrorDock 界面；连接、镜像、文件与授权完全不受影响。</p></div>
+              </header>
+              <div className="theme-options" role="group" aria-label="外观主题">
+                {UI_THEMES.map((theme) => (
+                  <button
+                    key={theme.key}
+                    type="button"
+                    className={uiTheme === theme.key ? "theme-option active" : "theme-option"}
+                    aria-pressed={uiTheme === theme.key}
+                    onClick={() => chooseUiTheme(theme.key)}
+                  >
+                    <span className={`theme-swatch swatch-${theme.key}`} aria-hidden="true"><i /><i /><i /></span>
+                    <strong>{theme.label}</strong>
+                    <small>{theme.description}</small>
+                  </button>
+                ))}
+              </div>
+              <p className="setting-note">主题偏好只保存在本机浏览器存储中，不上传、不需要账号。当前：{themeMeta(uiTheme).label}。</p>
+            </section>
 
             <section className="settings-card">
               <header className="settings-card-head">
@@ -3802,7 +3902,40 @@ function App() {
             </aside>
           </section>
         </div>
+        </div>
+
+        <aside className="right-rail" aria-label="设备状态">
+          <section className="rail-card">
+            <h3>当前设备</h3>
+            <p className="rail-device">{readyDevice ? (displayLabels[readyDevice.serial] ?? readyDevice.label) : topbarStatus}</p>
+            <dl className="rail-facts">
+              <div><dt>连接</dt><dd>{readyDevice ? connectionLabel(readyDevice) || "已授权" : "等待设备"}</dd></div>
+              <div><dt>会话</dt><dd>{activeSessionCount > 0 ? `${activeSessionCount} 台进行中` : "未开始"}</dd></div>
+              <div><dt>镜像引擎</dt><dd>{scrcpyReady ? "就绪" : "不可用"}</dd></div>
+            </dl>
+          </section>
+          <section className="rail-card">
+            <h3>本机优先</h3>
+            <p className="rail-note">画面、文件与通知只经过本机或局域网，不上传服务器。撤销授权后可立即停止会话。</p>
+          </section>
+          <section className="rail-card">
+            <h3>外观</h3>
+            <p className="rail-note">当前为「{themeMeta(uiTheme).label}」。在「设置 → 外观主题」中可随时更换，布局与功能不变。</p>
+            <button className="rail-link" type="button" onClick={() => setTab("settings")}>打开外观设置 →</button>
+          </section>
+        </aside>
       </div>
+
+        <footer className="statusbar">
+          <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
+          <span>{topbarStatus}</span>
+          <span className="statusbar-sep" aria-hidden="true">|</span>
+          <span>{editionLabel(entitlement?.edition)}</span>
+          <span className="statusbar-spacer" />
+          <span>版本 {appVersion || "—"}</span>
+          <span className="statusbar-sep" aria-hidden="true">|</span>
+          <span>本地连接 · 无需账号</span>
+        </footer>
     </div>
   );
 }

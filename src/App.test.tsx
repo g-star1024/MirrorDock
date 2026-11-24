@@ -574,6 +574,18 @@ describe("device nicknames (X10-88)", () => {
 });
 
 describe("App rendering", () => {
+  it("persists_the_selected_ui_theme_without_touching_device_state", async () => {
+    render(<App />);
+    const functionNav = screen.getByRole("navigation", { name: "功能导航" });
+    fireEvent.click(within(functionNav).getByRole("button", { name: "设置" }));
+    fireEvent.click(await screen.findByRole("button", { name: /深空控制台/ }));
+
+    expect(document.documentElement.dataset.theme).toBe("b");
+    expect(localStorage.getItem("mirrordock.uiTheme")).toBe("b");
+    // 主题外壳不是设备状态机：没有设备时仍如实写"未检测到设备"，不伪造连接。
+    expect(screen.getByText("未检测到设备")).toBeInTheDocument();
+  });
+
   // X10-72 回归：用户报告"多设备各自设置桌面模式看起来还是全局设置，找不到按设备
   // 设置的模块"。根因是设备选择器只在 sessionActive && 多会话时渲染。这里锁定：
   // **只有一台设备、且没有会话时**，按设备模块也必须可见，且必须写明归属设备。

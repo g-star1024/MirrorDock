@@ -4,7 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <meta name="color-scheme" content="light dark" />
+    <title>MirrorDock · 本地优先的 Android 桌面镜像工具</title>
+    <script>
+      // X10-127：首屏前恢复本机主题，避免默认蓝白闪一下。只接受已知值。
+      (function () {
+        try {
+          var value = localStorage.getItem("mirrordock.uiTheme") || "a";
+          if (["a", "b", "c", "d", "e"].indexOf(value) === -1) value = "a";
+          document.documentElement.dataset.theme = value;
+          document.querySelector('meta[name="color-scheme"]').content = value === "b" ? "dark" : "light";
+        } catch (_) { /* 存储不可用时保持默认主题 */ }
+      })();
+    </script>
   </head>
 
   <body>

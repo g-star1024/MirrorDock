@@ -1281,3 +1281,15 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - 状态（2026-11-13 CI 完成后已核验）：**发版闭环完成**。Release id `443961119`，`draft=false` / prerelease，34 项资产齐全：macOS（aarch64/x64 dmg + 两份 `.app.tar.gz` 及 `.sig`）、Windows（setup.exe / msi 及 `.sig`）、Linux（AppImage / deb / rpm 及 `.sig`）、伴侣 APK、`latest.json`、4×SHA256SUMS、8×SBOM、4×version-check。自动更新端点 `updater/latest.json` 的 `version=0.4.27`，四平台签名 URL 均指向 v0.4.27-beta 资产。
 - **真机验收仍待用户**：「重启 → 由自启拉起正式版 → 首帧正常」未验证，按证据要求不标 ✅。
 - 待拍板：① 兼容性矩阵/公开兼容性页的 `✅ v0.4.24-beta` 证据标记是否在「打包」列更新为 v0.4.27-beta（安装/运行验证列维持 ❌）；② 空 tag `v0.4.25-beta` 是否清理；③ Release 说明通用模板中「伴侣 App 名为 `app-debug.apk`」与实际资产名不符、「未做自动更新」与实际已有自动更新矛盾，是否随下次 workflow 改动一并修正。
+
+## X10-127 桌面端外观层：爱思风格外壳 + 5 套主题（2026-11-24）
+- **范围**：按用户拍板，在独立分支 `feat/phone-assistant-ui` 上只做第 1 段「外观层」；不改安卓伴侣端、不加账号/云中继/新权限，不引入 19 页假功能。
+- **分支提交**：`6751a30 design: 手机助手升级原型（爱思风格/5套主题/布局重构）与调研报告`。设计稿（3 份 HTML + 调研报告）随分支入库，`.gitignore` 排除本地 `.bak-*`。
+- **产品代码**：
+  - 新增 `src/uiTheme.ts` + `src/uiTheme.test.ts`：5 套主题元数据、本机持久化（非法值回落默认、存储不可用仍可用）、把主题写到根元素的 `data-theme` 与 `color-scheme`。
+  - `index.html` 加首屏内联脚本，先读 `mirrordock.uiTheme` 再渲染，避免默认蓝白闪烁；标题改为 MirrorDock。
+  - `src/App.tsx`：外壳改为「蓝色标题栏 + 一级模块导航 / 二级工具栏 / 左侧设备树与功能导航 / 中央工作区 / 右侧状态栏 / 底部状态条」；设置页新增外观主题卡。业务页签、镜像/文件/授权状态机完全保留；设备树点击只选择已有设备。
+  - `src/App.css` 颜色语义化为变量并新增 5 套主题 + i4 式栅格；`@media` 保留窄屏兼容。
+- **验证**：`pnpm build` 通过；`pnpm vitest run` **89/89**（新增主题持久化 4 个纯函数测试 + 1 个 App 集成测试）；浏览器控制台零错误；首屏/设置页/五主题逐套抓屏，B 深色无白底残留、D 白顶栏深色字、五套横向溢出 0。
+- **版本**：`0.4.28-beta` 同步 6 处（package.json / tauri.conf.json / Cargo.toml / Cargo.lock 的 mirrordock 条目 / README / site/index.html 29 处）；`Cargo.lock` 的 `md-core 0.4.24` 是第三方 crate，未误改。`site/compatibility.html` 与 `docs/compatibility-matrix.md` 的 `✅ v0.4.24-beta` 仍是证据标记，未到 CI 产物核验不冒改。
+- **状态**：代码提交本地 `feat/phone-assistant-ui`；**未打 tag、未推远端、未触发 CI**。第 2 段导航层与第 3 段能力层尚未开始；待用户看完效果后拍板。
