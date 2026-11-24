@@ -348,6 +348,21 @@ trait AdbRuntime: Send + Sync {
         Ok(String::new())
     }
     fn list_device_apps(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 启动第三方应用的默认入口（X10-134）。用 `monkey -p <pkg> 1` 触发
+    /// LAUNCHER intent，不需要知道具体 activity 名；包名经 `validate_package_name`
+    /// 白名单校验后作为单个 argv 传入。
+    fn launch_device_app(&self, serial: &str, package: &str) -> Result<(), std::io::Error>;
+    /// 卸载第三方应用（X10-134）。`keep_data` 决定是否 `-k` 保留应用数据与缓存；
+    /// 是否真的执行卸载由前端显式确认把关，后端只做参数校验。
+    fn uninstall_device_app(
+        &self,
+        serial: &str,
+        package: &str,
+        keep_data: bool,
+    ) -> Result<(), std::io::Error>;
+    /// 电池与存储摘要原始输出（X10-136）：`dumpsys battery` + `df -h /sdcard`。
+    /// 只读操作，调用方自行解析感兴趣的字段。
+    fn battery_storage(&self, serial: &str) -> Result<String, std::io::Error>;
 }
 
 /// 一个已启动的镜像进程。抽象出 `try_wait` 与 `kill`，使会话生命周期可在测试中验证。
@@ -1082,6 +1097,30 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn list_device_apps(&self, serial: &str) -> Result<String, std::io::Error> {
         Self::capture(&["-s", serial, "shell", "pm", "list", "packages", "-3"])
+    }
+
+    fn launch_device_app(&self, serial: &str, package: &str) -> Result<(), std::io::Error> {
+        // monkey 参数 1 = 每个包只发一个 LAUNCHER intent。包名作为单个 argv。
+        Self::run(&["-s", serial, "shell", "monkey", "-p", package, "1"])
+    }
+
+    fn uninstall_device_app(
+        &self,
+        serial: &str,
+        package: &str,
+        keep_data: bool,
+    ) -> Result<(), std::io::Error> {
+        if keep_data {
+            Self::run(&["-s", serial, "shell", "pm", "uninstall", "-k", package])
+        } else {
+            Self::run(&["-s", serial, "shell", "pm", "uninstall", package])
+        }
+    }
+
+    fn battery_storage(&self, serial: &str) -> Result<String, std::io::Error> {
+        let battery = Self::capture(&["-s", serial, "shell", "dumpsys", "battery"])?;
+        let df = Self::capture(&["-s", serial, "shell", "df", "-h", "/sdcard"]).unwrap_or_default();
+        Ok(format!("{battery}\n--- df ---\n{df}"))
     }
 
     fn activity_dumpsys(&self, serial: &str) -> Result<String, std::io::Error> {
@@ -7615,6 +7654,46 @@ fn list_device_apps(
     list_device_apps_with(&runtimes, serial)
 }
 
+/// 在手机上启动一个应用的默认入口（X10-134）。写操作：会改变手机前台状态。
+#[tauri::command]
+fn launch_device_app(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    package: String,
+) -> Result<(), AppError> {
+    let result = launch_device_app_with(&runtimes, serial.clone(), package.clone());
+    log.record_outcome("app_launch", result.as_ref().err(), &[&serial, &package]);
+    result
+}
+
+/// 卸载手机上的一个第三方应用（X10-134）。破坏性操作：前端必须先显式确认。
+#[tauri::command]
+fn uninstall_device_app(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    package: String,
+    keep_data: Option<bool>,
+) -> Result<(), AppError> {
+    let keep_data = keep_data.unwrap_or(false);
+    let result = uninstall_device_app_with(&runtimes, serial.clone(), package.clone(), keep_data);
+    log.record_outcome("app_uninstall", result.as_ref().err(), &[&serial, &package]);
+    result
+}
+
+/// 读取手机的电池与存储摘要（X10-136）。只读。
+#[tauri::command]
+fn device_battery_storage(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+) -> Result<DevicePowerStorage, AppError> {
+    let result = battery_storage_with(&runtimes, serial.clone());
+    log.record_outcome("battery_storage", result.as_ref().err(), &[&serial]);
+    result
+}
+
 fn list_device_apps_with(
     runtimes: &AppRuntimes,
     serial: String,
@@ -7669,6 +7748,139 @@ where
 struct DeviceApp {
     package: String,
     name: String,
+}
+
+/// 包名白名单校验（X10-134）：Android 包名只允许 ASCII 字母 / 数字 / 点 / 下划线，
+/// 且不以点开头。monkey 与 pm 的参数都按单个 argv 传入，这里的白名单是为了把
+/// 空格、分号、引号等注入字符全部拒之门外——清单里的包名天然满足，手工输入不满足。
+fn validate_package_name(package: &str) -> Result<String, AppError> {
+    let package = package.trim();
+    let valid = !package.is_empty()
+        && package.len() <= 255
+        && !package.starts_with('.')
+        && package
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_'));
+    if !valid {
+        return Err(AppError::new(
+            "app_package_invalid",
+            "应用包名格式不正确。",
+            "请从应用清单中选择，而不是手工输入。",
+        ));
+    }
+    Ok(package.to_owned())
+}
+
+/// 在手机上启动一个应用的默认入口（X10-134）。需要设备已授权。
+fn launch_device_app_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    package: String,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let package = validate_package_name(&package)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    runtimes
+        .adb
+        .launch_device_app(&serial, &package)
+        .map_err(|_| {
+            AppError::new(
+                "app_launch_failed",
+                "应用没有在手机上启动。",
+                "部分应用不提供桌面入口；请确认它能从手机桌面打开，然后重试。",
+            )
+        })
+}
+
+/// 卸载手机上的一个第三方应用（X10-134）。`keep_data` 时保留数据与缓存。
+/// 系统预装应用卸载会失败，失败原因如实上报。
+fn uninstall_device_app_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    package: String,
+    keep_data: bool,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let package = validate_package_name(&package)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    runtimes
+        .adb
+        .uninstall_device_app(&serial, &package, keep_data)
+        .map_err(|_| {
+            AppError::new(
+                "app_uninstall_failed",
+                "应用没有从手机上卸载。",
+                "系统预装应用无法卸载；请确认这是第三方应用，且连接仍然有效。",
+            )
+        })
+}
+
+/// 电池与存储摘要（X10-136）。全部字段可缺失——读不到就如实返回 null，
+/// 不猜默认值。
+#[derive(Serialize, Clone, Default, Debug)]
+struct DevicePowerStorage {
+    /// 电量百分比 0..=100。
+    battery_level: Option<u32>,
+    /// 是否在充电（plugged != 0）。
+    charging: Option<bool>,
+    /// 电池温度（摄氏度，dumpsys 原值为 0.1 °C）。
+    temperature: Option<f64>,
+    /// /sdcard 总容量（df -h 的可读值，如 "107G"）。
+    storage_total: Option<String>,
+    /// /sdcard 可用容量（df -h 的可读值，如 "55G"）。
+    storage_free: Option<String>,
+}
+
+/// 解析 `dumpsys battery` + `df -h /sdcard` 的合并输出。
+fn parse_battery_storage(raw: &str) -> DevicePowerStorage {
+    let mut out = DevicePowerStorage::default();
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("level:") {
+            if let Ok(level) = v.trim().parse::<u32>() {
+                out.battery_level = Some(level);
+            }
+        } else if let Some(v) = line.strip_prefix("temperature:") {
+            if let Ok(t) = v.trim().parse::<i64>() {
+                out.temperature = Some(t as f64 / 10.0);
+            }
+        } else if let Some(v) = line.strip_prefix("plugged:") {
+            out.charging = Some(v.trim() != "0");
+        }
+    }
+    if let Some(section) = raw.split("--- df ---").nth(1) {
+        for line in section.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 4 && line.contains("/storage/emulated") {
+                out.storage_total = Some(fields[1].to_string());
+                out.storage_free = Some(fields[3].to_string());
+                break;
+            }
+        }
+    }
+    out
+}
+
+fn battery_storage_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<DevicePowerStorage, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes.adb.battery_storage(&serial).map_err(|_| {
+        AppError::new(
+            "battery_storage_failed",
+            "无法读取手机的电池与存储信息。",
+            "请确认连接仍然有效，然后重试。",
+        )
+    })?;
+    Ok(parse_battery_storage(&raw))
 }
 
 /// 运行 `scrcpy --list-apps -s <serial>`，返回 stdout；失败或超时返回 None。
@@ -8720,6 +8932,9 @@ pub fn run() {
             send_file_to_device,
             list_device_files,
             list_device_apps,
+            launch_device_app,
+            uninstall_device_app,
+            device_battery_storage,
             fetch_file_from_device,
             delete_device_file,
             install_apk_to_device,
@@ -8892,6 +9107,8 @@ mod tests {
         mdns_output: Option<String>,
         /// `list_device_apps` 的 canned 输出（X10-53 解析测试用）。
         apps_output: Option<String>,
+        /// `battery_storage` 的 canned 输出（X10-136 解析测试用）。
+        battery_storage_output: Option<String>,
         /// 为真时 `connect` 一律失败（模拟无线调试已关/未配对）。
         connect_fails: bool,
         /// `pull_file` 成功时写进本机文件的内容，用于验证回执字节数。
@@ -9323,6 +9540,41 @@ mod tests {
                 .unwrap()
                 .push(format!("list_device_apps {serial}"));
             Ok(self.apps_output.clone().unwrap_or_default())
+        }
+
+        fn launch_device_app(&self, serial: &str, package: &str) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("launch_app {package} {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
+            Ok(())
+        }
+
+        fn uninstall_device_app(
+            &self,
+            serial: &str,
+            package: &str,
+            keep_data: bool,
+        ) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("uninstall_app {package} keep={keep_data} {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
+            Ok(())
+        }
+
+        fn battery_storage(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("battery_storage {serial}"));
+            Ok(self.battery_storage_output.clone().unwrap_or_default())
         }
     }
 
@@ -9934,6 +10186,24 @@ mod tests {
                 Ok(String::new())
             }
             fn list_device_apps(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn launch_device_app(
+                &self,
+                _serial: &str,
+                _package: &str,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn uninstall_device_app(
+                &self,
+                _serial: &str,
+                _package: &str,
+                _keep_data: bool,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn battery_storage(&self, _serial: &str) -> Result<String, std::io::Error> {
                 Ok(String::new())
             }
         }
@@ -13218,6 +13488,114 @@ mod tests {
         .unwrap();
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].package, "com.fallback.app");
+    }
+
+    #[test]
+    fn package_names_reject_injection_characters_and_validate_clean_ones() {
+        assert_eq!(
+            validate_package_name("com.example.app").unwrap(),
+            "com.example.app"
+        );
+        assert_eq!(
+            validate_package_name(" com.example.app ").unwrap(),
+            "com.example.app"
+        );
+        // 注入字符（空格 / 分号 / 引号 / 反引号 / $）全部拒绝。
+        for hostile in [
+            "com.example.app; shutdown",
+            "com example",
+            "com.example\"app",
+            "com.example`app",
+            "com.example$app",
+            ".hidden.app",
+            "",
+        ] {
+            assert!(
+                validate_package_name(hostile).is_err(),
+                "should reject: {hostile}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_and_uninstall_require_ready_device_and_record_calls() {
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        launch_device_app_with(&runtimes, "phone".into(), "com.example.app".into()).unwrap();
+        uninstall_device_app_with(&runtimes, "phone".into(), "com.example.app".into(), false)
+            .unwrap();
+        uninstall_device_app_with(&runtimes, "phone".into(), "com.example.app".into(), true)
+            .unwrap();
+
+        let recorded = calls.lock().unwrap().clone();
+        assert!(recorded.contains(&"launch_app com.example.app phone".to_owned()));
+        assert!(recorded.contains(&"uninstall_app com.example.app keep=false phone".to_owned()));
+        assert!(recorded.contains(&"uninstall_app com.example.app keep=true phone".to_owned()));
+    }
+
+    #[test]
+    fn launch_and_uninstall_reject_unready_devices_and_bad_packages() {
+        // 未授权设备：不发任何命令。
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let error = launch_device_app_with(&runtimes, "phone".into(), "com.example.app".into())
+            .unwrap_err();
+        assert_eq!(error.code, "device_unauthorized");
+        let error =
+            uninstall_device_app_with(&runtimes, "phone".into(), "com.example.app".into(), false)
+                .unwrap_err();
+        assert_eq!(error.code, "device_unauthorized");
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "未授权设备不得收到任何命令"
+        );
+
+        // 非法包名：校验先行，同样不碰设备。
+        let runtimes = screenshot_runtimes(FakeAdb::with_devices(vec![device(
+            "phone",
+            DeviceState::Ready,
+        )]));
+        let error =
+            launch_device_app_with(&runtimes, "phone".into(), "bad package".into()).unwrap_err();
+        assert_eq!(error.code, "app_package_invalid");
+        let error =
+            uninstall_device_app_with(&runtimes, "phone".into(), "".into(), false).unwrap_err();
+        assert_eq!(error.code, "app_package_invalid");
+    }
+
+    #[test]
+    fn battery_storage_parses_level_charging_temperature_and_df() {
+        let sample = "Current battery service state:\n\
+                      AC powered: false\n\
+                      level: 85\n\
+                      status: 2\n\
+                      plugged: 2\n\
+                      temperature: 280\n\
+                      --- df ---\n\
+                      Filesystem      Size   Used  Avail Capacity  Mounted\n\
+                      /dev/block/dm-9  107G    45G    55G    45%  /storage/emulated\n";
+        let parsed = parse_battery_storage(sample);
+        assert_eq!(parsed.battery_level, Some(85));
+        assert_eq!(parsed.charging, Some(true));
+        assert_eq!(parsed.temperature, Some(28.0));
+        assert_eq!(parsed.storage_total.as_deref(), Some("107G"));
+        assert_eq!(parsed.storage_free.as_deref(), Some("55G"));
+
+        // 读不到的字段如实保持 None，不猜默认值。
+        let empty = parse_battery_storage("garbage");
+        assert_eq!(empty.battery_level, None);
+        assert_eq!(empty.charging, None);
+        assert_eq!(empty.temperature, None);
+        assert_eq!(empty.storage_total, None);
+        assert_eq!(empty.storage_free, None);
+
+        // plugged: 0 → 未充电。
+        let idle = parse_battery_storage("plugged: 0\nlevel: 40\n");
+        assert_eq!(idle.charging, Some(false));
+        assert_eq!(idle.battery_level, Some(40));
     }
 
     #[test]

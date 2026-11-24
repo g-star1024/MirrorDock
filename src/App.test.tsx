@@ -604,6 +604,11 @@ describe("App rendering", () => {
     fireEvent.click(within(functionNav).getByRole("button", { name: "相册" }));
     expect(await screen.findByRole("heading", { name: "相册目录" })).toBeInTheDocument();
     expect(screen.getByText(/尚未读取相册目录/)).toBeInTheDocument();
+
+    // X10-134：应用管理升级为启动/卸载；卸载需要显式确认，旧「只读」文案已下线。
+    fireEvent.click(within(functionNav).getByRole("button", { name: "应用管理" }));
+    expect(await screen.findByText(/「打开」用系统默认入口启动应用/)).toBeInTheDocument();
+    expect(screen.queryByText(/应用清单只读/)).not.toBeInTheDocument();
   });
 
   // X10-72 回归：用户报告"多设备各自设置桌面模式看起来还是全局设置，找不到按设备

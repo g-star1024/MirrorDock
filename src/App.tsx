@@ -405,6 +405,15 @@ export function readOptions(): SessionOptions {
 // 虚拟屏启动的应用」按设备单独保存（localStorage），其余设置仍是全局一份。
 // 手机序列号（无线端点）在重连后可能变化，此时按新端点重新设置即可。
 export type DeviceApp = { package: string; name: string };
+
+/** X10-136 电池与存储摘要：字段可缺失（后端读不到就返回 null，不猜默认值）。 */
+export type DevicePowerStorage = {
+  battery_level: number | null;
+  charging: boolean | null;
+  temperature: number | null;
+  storage_total: string | null;
+  storage_free: string | null;
+};
 export type DesktopPref = { desktop_mode: boolean; desktop_app: string | null };
 
 // 把某台设备的桌面模式偏好叠加到全局设置上：仅覆盖桌面模式相关字段，并维持
@@ -1278,6 +1287,68 @@ function App() {
       setDeviceApps((prev) => ({ ...prev, [serial]: [] }));
     } finally {
       deviceAppsInflight.current.delete(serial);
+    }
+  }
+
+  // X10-134 应用动作：启动 / 卸载。启动用 monkey 触发默认入口；卸载先弹显式
+  // 确认（不可恢复），成功后清掉应用清单缓存，下次打开视图重新读真实状态。
+  const [appActionBusy, setAppActionBusy] = useState<string | null>(null);
+  const [appActionNotice, setAppActionNotice] = useState<{ text: string; error: boolean } | null>(null);
+
+  async function launchDeviceApp(packageName: string) {
+    if (!readySerial || appActionBusy) return;
+    setAppActionBusy(packageName);
+    setAppActionNotice(null);
+    try {
+      await invoke("launch_device_app", { serial: readySerial, package: packageName });
+      setAppActionNotice({ text: `已在手机上打开 ${packageName}。`, error: false });
+    } catch (error) {
+      setAppActionNotice({ text: errorMessage(error, "应用没有在手机上打开。"), error: true });
+    } finally {
+      setAppActionBusy(null);
+    }
+  }
+
+  async function uninstallDeviceApp(packageName: string, appName: string) {
+    if (!readySerial || appActionBusy) return;
+    if (!window.confirm(`确定在手机上卸载「${appName || packageName}」（${packageName}）吗？卸载后无法恢复；系统预装应用无法卸载。`)) return;
+    setAppActionBusy(packageName);
+    setAppActionNotice(null);
+    try {
+      await invoke("uninstall_device_app", { serial: readySerial, package: packageName, keepData: false });
+      setAppActionNotice({ text: `已卸载 ${appName || packageName}。`, error: false });
+      setDeviceApps((prev) => {
+        if (!readySerial) return prev;
+        const next = { ...prev };
+        delete next[readySerial];
+        return next;
+      });
+    } catch (error) {
+      setAppActionNotice({ text: errorMessage(error, "卸载没有完成。"), error: true });
+    } finally {
+      setAppActionBusy(null);
+    }
+  }
+
+  // X10-136 电池与存储摘要：进入设备信息视图自动读取一次，可手动刷新；
+  // 结果按设备标记，换设备后不显示旧数据。只读，不落盘。
+  const [powerStorage, setPowerStorage] = useState<DevicePowerStorage | null>(null);
+  const [powerSerial, setPowerSerial] = useState<string | null>(null);
+  const [powerBusy, setPowerBusy] = useState(false);
+  const [powerError, setPowerError] = useState<string | null>(null);
+
+  async function loadPowerStorage(serial: string) {
+    setPowerBusy(true);
+    setPowerError(null);
+    try {
+      setPowerStorage(await invoke<DevicePowerStorage>("device_battery_storage", { serial }));
+      setPowerSerial(serial);
+    } catch (error) {
+      setPowerStorage(null);
+      setPowerSerial(serial);
+      setPowerError(errorMessage(error, "无法读取电池与存储信息。"));
+    } finally {
+      setPowerBusy(false);
     }
   }
 
@@ -3191,6 +3262,14 @@ function App() {
     void ensureDeviceApps(appsTargetSerial);
   }, [view, appsTargetSerial, ensureDeviceApps]);
 
+  // X10-136：进入设备信息视图自动读取一次电池与存储；换设备即重读。
+  useEffect(() => {
+    if (view !== "info" || !readySerial) return;
+    if (powerSerial === readySerial && (powerStorage || powerBusy)) return;
+    void loadPowerStorage(readySerial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, readySerial]);
+
   function runViewAction() {
     switch (view) {
       case "home":
@@ -3261,7 +3340,23 @@ function App() {
 
   function assistantSections(current: AssistantViewKey): AssistantSection[] {
     switch (current) {
-      case "info":
+      case "info": {
+        // X10-136：电池与存储摘要——只在数据属于当前设备时显示，换设备即失效。
+        const power = powerSerial && powerSerial === readySerial ? powerStorage : null;
+        const batteryText = power
+          ? [
+              power.battery_level !== null ? `电量 ${power.battery_level}%` : null,
+              power.charging === true ? "充电中" : power.charging === false ? "未充电" : null,
+              power.temperature !== null ? `${power.temperature.toFixed(1)}°C` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "字段缺失"
+          : powerError ?? (powerBusy ? "读取中…" : "尚未读取");
+        const storageText = power
+          ? power.storage_total
+            ? `总 ${power.storage_total} · 可用 ${power.storage_free ?? "未知"}`
+            : "未读取到存储信息"
+          : powerError ?? (powerBusy ? "读取中…" : "尚未读取");
         return [
           {
             kind: "kv",
@@ -3272,11 +3367,14 @@ function App() {
               ["系统", capabilities?.android_release ? `Android ${capabilities.android_release}` : "未知"],
               ["镜像能力", capabilities ? capabilitySummary(capabilities) : "尚未探测"],
               ["锁屏 / 屏幕", readyDevice && lockReports[readyDevice.serial] ? lockSummary(lockReports[readyDevice.serial]) : "尚未探测"],
+              ["电池", batteryText],
+              ["存储", storageText],
             ],
           },
           {
             kind: "actions",
             actions: [
+              { label: "刷新电池 / 存储", onClick: () => readySerial && void loadPowerStorage(readySerial), disabled: powerBusy || !readySerial },
               { label: "预览诊断内容", onClick: () => void previewDiagnostics(), disabled: diagnosticsBusy },
               { label: "导出诊断包", onClick: () => void exportDiagnostics(), disabled: diagnosticsBusy || !diagnostics },
             ],
@@ -3284,6 +3382,7 @@ function App() {
           ...(diagnostics ? [{ kind: "kv" as const, title: "诊断预览", tone: 6, items: [["版本", diagnostics.app_version], ["系统", diagnostics.system], ["镜像引擎", diagnostics.scrcpy_available ? "可用" : "不可用"], ["最近事件", `${diagnostics.events.length} 条`]] as [string, string][] }] : []),
           { kind: "note", text: diagnosticsError ?? "诊断内容只在本机生成与导出，不上传；不包含剪贴板、口令或画面帧。" },
         ];
+      }
       case "multi":
         return [
           {
@@ -3797,12 +3896,37 @@ function App() {
             kind: "table",
             title: visibleDeviceApps.length > 0 ? `已安装应用 · ${visibleDeviceApps.length}` : "已安装应用",
             tone: 1,
-            columns: ["应用", "包名"],
-            rows: visibleDeviceApps.map((app) => ({ cells: [app.name || app.package, app.package], filterText: `${app.name} ${app.package}` })),
+            columns: ["应用", "包名", "操作"],
+            rows: visibleDeviceApps.map((app) => ({
+              cells: [
+                app.name || app.package,
+                app.package,
+                // X10-134：启动走系统默认入口；卸载先弹显式确认（不可恢复）。
+                <span key={app.package} className="assistant-row-actions">
+                  <button
+                    type="button"
+                    className="assistant-btn primary sm"
+                    disabled={!readySerial || appActionBusy !== null}
+                    onClick={() => void launchDeviceApp(app.package)}
+                  >
+                    打开
+                  </button>
+                  <button
+                    type="button"
+                    className="assistant-btn danger sm"
+                    disabled={!readySerial || appActionBusy !== null}
+                    onClick={() => void uninstallDeviceApp(app.package, app.name)}
+                  >
+                    卸载
+                  </button>
+                </span>,
+              ],
+              filterText: `${app.name} ${app.package}`,
+            })),
             empty: "尚未读取应用清单；连接设备后点「刷新清单」。",
           },
           { kind: "actions", actions: [{ label: "刷新清单", primary: true, onClick: () => appsTargetSerial && void ensureDeviceApps(appsTargetSerial) }, { label: "安装 APK", onClick: () => openView("install") }] },
-          { kind: "note", text: "应用清单只读；卸载与读取应用数据未提供，避免越权操作。" },
+          { kind: "note", text: appActionNotice ? `${appActionNotice.error ? "⚠" : "✓"} ${appActionNotice.text}` : "「打开」用系统默认入口启动应用；「卸载」会先弹确认、卸载后无法恢复，系统预装应用无法卸载。应用数据不读取、不上传。" },
         ];
       case "notify":
         return [
@@ -3810,12 +3934,29 @@ function App() {
             kind: "table",
             title: phoneNotifications.length > 0 ? `实时通知 · ${phoneNotifications.length}` : "实时通知",
             tone: 3,
-            columns: ["来源", "内容", "时间"],
-            rows: phoneNotifications.map((item) => ({ cells: [item.app || item.pkg, `${item.title}${item.text ? `：${item.text}` : ""}`, notificationTime(item.posted)], filterText: `${item.app ?? ""} ${item.title} ${item.text ?? ""}` })),
+            columns: ["来源", "内容", "时间", "操作"],
+            rows: phoneNotifications.map((item) => ({
+              cells: [
+                item.app || item.pkg,
+                `${item.title}${item.text ? `：${item.text}` : ""}`,
+                notificationTime(item.posted),
+                // X10-135：复用应用启动能力，把来源 App 拉到前台。
+                <button
+                  key={item.key ?? `${item.pkg}-${item.posted}`}
+                  type="button"
+                  className="assistant-btn primary sm"
+                  disabled={!readySerial || appActionBusy !== null}
+                  onClick={() => void launchDeviceApp(item.pkg)}
+                >
+                  {appActionBusy === item.pkg ? "打开中…" : "打开"}
+                </button>,
+              ],
+              filterText: `${item.app ?? ""} ${item.title} ${item.text ?? ""}`,
+            })),
             empty: "伴侣 App 打开通知镜像并授权后，新通知会实时出现在这里。",
           },
           { kind: "actions", actions: [{ label: "清空通知", primary: true, onClick: () => setPhoneNotifications([]), disabled: phoneNotifications.length === 0 }, { label: notifyKeep ? "本机保留：已开启" : "本机保留：已关闭", onClick: toggleNotifyKeep }] },
-          { kind: "note", text: notifyKeep ? "通知已保留在本机（最多 50 条），重启应用后恢复；关闭开关即清除已存记录。内容不出本机。" : "通知正文只在本窗口临时展示，默认不落盘、不上传；点「本机保留」可显式开启本机存储。" },
+          { kind: "note", text: notifyKeep ? "通知已保留在本机（最多 50 条），重启应用后恢复；关闭开关即清除已存记录。内容不出本机。「打开」把来源应用拉到手机前台，需要设备已连接。" : "通知正文只在本窗口临时展示，默认不落盘、不上传；点「本机保留」可显式开启本机存储。「打开」把来源应用拉到手机前台，需要设备已连接。" },
         ];
       case "pro":
         return [

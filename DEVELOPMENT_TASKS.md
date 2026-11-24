@@ -1326,3 +1326,15 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **X10-133 通知本机保留**：默认关闭（维持原仅内存语义）；开启后通知列表（≤50 条）写 `mirrordock.notifyLog`（localStorage），重启恢复，关闭即清除；恢复时逐条校验，坏数据忽略。内容不出本机。
 - **验证**：`pnpm build` 通过；vitest **116/116**（新增计划解析/往返/时长边界/分钟换算/触发窗口/日期键 6 项 + 更新投屏演示契约测试）；浏览器：四视图切换 0 溢出、控制台 0 错误；定时录制添加计划、通知开关写 localStorage 实测通过。
 - **状态**：代码在本地 `feat/phone-assistant-ui`；**未打 tag、未推远端、未触发 CI**。定时录制到点行为（真机上依赖会话存活）待用户验收。
+
+## X10-134/135/136 能力层④：应用管理 + 通知打开 + 电池存储（2026-11-24 夜间）
+- **范围**：夜间自主推进（用户「继续完善功能」）。应用管理升级为启动 / 卸载（X10-134）、通知中心加「在手机上打开」（X10-135）、设备信息加电池 / 存储摘要（X10-136）。均为 adb 常规操作，无新系统权限。
+- **后端**（`src-tauri/src/lib.rs`）：
+  - `validate_package_name`：包名白名单（ASCII 字母/数字/点/下划线、不以点开头），空格/分号/引号/反引号/`$` 全部拒绝；monkey 与 pm 参数均按单个 argv 传入。
+  - `launch_device_app`（`monkey -p <pkg> 1` 触发默认入口）、`uninstall_device_app`（`pm uninstall [-k]`，keep_data 由参数决定、前端显式确认把关）、`device_battery_storage`（`dumpsys battery` + `df -h /sdcard`，只读）。
+  - `parse_battery_storage`：解析 level/plugged/temperature（0.1°C → °C）与 df 行；**字段读不到保持 None，不猜默认值**。
+  - FakeAdb 补 launch/uninstall/battery_storage 记录（device_writes_fail 时失败）。
+- **前端**：apps 视图每行加「打开 / 卸载」（卸载 `window.confirm` 显式确认，成功后清应用清单缓存重新读真实状态）；notify 视图加「操作」列「打开」（复用 launch，按包名节流）；info 视图加「电池 / 存储」两行摘要 +「刷新电池 / 存储」按钮（进视图自动读一次，按设备标记防串显）。
+- **诚实边界**：系统预装应用无法卸载（页面明示）；应用数据不读取、不上传；电池/存储字段缺失如实显示「字段缺失 / 未读取到」。
+- **验证**：cargo test **228/228**（+4：包名校验、启动/卸载记录调用、未授权/坏包名拒绝、电池存储解析）+ clippy/fmt 干净（无关文件还原）；vitest **116/116**（+应用管理契约：新文案在、旧「只读」文案下线）；浏览器三视图 0 溢出、控制台 0 错误。
+- **状态**：代码在本地 `feat/phone-assistant-ui`；**未打 tag、未推远端、未触发 CI**。启动/卸载/电池存储的真机行为待用户验收。
