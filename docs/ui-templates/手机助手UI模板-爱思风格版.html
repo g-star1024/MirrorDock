@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MirrorDock 手机助手 · 爱思助手风格交互原型</title>
+<link rel="icon" href="data:,">
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  color: var(--text); background: var(--line-soft);
+  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+}
+body { margin: 0; padding: 24px clamp(16px, 3vw, 40px) 60px; }
+h1, h2, h3, h4, p, dl, dd { margin: 0; }
+button { font: inherit; }
+[hidden] { display: none !important; }
+
+.viewer-head { max-width: 1440px; margin: 0 auto 16px; }
+.viewer-head h1 { font-size: 22px; letter-spacing: -.02em; margin-bottom: 6px; }
+.viewer-head p { color: var(--muted); font-size: 13px; line-height: 1.65; }
+.viewer-head .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.style-notes {
+  display: flex; flex-wrap: wrap; gap: 8px 20px; max-width: 1440px; margin: 14px auto 18px;
+  padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 8px;
+  font-size: 12.5px; color: var(--muted);
+}
+.style-notes b { color: var(--accent-ink); }
+.style-notes span::before { content: "· "; color: var(--blue); font-weight: 700; }
+
+/* ============ 爱思风格应用外壳 ============ */
+.i4-app {
+  /* ===== 主题变量：5 套主题通过 data-theme 覆盖，布局与交互不变 ===== */
+  --blue: #1769e0; --blue-d: #0f55bd; --blue-l: #eaf2ff;
+  --blue-top-1: #2581f0; --blue-top-2: #1769e0; --blue-top-3: #105ecb;
+  --on-top: #fff; --on-top-soft: rgba(255,255,255,.82);
+  --on-top-line: rgba(255,255,255,.36); --on-top-bg: rgba(255,255,255,.16);
+  --line: #d9e3f1; --line-soft: #edf2f9;
+  --text: #1c2736; --text-soft: #26384d; --muted: #6d7b8d;
+  --surface: #fff; --surface-2: #f8fbff; --surface-3: #f5f8fc; --bg: #f5f8fc;
+  --accent-ink: #1255b8; --accent-soft: #eff5ff;
+  --ok: #18a35a; --ok-ink: #137a43; --ok-soft: rgba(24,163,90,.12);
+  --warn: #e08a1e; --warn-ink: #a36510; --warn-soft: rgba(224,138,30,.14);
+  --off: #9aa6b6; --danger: #c04444; --frame: #2b3c52;
+  --blue-glow: rgba(23,105,224,.14); --blue-shadow: rgba(23,105,224,.25);
+  --shadow-color: rgba(24,52,96,.16); --shadow-blue: rgba(17,76,160,.22);
+  --shadow-strong: rgba(24,52,96,.2); --shadow-soft: rgba(30,60,100,.04);
+  --radius: 10px; --radius-sm: 7px; --shadow: 0 14px 44px rgba(24,52,96,.16);
+  width: min(1440px, 100%); min-width: 1180px; margin: 0 auto;
+  display: grid;
+  grid-template-columns: 226px minmax(0, 1fr) 296px;
+  grid-template-rows: 58px 38px minmax(650px, 1fr) 30px;
+  grid-template-areas: "title title title" "sub sub sub" "side main right" "foot foot foot";
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  box-shadow: 0 14px 44px var(--shadow-color);
+  font-size: 13px;
+}
+.icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.icon.sm { width: 15px; height: 15px; }
+.icon.lg { width: 25px; height: 25px; }
+
+/* 一级标题栏：i4Tools 式蓝色顶栏 + 图标文字导航 */
+.titlebar {
+  grid-area: title; display: flex; align-items: center; gap: 16px; padding: 0 14px; color: var(--on-top);
+  background: linear-gradient(180deg, var(--blue-top-1) 0%, var(--blue-top-2) 52%, var(--blue-top-3) 100%);
+  box-shadow: inset 0 1px var(--on-top-line), 0 2px 8px var(--shadow-blue);
+}
+.title-brand { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+.brand-mark {
+  width: 32px; height: 32px; display: grid; place-items: center; border-radius: 7px;
+  background: var(--surface); color: var(--blue); font-weight: 800; font-size: 16px;
+  box-shadow: 0 2px 5px var(--shadow-strong);
+}
+.title-brand b { font-size: 15px; letter-spacing: .01em; }
+.title-brand small { display: block; font-size: 9px; letter-spacing: .14em; opacity: .72; margin-top: 1px; }
+.module-nav { display: flex; align-self: stretch; margin-inline-start: 22px; }
+.module-nav button {
+  position: relative; border: 0; background: transparent; color: var(--on-top-soft);
+  padding: 0 15px; display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px;
+}
+.module-nav button:hover { color: var(--on-top); background: rgba(255,255,255,.1); }
+.module-nav button[aria-current="page"] { color: var(--on-top); background: rgba(255,255,255,.16); font-weight: 700; }
+.module-nav button[aria-current="page"]::after {
+  content: ""; position: absolute; left: 14px; right: 14px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--surface);
+}
+.title-right { margin-inline-start: auto; display: flex; align-items: center; gap: 8px; }
+.title-search {
+  display: flex; align-items: center; gap: 6px; width: 190px; height: 30px; padding: 0 9px;
+  border-radius: 6px; border: 1px solid var(--on-top-line); background: var(--on-top-bg); color: var(--on-top);
+}
+.title-search input { width: 100%; min-inline-size: 0; border: 0; outline: 0; background: transparent; color: var(--on-top); font-size: 12px; }
+.title-search input::placeholder { color: var(--on-top-soft); }
+.win-buttons { display: flex; gap: 4px; }
+.win-buttons button { width: 28px; height: 26px; border: 1px solid var(--on-top-line); border-radius: 4px; background: var(--on-top-bg); color: var(--on-top); cursor: pointer; line-height: 1; }
+.win-buttons button:hover { background: var(--on-top-bg); }
+
+/* 二级工具条 */
+.subbar {
+  grid-area: sub; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--accent-soft) 100%); border-bottom: 1px solid var(--line); color: var(--muted);
+}
+.crumb { font-size: 12px; }
+.crumb b { color: var(--text); }
+.crumb span { color: var(--blue); font-weight: 650; }
+.link-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 11px;
+}
+.link-pill .state-dot { width: 6px; height: 6px; }
+.sub-spacer { margin-inline-start: auto; }
+.sub-btn {
+  border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--accent-ink);
+  padding: 5px 10px; font-size: 11.5px; cursor: pointer;
+}
+.sub-btn:hover { border-color: var(--blue); background: var(--accent-soft); }
+
+/* 左侧设备与功能树 */
+.side {
+  grid-area: side; display: flex; flex-direction: column; min-inline-size: 0;
+  background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto; overscroll-behavior: contain;
+}
+.side-head {
+  display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 8px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface)); border-bottom: 1px solid var(--line-soft);
+}
+.side-head h3 { font-size: 13px; }
+.side-head button { border: 0; background: transparent; color: var(--blue); font-size: 11.5px; cursor: pointer; }
+.device-list { display: grid; gap: 7px; padding: 10px; }
+.device-card {
+  position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; align-items: center;
+  padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: pointer; text-align: left;
+}
+.device-card:hover { border-color: var(--blue); background: var(--surface-2); }
+.device-card.is-active { border-color: var(--blue); background: var(--accent-soft); box-shadow: inset 3px 0 var(--blue); }
+.device-ico { width: 34px; height: 40px; display: grid; place-items: center; border-radius: 5px; background: var(--accent-soft); color: var(--blue); }
+.device-ico.wifi { background: var(--ok-soft); color: var(--ok); }
+.device-ico.off { background: var(--surface-3); color: var(--off); }
+.device-card b { display: block; font-size: 12.5px; }
+.device-card small { display: block; margin-top: 2px; font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-card .state-dot { justify-self: end; }
+.state-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.state-dot.wifi { background: var(--blue); box-shadow: 0 0 0 3px var(--blue-glow); }
+.state-dot.off { background: var(--off); box-shadow: none; }
+.state-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.nav-tree { padding: 4px 8px 12px; }
+.nav-group { border-top: 1px solid var(--line-soft); }
+.nav-group summary {
+  padding: 9px 6px 6px; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .08em;
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+}
+.nav-group summary::-webkit-details-marker { display: none; }
+.nav-group summary::before { content: "▾"; font-size: 9px; color: var(--muted); transition: transform .15s ease; }
+.nav-group:not([open]) summary::before { transform: rotate(-90deg); }
+.nav-item {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 9px; margin: 1px 0;
+  border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer;
+}
+.nav-item:hover { background: var(--accent-soft); color: var(--blue); }
+.nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 700; box-shadow: inset 2px 0 var(--blue); }
+.nav-item small { margin-inline-start: auto; color: var(--muted); font-size: 10px; }
+.side-foot { margin-top: auto; padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); background: var(--surface-3); }
+.side-foot b { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--accent-ink); }
+.side-foot p { margin-top: 5px; font-size: 10.5px; color: var(--muted); line-height: 1.55; }
+
+/* 中央工作区 */
+.main { grid-area: main; min-inline-size: 0; overflow-y: auto; padding: 14px 16px 20px; overscroll-behavior: contain; }
+.dev-hero {
+  display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 8px var(--shadow-soft);
+}
+.phone-stage {
+  position: relative; display: grid; place-items: center; min-height: 118px; border-radius: 6px;
+  background: radial-gradient(circle at 50% 120%, var(--blue-l) 0%, var(--surface-2) 64%); overflow: hidden;
+}
+.phone-stage::after { content: ""; position: absolute; width: 88px; height: 14px; bottom: 8px; border-radius: 50%; background: var(--blue-glow); filter: blur(4px); }
+.phone-mock { position: relative; width: 58px; height: 104px; border: 3px solid var(--frame); border-radius: 9px; background: var(--surface); box-shadow: 0 7px 14px var(--shadow-strong); z-index: 1; }
+.phone-mock::before { content: ""; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: 16px; height: 3px; border-radius: 3px; background: var(--frame); }
+.phone-mock i { position: absolute; inset: 13px 4px 4px; border-radius: 3px; background: linear-gradient(160deg, var(--blue-top-1), var(--blue) 48%, var(--blue-d)); }
+.phone-mock span { position: absolute; bottom: 10px; width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,.85); }
+.phone-mock span:nth-of-type(1) { left: 8px; } .phone-mock span:nth-of-type(2) { left: 18px; } .phone-mock span:nth-of-type(3) { left: 28px; }
+.i4-app[data-current-device="平板"] .phone-mock { width: 70px; height: 100px; border-radius: 7px; }
+.i4-app[data-current-device="备用机"] .phone-mock i { filter: grayscale(1); opacity: .6; }
+.hero-info { min-inline-size: 0; }
+.hero-title-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.hero-title-row h2 { font-size: 19px; }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 4px; border: 1px solid var(--accent-soft); background: var(--accent-soft); color: var(--accent-ink); font-size: 10.5px; }
+.badge.ok { color: var(--ok-ink); border-color: var(--ok); background: var(--ok-soft); }
+.badge.warn { color: var(--warn-ink); border-color: var(--warn); background: var(--warn-soft); }
+.hero-sub { margin-top: 5px; color: var(--muted); font-size: 11.5px; }
+.hero-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+.hero-stat { padding: 7px 9px; border: 1px solid var(--line-soft); border-radius: 5px; background: var(--surface-2); }
+.hero-stat b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+.hero-stat span { display: block; margin-top: 3px; font-size: 12.5px; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-actions { display: flex; gap: 7px; margin-top: 11px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 30px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--accent-ink); font-size: 12px; cursor: pointer;
+}
+.btn:hover { border-color: var(--blue); background: var(--surface-2); }
+.btn.primary { border-color: var(--blue-d); background: linear-gradient(180deg, var(--blue-top-1), var(--blue)); color: #fff; font-weight: 700; box-shadow: 0 2px 5px var(--blue-shadow); }
+.btn.primary:hover { background: linear-gradient(180deg, var(--blue-top-1), var(--blue-d)); }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.sm { min-height: 26px; padding: 0 9px; font-size: 11px; }
+
+.workspace { margin-top: 12px; }
+.work-head {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  background: linear-gradient(180deg, var(--surface), var(--surface-2)); border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0;
+}
+.work-head h3 { font-size: 14px; }
+.work-head .work-sub { color: var(--muted); font-size: 11px; }
+.work-head .work-spacer { margin-inline-start: auto; }
+.work-search {
+  display: flex; align-items: center; gap: 5px; height: 28px; width: 170px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--muted);
+}
+.work-search input { background: transparent; border: 0; outline: 0; width: 100%; min-inline-size: 0; font-size: 11.5px; color: var(--text); }
+.view-stack {
+  min-height: 420px; padding: 12px; background: var(--surface-3); border: 1px solid var(--line); border-radius: 0 0 8px 8px;
+}
+.view { display: grid; gap: 12px; align-content: start; }
+
+/* 功能页通用组件 */
+.section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.section-title h3 { font-size: 13px; }
+.section-title span { font-size: 10.5px; color: var(--muted); }
+.device-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.device-tile {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; padding: 11px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 7px; cursor: pointer;
+}
+.device-tile:hover { border-color: var(--blue); box-shadow: 0 3px 10px var(--blue-glow); }
+.tile-phone { width: 42px; height: 58px; border: 2px solid var(--frame); border-radius: 6px; background: linear-gradient(160deg,var(--blue-top-1),var(--blue)); }
+.device-tile h4 { font-size: 13px; }
+.device-tile p { margin-top: 3px; font-size: 11px; color: var(--muted); }
+.mini-meter { height: 4px; margin-top: 7px; border-radius: 4px; background: var(--line-soft); overflow: hidden; }
+.mini-meter i { display: block; height: 100%; width: var(--p, 0%); background: var(--ok); }
+
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(214px, 1fr)); gap: 10px; }
+.tool-card {
+  display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; align-items: center;
+  padding: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; text-align: left;
+}
+.tool-card:hover { border-color: var(--blue); transform: translateY(-1px); box-shadow: 0 5px 14px var(--blue-glow); }
+.tool-icon-box { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 7px; color: #fff; }
+.tool-card b { display: block; font-size: 12.5px; }
+.tool-card small { display: block; margin-top: 3px; font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+.tone-1 { --tone: var(--blue); } .tone-2 { --tone: var(--blue-top-1); } .tone-3 { --tone: #8b5cf6; }
+.tone-4 { --tone: var(--warn); } .tone-5 { --tone: var(--ok); } .tone-6 { --tone: #0e9aa7; }
+.tone-7 { --tone: #e0528a; } .tone-8 { --tone: #60758f; }
+.tool-icon-box, .mini-icon { background: var(--tone, var(--blue)); }
+
+.page-card { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.page-card > h4 {
+  padding: 9px 12px; font-size: 12.5px; background: linear-gradient(180deg,var(--surface-2),var(--accent-soft));
+  border-bottom: 1px solid var(--line); border-left: 3px solid var(--tone, var(--blue)); color: var(--text-soft);
+}
+.data-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.data-table th { padding: 8px 10px; text-align: left; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line); font-weight: 650; white-space: nowrap; }
+.data-table td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); color: var(--muted); vertical-align: middle; }
+.data-table tbody tr:nth-child(even) td { background: var(--surface-3); }
+.data-table tbody tr:hover td { background: var(--accent-soft); }
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table b { color: var(--text); font-weight: 650; }
+.link-danger { border: 0; background: transparent; color: var(--danger); padding: 2px 4px; cursor: pointer; font-size: 11.5px; }
+.link-danger:hover { text-decoration: underline; }
+.kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1px; background: var(--line-soft); }
+.kv { padding: 11px 12px; background: var(--surface); }
+.kv b { display: block; font-size: 10.5px; color: var(--muted); font-weight: 600; }
+.kv span { display: block; margin-top: 4px; font-size: 12.5px; color: var(--text); font-weight: 650; }
+.action-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 11px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
+.note {
+  padding: 10px 12px; border: 1px solid var(--accent-soft); border-radius: 6px; background: var(--accent-soft);
+  color: var(--accent-ink); font-size: 11.5px; line-height: 1.6;
+}
+.note::before { content: "说明"; display: inline-block; margin-inline-end: 8px; padding: 1px 6px; border-radius: 3px; background: var(--blue); color: #fff; font-size: 10px; }
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; padding: 12px; }
+.shot {
+  height: 76px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 5px;
+  border: 1px solid var(--line); border-radius: 5px; background: linear-gradient(150deg,var(--accent-soft),var(--blue-l) 55%,var(--blue));
+  color: var(--accent-ink); font-size: 9.5px; font-style: normal;
+}
+.shot:nth-child(3n+2) { background: linear-gradient(150deg,var(--ok-soft),var(--ok)); color: var(--ok-ink); }
+.shot:nth-child(3n+3) { background: linear-gradient(150deg,var(--warn-soft),var(--warn)); color: var(--warn-ink); }
+.steps { padding: 12px 14px 12px 34px; counter-reset: step; }
+.steps p { position: relative; padding: 5px 0; color: var(--muted); font-size: 11.5px; }
+.steps p::before { counter-increment: step; content: counter(step); position: absolute; left: -23px; top: 5px; width: 17px; height: 17px; border-radius: 50%; background: var(--accent-soft); color: var(--blue); font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+.page-card details { border-bottom: 1px solid var(--line-soft); }
+.page-card details:last-child { border-bottom: 0; }
+.page-card summary { padding: 10px 12px; cursor: pointer; font-size: 12px; color: var(--text-soft); font-weight: 650; list-style: none; }
+.page-card summary::-webkit-details-marker { display: none; }
+.page-card summary::before { content: "▸"; margin-inline-end: 7px; color: var(--blue); }
+.page-card details[open] summary::before { content: "▾"; }
+.page-card details p { padding: 0 12px 11px 27px; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+.phone-preview-wrap { display: grid; place-items: center; padding: 18px; min-height: 190px; background: radial-gradient(circle at 50% 100%, var(--blue-l), var(--accent-soft) 70%); }
+.phone-big { position: relative; width: 112px; height: 172px; border: 5px solid var(--frame); border-radius: 14px; background: var(--surface); box-shadow: 0 12px 24px rgba(23,52,96,.25); overflow: hidden; }
+.phone-big::before { content: ""; position: absolute; top: 9px; left: 50%; transform: translateX(-50%); width: 26px; height: 4px; border-radius: 4px; background: var(--frame); z-index: 2; }
+.phone-big i { position: absolute; inset: 20px 5px 5px; border-radius: 5px; background: linear-gradient(155deg,var(--blue-top-1),var(--blue) 55%,var(--blue-d)); }
+.phone-big span { position: absolute; bottom: 14px; width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.82); }
+.phone-big span:nth-of-type(1) { left: 14px; } .phone-big span:nth-of-type(2) { left: 30px; } .phone-big span:nth-of-type(3) { left: 46px; }
+
+/* 右侧设备状态栏 */
+.right { grid-area: right; min-inline-size: 0; overflow-y: auto; padding: 12px; background: var(--surface); border-left: 1px solid var(--line); overscroll-behavior: contain; }
+.side-panel { margin-bottom: 11px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.side-panel > h4 { padding: 8px 10px; background: linear-gradient(180deg,var(--surface-2),var(--accent-soft)); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--text-soft); }
+.side-panel > .panel-body { padding: 10px; }
+.health-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; align-items: center; }
+.ring {
+  --pct: 78%; width: 58px; height: 58px; display: grid; place-items: center; border-radius: 50%;
+  background: conic-gradient(var(--ok) 0 var(--pct), var(--line-soft) var(--pct) 100%);
+}
+.ring::before { content: ""; position: absolute; width: 44px; height: 44px; border-radius: 50%; background: var(--surface); }
+.ring b { position: relative; z-index: 1; font-size: 13px; color: var(--ok-ink); }
+.health-row p { font-size: 11px; color: var(--muted); line-height: 1.65; }
+.health-row p b { color: var(--text); font-size: 12px; }
+.mini-tools { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.mini-tool { border: 1px solid var(--line); border-radius: 5px; background: var(--surface-2); padding: 7px 3px; cursor: pointer; text-align: center; }
+.mini-tool:hover { border-color: var(--blue); background: var(--accent-soft); }
+.mini-icon { width: 26px; height: 26px; margin: 0 auto 4px; border-radius: 5px; display: grid; place-items: center; color: #fff; }
+.mini-icon .icon { width: 15px; height: 15px; }
+.mini-tool span { display: block; font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+.task-line { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+.task-line:last-child { border-bottom: 0; }
+.task-line b { display: block; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-line small { display: block; margin-top: 2px; font-size: 9.5px; color: var(--muted); }
+.task-line time { font-size: 9.5px; color: var(--muted); }
+.dropzone { display: grid; place-items: center; min-height: 66px; padding: 8px; border: 1px dashed var(--blue); border-radius: 6px; background: var(--surface-2); color: var(--accent-ink); font-size: 11px; text-align: center; cursor: pointer; }
+.dropzone small { display: block; margin-top: 3px; color: var(--muted); font-size: 9.5px; }
+.dropzone.is-over { border-color: var(--blue); background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--blue-glow); }
+.privacy-box { padding: 9px; border-radius: 5px; background: var(--surface-2); color: var(--muted); font-size: 10.5px; line-height: 1.6; }
+.privacy-box b { display: flex; align-items: center; gap: 5px; color: var(--accent-ink); }
+
+/* 底部状态栏 */
+.statusbar {
+  grid-area: foot; display: flex; align-items: center; gap: 16px; padding: 0 12px;
+  background: linear-gradient(180deg,var(--surface-3),var(--line-soft)); border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px;
+}
+.statusbar .spacer { margin-inline-start: auto; }
+.statusbar b { color: var(--accent-ink); }
+
+/* 提示气泡与确认对话框 */
+.toast {
+  position: fixed; z-index: 90; right: 28px; bottom: 26px; max-width: 360px;
+  padding: 10px 14px; border-radius: 6px; background: var(--text-soft); color: #fff; font-size: 12px;
+  box-shadow: 0 8px 24px var(--shadow-color); opacity: 0; pointer-events: none; transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+dialog.confirm {
+  width: 380px; max-width: calc(100vw - 32px); border: 1px solid var(--line); border-radius: 9px; padding: 0;
+  box-shadow: 0 20px 60px var(--shadow-strong); color: var(--text);
+}
+dialog.confirm::backdrop { background: var(--shadow-color); backdrop-filter: blur(2px); }
+.dialog-head { padding: 13px 16px; border-bottom: 1px solid var(--line-soft); font-weight: 700; background: var(--accent-soft); }
+.dialog-body { padding: 18px 16px; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
+.dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--line-soft); background: var(--surface-3); }
+
+/* 页尾说明 */
+.compare { max-width: 1440px; margin: 30px auto 0; }
+.compare h2 { font-size: 17px; margin-bottom: 10px; }
+.compare table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.compare th, .compare td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+.compare th { background: var(--surface-3); color: var(--muted); }
+.compare tr:last-child td { border-bottom: 0; }
+.compare td:first-child { font-weight: 650; color: var(--text-soft); white-space: nowrap; }
+.compare .pick { color: var(--accent-ink); font-weight: 650; }
+
+@media (max-width: 1240px) {
+  .i4-app { transform-origin: top left; }
+  .viewer-head, .style-notes { min-width: 1180px; }
+}
+
+
+/* ==================== 主题切换器（查看器外壳，不属于应用原型） ==================== */
+.theme-switcher {
+  display: flex; flex-wrap: wrap; gap: 8px; max-width: 1440px; margin: 16px auto 18px;
+  padding: 8px; background: #fff; border: 1px solid #dfe3ea; border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(30,40,60,.05);
+}
+.theme-switcher button {
+  flex: 1 1 180px; padding: 10px 13px; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: #48535f; cursor: pointer; text-align: left;
+  transition: background .16s ease, border-color .16s ease, color .16s ease;
+}
+.theme-switcher button:hover { background: #f3f6fb; }
+.theme-switcher button[aria-selected="true"] { background: #eaf1ff; border-color: #c5d9ff; color: #1f4fc4; }
+.theme-switcher button b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+.theme-switcher button small { display: block; font-size: 11px; color: #7b8592; }
+.theme-switcher button[aria-selected="true"] small { color: #5474ab; }
+
+/* ---------- A 云鲸桌台：柔和浅色、大圆角 ---------- */
+.i4-app[data-theme="a"] {
+  --radius: 14px; --radius-sm: 10px; --surface-2: #f7f9fd; --surface-3: #f5f7fb;
+  --blue-top-1: #2b86ee; --blue-top-2: #1769e0; --blue-top-3: #105ecb;
+  --shadow: 0 14px 40px rgba(43,71,130,.12);
+}
+/* ---------- B 深空控制台：深色、紧凑、等宽数据感 ---------- */
+.i4-app[data-theme="b"] {
+  --blue: #5b9dff; --blue-d: #3d7ad6; --blue-l: #1b2c46;
+  --blue-top-1: #285a9e; --blue-top-2: #1d4378; --blue-top-3: #132d55;
+  --on-top: #eaf2ff; --on-top-soft: rgba(234,242,255,.78);
+  --on-top-line: rgba(234,242,255,.28); --on-top-bg: rgba(234,242,255,.12);
+  --text: #e8edf5; --text-soft: #dbe5f5; --muted: #95a1b3;
+  --line: #2a3445; --line-soft: #202a3a; --surface: #181f2c; --surface-2: #1e2635;
+  --surface-3: #141b27; --bg: #10151f; --accent-ink: #9dc4ff; --accent-soft: #1b2c46;
+  --ok: #4ade80; --ok-ink: #86efac; --ok-soft: rgba(74,222,128,.14);
+  --warn: #fbbf24; --warn-ink: #fcd34d; --warn-soft: rgba(251,191,36,.14);
+  --off: #6b778a; --danger: #f87171; --frame: #465572;
+  --blue-glow: rgba(91,157,255,.18); --blue-shadow: rgba(91,157,255,.24);
+  --shadow-color: rgba(0,0,0,.4); --shadow-blue: rgba(0,0,0,.35);
+  --shadow-strong: rgba(0,0,0,.45); --shadow-soft: rgba(0,0,0,.2);
+  --radius: 9px; --radius-sm: 6px; --shadow: 0 20px 50px rgba(0,0,0,.35);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "PingFang SC", monospace;
+  font-size: 12.5px;
+  border-color: #2a3445;
+}
+.i4-app[data-theme="b"] .hero-stat, .i4-app[data-theme="b"] .mini-tool,
+.i4-app[data-theme="b"] .view-stack, .i4-app[data-theme="b"] .side-foot,
+.i4-app[data-theme="b"] .right, .i4-app[data-theme="b"] .statusbar,
+.i4-app[data-theme="b"] .side-head, .i4-app[data-theme="b"] .subbar { background: var(--surface); }
+.i4-app[data-theme="b"] .data-table tbody tr:nth-child(even) td { background: var(--surface-2); }
+.i4-app[data-theme="b"] .data-table tbody tr:hover td { background: var(--accent-soft); }
+.i4-app[data-theme="b"] .ring::before { background: var(--surface); }
+.i4-app[data-theme="b"] .phone-mock, .i4-app[data-theme="b"] .phone-big { background: var(--surface-2); }
+.i4-app[data-theme="b"] .shot, .i4-app[data-theme="b"] .phone-stage,
+.i4-app[data-theme="b"] .phone-preview-wrap { background: linear-gradient(150deg, var(--surface-2), var(--bg)); color: var(--muted); }
+.i4-app[data-theme="b"] .state-dot { box-shadow: 0 0 8px currentColor; }
+.i4-app[data-theme="b"] .brand-mark { background: var(--blue); color: #fff; }
+/* ---------- C 彩色磁贴：工具箱彩色大磁贴 ---------- */
+.i4-app[data-theme="c"] {
+  --blue: #2e6be6; --blue-d: #1f4fc4; --blue-l: #eaf1ff;
+  --blue-top-1: #4a86f0; --blue-top-2: #2e6be6; --blue-top-3: #1f4fc4;
+  --bg: #eef1f7; --surface-2: #f6f8fc; --surface-3: #eef1f7;
+  --radius: 12px; --radius-sm: 10px; --shadow: 0 10px 30px rgba(40,60,110,.1);
+}
+.i4-app[data-theme="c"] .tool-card { min-height: 74px; color: #fff; border-color: transparent; }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+1) { background: linear-gradient(135deg,#2e6be6,#1f4fc4); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+2) { background: linear-gradient(135deg,#10a5a0,#0b7d7a); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+3) { background: linear-gradient(135deg,#a855f7,#7c3aed); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+4) { background: linear-gradient(135deg,#f59e0b,#d97706); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+5) { background: linear-gradient(135deg,#ef4444,#b91c1c); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+6) { background: linear-gradient(135deg,#0ea5e9,#0369a1); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+7) { background: linear-gradient(135deg,#14b8a6,#0f766e); }
+.i4-app[data-theme="c"] .tool-card:nth-child(8n+8) { background: linear-gradient(135deg,#6366f1,#4338ca); }
+.i4-app[data-theme="c"] .tool-card small { color: rgba(255,255,255,.84); }
+.i4-app[data-theme="c"] .tool-icon-box { background: rgba(255,255,255,.22); }
+.i4-app[data-theme="c"] .mini-tool:hover { transform: translateY(-1px); }
+/* ---------- D 极简留白：细线、无阴影、深色顶栏文字 ---------- */
+.i4-app[data-theme="d"] {
+  --blue: #2e6be6; --blue-d: #2e6be6; --blue-l: #f3f6fd;
+  --blue-top-1: #fff; --blue-top-2: #fff; --blue-top-3: #fafafa;
+  --on-top: #16181d; --on-top-soft: #7c828d;
+  --on-top-line: #ececee; --on-top-bg: #fafafa;
+  --text: #16181d; --text-soft: #2b2f36; --muted: #7c828d;
+  --line: #ececee; --line-soft: #f3f3f5; --surface: #fff; --surface-2: #fafafa;
+  --surface-3: #fff; --bg: #fff; --accent-ink: #2e6be6; --accent-soft: #f3f6fd;
+  --ok: #2f9e63; --ok-ink: #2f9e63; --warn: #c57b16; --warn-ink: #c57b16;
+  --off: #a8adb6; --frame: #3b4048; --blue-glow: rgba(46,107,230,.08);
+  --blue-shadow: rgba(46,107,230,.1); --shadow: none; --shadow-color: transparent;
+  --shadow-blue: transparent; --shadow-strong: transparent; --shadow-soft: transparent;
+  --radius: 6px; --radius-sm: 6px;
+  border-color: #ececee;
+}
+.i4-app[data-theme="d"] .brand-mark { background: #16181d; color: #fff; }
+.i4-app[data-theme="d"] .titlebar { box-shadow: none; border-bottom: 1px solid #ececee; }
+.i4-app[data-theme="d"] .titlebar .module-nav button[aria-current="page"]::after { background: #2e6be6; }
+.i4-app[data-theme="d"] .subbar { background: #fff; }
+.i4-app[data-theme="d"] .device-card.is-active, .i4-app[data-theme="d"] .nav-item[aria-current="page"] { box-shadow: none; }
+.i4-app[data-theme="d"] .device-card.is-active { border-color: #c9d8f5; background: #fbfcff; }
+.i4-app[data-theme="d"] .note::before { color: #fff; }
+.i4-app[data-theme="d"] .side-panel > h4, .i4-app[data-theme="d"] .page-card > h4 { border-left-width: 2px; }
+/* ---------- E 玻璃 HUD：毛玻璃、渐变光斑、悬浮层次 ---------- */
+.i4-app[data-theme="e"] {
+  --blue: #3b6fe0; --blue-d: #1f4fc4; --blue-l: rgba(59,111,224,.12);
+  --blue-top-1: rgba(59,111,224,.96); --blue-top-2: rgba(59,111,224,.9); --blue-top-3: rgba(31,79,196,.92);
+  --text: #17233c; --text-soft: #243454; --muted: #5b6b86;
+  --line: rgba(255,255,255,.62); --line-soft: rgba(255,255,255,.46);
+  --surface: rgba(255,255,255,.66); --surface-2: rgba(255,255,255,.46);
+  --surface-3: rgba(255,255,255,.38); --bg: transparent;
+  --accent-ink: #1f4fc4; --accent-soft: rgba(59,111,224,.12);
+  --radius: 18px; --radius-sm: 12px; --shadow: 0 24px 60px rgba(35,60,110,.22);
+  border-color: rgba(255,255,255,.72);
+  background:
+    radial-gradient(900px 460px at 8% -6%, rgba(85,140,255,.42), transparent 62%),
+    radial-gradient(760px 420px at 96% 4%, rgba(160,110,240,.28), transparent 60%),
+    linear-gradient(155deg, #e8eefb 0%, #d6e0f2 52%, #e5e9f6 100%);
+}
+.i4-app[data-theme="e"] .side, .i4-app[data-theme="e"] .main, .i4-app[data-theme="e"] .right,
+.i4-app[data-theme="e"] .dev-hero, .i4-app[data-theme="e"] .view-stack, .i4-app[data-theme="e"] .page-card,
+.i4-app[data-theme="e"] .side-panel, .i4-app[data-theme="e"] .tool-card, .i4-app[data-theme="e"] .device-card,
+.i4-app[data-theme="e"] .device-tile, .i4-app[data-theme="e"] .action-row, .i4-app[data-theme="e"] .kv,
+.i4-app[data-theme="e"] .statusbar, .i4-app[data-theme="e"] .subbar, .i4-app[data-theme="e"] .side-foot,
+.i4-app[data-theme="e"] .work-head, .i4-app[data-theme="e"] .side-head {
+  backdrop-filter: blur(18px) saturate(1.35); -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  border-color: rgba(255,255,255,.68);
+}
+.i4-app[data-theme="e"] .ring::before { background: rgba(255,255,255,.8); }
+.i4-app[data-theme="e"] .tool-icon-box, .i4-app[data-theme="e"] .mini-icon { border: 1px solid rgba(255,255,255,.72); }
+
+/* 查看器外壳随主题变化，避免深色主题下页头不可读 */
+body[data-theme="b"] { background: #0b0f16; }
+body[data-theme="b"] .viewer-head h1, body[data-theme="b"] .style-notes b,
+body[data-theme="b"] .compare h2, body[data-theme="b"] .compare td:first-child { color: #e8edf5; }
+body[data-theme="b"] .viewer-head p, body[data-theme="b"] .viewer-head .meta,
+body[data-theme="b"] .style-notes, body[data-theme="b"] .compare td,
+body[data-theme="b"] .compare th { color: #95a1b3; }
+body[data-theme="b"] .style-notes, body[data-theme="b"] .compare table { background: #181f2c; border-color: #2a3445; }
+body[data-theme="b"] .compare th { background: #1e2635; }
+body[data-theme="b"] .theme-switcher { background: #181f2c; border-color: #2a3445; }
+body[data-theme="b"] .theme-switcher button { color: #c4cedd; }
+body[data-theme="b"] .theme-switcher button:hover { background: #1e2635; }
+body[data-theme="b"] .theme-switcher button[aria-selected="true"] { background: #1b2c46; border-color: #3d7ad6; color: #9dc4ff; }
+body[data-theme="b"] .theme-switcher button small { color: #95a1b3; }
+body[data-theme="d"] { background: #fafafa; }
+body[data-theme="e"] { background: #d3ddec; }
+body[data-theme="c"] { background: #e8ecf4; }
+</style>
+</head>
+<body>
+<header class="viewer-head">
+  <h1>MirrorDock 手机助手 · 爱思助手风格交互原型</h1>
+  <p>参考你提供的 i4Tools v9.12.019 安装包内主题资源与 v9 系列界面截图，重做「蓝色顶栏 + 一级图标导航 + 二级工具条 + 设备树 + 高密度工具/表格 + 右侧状态栏 + 底部状态条」的桌面助手范式；功能范围仍严格对齐现有 19 个产品页面。</p>
+  <p class="meta">在爱思风格布局与交互上叠加 5 套视觉主题；切换主题不改变页面结构与交互。原型只演示交互，不改产品代码。</p>
+</header>
+<div class="theme-switcher" role="tablist" aria-label="视觉主题切换">
+  <button type="button" role="tab" data-theme="a" aria-selected="true"><b>A · 云鲸桌台</b><small>柔和浅色 · 大圆角轻阴影</small></button>
+  <button type="button" role="tab" data-theme="b" aria-selected="false"><b>B · 深空控制台</b><small>深色紧凑 · 等宽数据感</small></button>
+  <button type="button" role="tab" data-theme="c" aria-selected="false"><b>C · 彩色磁贴</b><small>八色工具卡 · 最像手机助手</small></button>
+  <button type="button" role="tab" data-theme="d" aria-selected="false"><b>D · 极简留白</b><small>细线无阴影 · 内容优先</small></button>
+  <button type="button" role="tab" data-theme="e" aria-selected="false"><b>E · 玻璃 HUD</b><small>毛玻璃 · 渐变光斑</small></button>
+</div>
+<div class="style-notes">
+  <b>从爱思助手借鉴</b>
+  <span>饱和蓝顶栏与图标文字一级导航</span>
+  <span>左侧设备树 + 分组功能树</span>
+  <span>彩色小图标工具箱</span>
+  <span>高密度数据表格</span>
+  <span>右侧设备状态与底部状态条</span>
+  <span>危险操作弹窗二次确认</span>
+</div>
+
+<div class="i4-app" id="app" data-theme="a" data-current-device="小狸">
+  <header class="titlebar">
+    <div class="title-brand">
+      <span class="brand-mark">M</span>
+      <span><b>MirrorDock</b><small>ANDROID DEVICE ASSISTANT</small></span>
+    </div>
+    <nav class="module-nav" id="module-nav" aria-label="一级功能导航"></nav>
+    <div class="title-right">
+      <label class="title-search">
+        <svg class="icon sm" aria-hidden="true"><use href="#i-search"/></svg>
+        <span class="sr-only" hidden>搜索设备</span>
+        <input id="global-search" type="search" placeholder="搜索设备、应用或文件" aria-label="搜索设备、应用或文件">
+      </label>
+      <div class="win-buttons" aria-label="窗口控制">
+        <button type="button" aria-label="最小化" data-toast="原型演示：最小化">−</button>
+        <button type="button" aria-label="最大化" data-toast="原型演示：最大化">□</button>
+        <button type="button" aria-label="关闭" data-toast="原型演示：关闭窗口">×</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="subbar">
+    <div class="crumb"><b id="crumb-module">我的设备</b> / <span id="crumb-view">设备中心</span></div>
+    <span class="link-pill"><span class="state-dot"></span><span id="link-text">adb 已连接 · USB 优先</span></span>
+    <div class="sub-spacer"></div>
+    <button class="sub-btn" type="button" data-view="connect">连接设备</button>
+    <button class="sub-btn" type="button" data-toast="原型演示：检查更新">检查更新</button>
+    <button class="sub-btn" type="button" data-view="settings">偏好设置</button>
+  </div>
+
+  <aside class="side" aria-label="设备与功能树">
+    <div class="side-head"><h3>我的设备</h3><button type="button" data-view="connect">+ 添加设备</button></div>
+    <div class="device-list" id="side-devices"></div>
+    <nav class="nav-tree" id="nav-tree" aria-label="功能导航"></nav>
+    <div class="side-foot">
+      <b><svg class="icon sm" aria-hidden="true"><use href="#i-shield"/></svg> 本地优先 · 无需账号</b>
+      <p>镜像、传输、卸载均需设备显式授权；通知正文默认不持久化。</p>
+    </div>
+  </aside>
+
+  <main class="main" id="main-scroll">
+    <section class="dev-hero" aria-label="当前设备概览">
+      <div class="phone-stage"><div class="phone-mock" aria-hidden="true"><i></i><span></span><span></span><span></span></div></div>
+      <div class="hero-info">
+        <div class="hero-title-row">
+          <h2 id="hero-name">小狸</h2>
+          <span class="badge ok" id="hero-state">● USB 已授权</span>
+          <span class="badge" id="hero-channel">USB 直连 · 延迟 38 ms</span>
+        </div>
+        <p class="hero-sub" id="hero-sub">Redmi K40 · M2104K10AC · Android 13 · 刚刚镜像过</p>
+        <div class="hero-stats">
+          <div class="hero-stat"><b>系统</b><span id="hero-os">Android 13</span></div>
+          <div class="hero-stat"><b>电量</b><span id="hero-battery">78%</span></div>
+          <div class="hero-stat"><b>存储</b><span id="hero-storage">64 / 128 GB</span></div>
+          <div class="hero-stat"><b>分辨率</b><span>1080 × 2400</span></div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn primary" type="button" data-view="mirror" id="hero-primary">▶ 开始镜像</button>
+          <button class="btn" type="button" data-view="info">设备信息</button>
+          <button class="btn" type="button" data-view="files">文件管理</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="功能工作区">
+      <div class="work-head">
+        <h3 id="work-title">设备中心</h3>
+        <span class="work-sub" id="work-sub">3 台设备 · 2 在线 · 刚刚镜像过</span>
+        <span class="work-spacer"></span>
+        <label class="work-search">
+          <svg class="icon sm" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="view-search" type="search" placeholder="筛选当前表格" aria-label="筛选当前表格">
+        </label>
+        <button class="btn sm view-action" type="button" data-toast="原型演示：＋ 添加设备">＋ 添加设备</button>
+      </div>
+      <div class="view-stack" id="view-stack"></div>
+    </section>
+  </main>
+
+  <aside class="right" aria-label="设备状态与快捷工具">
+    <section class="side-panel">
+      <h4>设备状态</h4>
+      <div class="panel-body">
+        <div class="health-row">
+          <div class="ring" id="health-ring" data-num="78"><b id="health-num">78</b></div>
+          <p><b id="side-device-name">小狸</b><br><span id="side-device-model">Redmi K40</span><br><span id="side-device-link">USB 直连 · 可镜像</span></p>
+        </div>
+      </div>
+    </section>
+    <section class="side-panel">
+      <h4>常用工具</h4>
+      <div class="panel-body"><div class="mini-tools" id="mini-tools"></div></div>
+    </section>
+    <section class="side-panel">
+      <h4>APK 快速安装</h4>
+      <div class="panel-body">
+        <div class="dropzone" id="apk-drop" role="button" tabindex="0" aria-label="拖入 APK 安装">
+          把 APK 拖到这里安装<small>仍需在手机上逐次确认</small>
+        </div>
+      </div>
+    </section>
+    <section class="side-panel">
+      <h4>最近任务</h4>
+      <div class="panel-body">
+        <div class="task-line"><span class="state-dot"></span><div><b>AfterServiceApp-v0.3.0.apk</b><small>已安装到小狸</small></div><time>10:24</time></div>
+        <div class="task-line"><span class="state-dot"></span><div><b>截图_20261124.png</b><small>已保存到 MirrorDock 目录</small></div><time>09:58</time></div>
+        <div class="task-line"><span class="state-dot warn"></span><div><b>DCIM/2026-11</b><small>12 张照片取回中</small></div><time>09:31</time></div>
+      </div>
+    </section>
+    <section class="side-panel">
+      <h4>安全边界</h4>
+      <div class="panel-body">
+        <div class="privacy-box"><b><svg class="icon sm" aria-hidden="true"><use href="#i-shield"/></svg> 数据不出本机</b>不读取短信正文，不做静默安装与远程清除；撤销授权后立即离线。</div>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="statusbar">
+    <span><span class="state-dot"></span> <b id="foot-device">小狸</b> · USB 已连接</span>
+    <span>scrcpy 4.1 · 固定哈希</span>
+    <span class="spacer"></span>
+    <span>本地连接 · 无云中继</span>
+    <span>MirrorDock 0.4.28 原型</span>
+  </footer>
+</div>
+
+<dialog class="confirm" id="confirm-dialog" aria-labelledby="confirm-title">
+  <div class="dialog-head" id="confirm-title">请确认操作</div>
+  <div class="dialog-body" id="confirm-text">此操作需要你在手机端确认。</div>
+  <div class="dialog-foot">
+    <button class="btn" type="button" data-close-dialog>取消</button>
+    <button class="btn danger" type="button" id="confirm-ok">确认继续</button>
+  </div>
+</dialog>
+
+<section class="compare" aria-labelledby="compare-title">
+  <h2 id="compare-title">这一版和前两版的关键差异</h2>
+  <table>
+    <thead><tr><th>维度</th><th>视觉皮肤版 / 布局重构版</th><th>爱思风格版（本版）</th></tr></thead>
+    <tbody>
+      <tr><td>首屏结构</td><td>侧栏 + 单一内容区，或四栏工作台</td><td class="pick">蓝色一级导航 + 二级工具条 + 左设备树 + 中工作区 + 右状态栏 + 底状态条</td></tr>
+      <tr><td>导航语义</td><td>19 个功能按钮平铺在左栏</td><td class="pick">4 个一级模块 → 4 组可折叠功能树，层级更接近桌面助手</td></tr>
+      <tr><td>工具入口</td><td>大磁贴或宫格卡片</td><td class="pick">高密度彩色小图标工具箱，右侧常驻快捷工具</td></tr>
+      <tr><td>信息密度</td><td>卡片留白较多</td><td class="pick">细边框、密表格、状态徽章、进度条，一屏看更多状态</td></tr>
+      <tr><td>交互细节</td><td>切页、切设备、折叠、搜索</td><td class="pick">新增顶部模块导航、表格筛选、危险操作弹窗、APK 拖拽、镜像状态切换</td></tr>
+      <tr><td>产品边界</td><td>本地优先</td><td>本地优先不变；无账号、无云中继、设备端逐次授权</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 图标库 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-mirror" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M9 9l3-2 3 2-3 2z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></symbol>
+  <symbol id="i-apps" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6z"/><path d="M10 19h4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-bell-s" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6z"/><path d="M10 19h4"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4M5 20h14"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 6l3 3"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></symbol>
+  <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 2v9M8 6l4-4 4 4"/><rect x="9" y="11" width="6" height="5" rx="1"/><path d="M7 20h10"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></symbol>
+</svg>
+
+<script>
+/* ============ 复用既有 19 页产品功能数据 ============ */
+const DEVICES = [
+  { name: "小狸", model: "Redmi K40 · M2104K10AC", os: "Android 13", channel: "USB", cls: "usb", state: "ready", battery: 78, storage: "64 / 128 GB", last: "刚刚镜像过" },
+  { name: "平板", model: "小米平板 5", os: "Android 12", channel: "无线", cls: "wifi", state: "wifi", battery: 52, storage: "128 / 256 GB", last: "2 小时前" },
+  { name: "备用机", model: "Pixel 6", os: "Android 14", channel: "离线", cls: "off", state: "off", battery: 31, storage: "—", last: "昨天" }
+];
+const TOOLS = [
+  { id: "mirror", name: "镜像与控制", desc: "画面 · 键鼠直输 · 画质预设", icon: "i-mirror", primary: true },
+  { id: "shot", name: "截图", desc: "保存到本机，可标注", icon: "i-camera" },
+  { id: "record", name: "录像", desc: "Pro · 手动启停", icon: "i-video" },
+  { id: "files", name: "文件传输", desc: "双向传输 · MirrorDock 目录", icon: "i-folder" },
+  { id: "apps", name: "应用管理", desc: "列表 / 卸载 / 导出清单", icon: "i-apps", isNew: true },
+  { id: "album", name: "相册", desc: "缩略图流 · 批量取回", icon: "i-image", isNew: true },
+  { id: "notify", name: "通知中心", desc: "实时镜像 · 按应用筛选", icon: "i-bell" },
+  { id: "info", name: "设备信息", desc: "只读诊断摘要 · 一键复制", icon: "i-info", isNew: true }
+];
+const NOTES = {
+  a: ["沿用现有 #2e6be6 主色与白卡分栏", "大圆角 + 轻阴影拉开层级", "19 个功能页均可切换"],
+  b: ["深色底 + 亮蓝强调，等宽字体承载数据", "信息密度最高，一屏看清全部状态", "需重做深色模式对比度与品牌规范"],
+  c: ["8 项工具做成彩色大磁贴", "最像『手机助手』，但色彩偏多", "功能页卡片沿用语义色"],
+  d: ["细线分隔、取消阴影、字重分层", "最符合『内容优先、减少噪音』", "功能入口偏弱，适合配合快捷键"],
+  e: ["毛玻璃 + 渐变光斑 + 半透明描边", "观感最鲜明，适合做展示物料", " backdrop-filter 在低配机有性能成本"]
+};
+
+const VIEWS = {
+  home: { title: "设备中心", sub: "3 台设备 · 2 在线 · 刚刚镜像过", action: "＋ 添加设备", sections: [
+    { t: "devices" }, { t: "tools" },
+    { t: "table", title: "最近任务", tone: 2, cols: ["任务", "状态", "时间"], rows: [["AfterServiceApp-v0.3.0.apk 已安装到小狸", "已安装", "10:24"], ["截图_20261124_1432.png 已保存", "已完成", "09:58"], ["DCIM/2026-11 · 12 张照片取回中", "进行中", "09:31"]] },
+    { t: "note", text: "安全边界：无需账号、数据不出本机；镜像、传输、卸载都需设备显式授权。" }
+  ] },
+  connect: { title: "连接与授权", sub: "USB / 无线 ADB / 扫码配对", action: "＋ 添加设备", sections: [
+    { t: "table", title: "连接通道", tone: 2, cols: ["通道", "状态", "适用", "操作"], rows: [["USB 直连", "已授权 · 小狸", "稳定镜像 / 传输", "断开"], ["无线 ADB", "待重新授权 · 平板", "同局域网", "重新授权"], ["扫码配对", "未启用 · Pro", "无同网环境", "查看 Pro"]] },
+    { t: "steps", title: "首次连接步骤", tone: 3, items: ["开启手机开发者选项与 USB 调试。", "用数据线连接，手机上点『始终允许』。", "设备卡显示绿点后即可镜像与传输。"] },
+    { t: "note", text: "授权可随时在手机端撤销；撤销后客户端立即显示离线，不保留静默通道。蓝牙不在支持范围内。" }
+  ] },
+  mirror: { title: "镜像控制", sub: "小狸 · 1080 × 2400 · 60 fps · 38 ms", action: "开始镜像", sections: [
+    { t: "phone", title: "实时画面 · 小狸", tone: 1 },
+    { t: "kv", title: "会话参数", tone: 2, items: [["延迟", "38 ms · USB 直连"], ["画质", "高清 / 流畅 / 演示三档"], ["键鼠直输", "UHID，无需手机输入法"], ["桌面模式", "按设备记忆，插拔后恢复"]] },
+    { t: "actions", tone: 4, items: [{ label: "开始镜像", primary: true }, { label: "暂停" }, { label: "旋转" }, { label: "停止" }] }
+  ] },
+  present: { title: "投屏演示", sub: "产品评审 11-24 · 12 页", action: "开始放映", sections: [
+    { t: "table", title: "演示文稿", tone: 3, cols: ["文稿", "页数", "状态"], rows: [["产品评审 11-24", "12 页", "进行中"], ["客户演示稿", "8 页", "已保存"]] },
+    { t: "actions", tone: 3, items: [{ label: "开始放映", primary: true }, { label: "激光笔" }, { label: "白板标注" }, { label: "下一页" }] },
+    { t: "note", text: "投屏画面只在本机渲染；标注图层可导出为 PNG，不写入手机相册。" }
+  ] },
+  keymap: { title: "按键映射", sub: "默认桌面 · 12 条键位", action: "＋ 新建方案", sections: [
+    { t: "table", title: "键位方案", tone: 6, cols: ["手机操作", "键盘", "方案"], rows: [["返回", "Esc", "全局"], ["主页", "H", "全局"], ["多任务", "Tab", "全局"], ["技能 1", "Q", "游戏 · 射击"]] },
+    { t: "actions", tone: 6, items: [{ label: "新建方案", primary: true }, { label: "导入配置" }, { label: "导出配置" }] }
+  ] },
+  schedule: { title: "定时录制", sub: "计划任务 2 · 启用 1", action: "＋ 新建计划", sections: [
+    { t: "table", title: "计划任务", tone: 4, cols: ["任务", "触发", "动作", "状态"], rows: [["早间录屏", "每天 08:30", "录制 10 分钟", "启用"], ["夜间备份", "每天 23:00", "取回 DCIM", "暂停"]] },
+    { t: "actions", tone: 4, items: [{ label: "新建计划", primary: true }, { label: "执行日志" }] },
+    { t: "note", text: "定时任务需设备在线；手机端仍会弹出授权确认，不会后台静默拉起。" }
+  ] },
+  replay: { title: "操作回放", sub: "回放库 2 段 · 默认禁用", action: "＋ 新建录制", sections: [
+    { t: "table", title: "回放库", tone: 8, cols: ["录制", "设备", "时长", "操作"], rows: [["11-24 安装流程", "小狸", "01:42", "播放"], ["11-22 回归录制", "平板", "03:18", "播放"]] },
+    { t: "note", text: "默认禁用操作回放；开启需二次确认，回放文件只保存在本机，不上传。" }
+  ] },
+  files: { title: "文件传输", sub: "小狸 / Download · 28 项", action: "取回到电脑", sections: [
+    { t: "table", title: "Download", tone: 2, cols: ["名称", "大小", "修改日期", "状态"], rows: [["AfterServiceApp-v0.3.0.apk", "18.4 MB", "11-24 10:20", "可安装"], ["日志截图_1123.png", "2.1 MB", "11-23 18:04", "可取回"], ["MirrorDock（文件夹 · 9 项）", "—", "11-22 09:12", "—"], ["recording_1122.mp4", "86.7 MB", "11-22 21:36", "可取回"]] },
+    { t: "actions", tone: 2, items: [{ label: "取回到电脑", primary: true }, { label: "选择 APK", view: "install" }, { label: "新建文件夹" }] },
+    { t: "note", text: "文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不伪装成『没有文件』。" }
+  ] },
+  shot: { title: "截图", sub: "本机截图集 · 6 张", action: "立即截图", sections: [
+    { t: "shots", title: "最近截图", tone: 5, items: ["11-24 14:12", "11-24 11:37", "11-23 20:15", "11-23 18:04", "11-22 09:12", "11-21 16:48"] },
+    { t: "actions", tone: 5, items: [{ label: "立即截图", primary: true }, { label: "打开目录" }] },
+    { t: "note", text: "截图默认保存到本机 MirrorDock 目录，可标注后复用；不自动上传。" }
+  ] },
+  record: { title: "录像", sub: "本机 Recordings · 7 段", action: "● 开始录像", sections: [
+    { t: "table", title: "录制参数", tone: 5, cols: ["项", "值"], rows: [["保存位置", "本机 MirrorDock / Recordings"], ["最高规格", "1080 × 2400 · 60 fps"], ["默认时长", "不限制 · 手动停止"]] },
+    { t: "actions", tone: 5, items: [{ label: "开始录像", primary: true }, { label: "定时录制", view: "schedule" }] },
+    { t: "note", text: "录像是 Pro 功能；不默认云录制，不读取手机本地录像文件。" }
+  ] },
+  album: { title: "相册", sub: "小狸 / DCIM/Camera · 412 张", action: "取回所选", sections: [
+    { t: "shots", title: "DCIM / Camera · 按日期分组", tone: 7, items: ["11-24 14:02", "11-24 11:37", "11-23 20:15", "11-23 18:04", "11-22 09:12", "11-21 16:48", "11-20 08:21", "11-19 19:05"] },
+    { t: "actions", tone: 7, items: [{ label: "取回所选", primary: true }, { label: "按日期建文件夹" }] }
+  ] },
+  install: { title: "批量安装", sub: "安装队列 2 · 1 等待确认", action: "＋ 选择 APK", sections: [
+    { t: "table", title: "安装队列", tone: 4, cols: ["安装包", "目标设备", "状态", "操作"], rows: [["AfterServiceApp-v0.3.0.apk", "小狸", "已完成 10:24", "结果"], ["companion-v0.4.27.apk", "平板", "等待设备确认", "取消"]] },
+    { t: "actions", tone: 4, items: [{ label: "选择 APK", primary: true }, { label: "批量安装" }] },
+    { t: "note", text: "支持拖拽 APK 到窗口安装；每台设备都需在手机上逐次确认，不做静默安装。" }
+  ] },
+  apps: { title: "应用管理", sub: "用户应用 63 · 系统应用 41", action: "导出清单", sections: [
+    { t: "table", title: "已安装应用（只读）", tone: 1, cols: ["应用", "分区", "占用", "操作"], rows: [["com.mirrordock.companion · MirrorDock 伴侣", "用户", "24.6 MB", "导出"], ["com.tencent.mm · 微信", "用户", "412 MB", "卸载"], ["com.android.chrome · Chrome", "用户", "168 MB", "卸载"]] },
+    { t: "actions", tone: 1, items: [{ label: "导出清单", primary: true }, { label: "安装 APK", view: "install" }] },
+    { t: "note", text: "只读列出已安装应用；卸载需逐次设备端确认，不读取应用数据。" }
+  ] },
+  notify: { title: "通知中心", sub: "2 条未读 · 默认不持久化正文", action: "全部标为已读", sections: [
+    { t: "table", title: "实时镜像通知", tone: 3, cols: ["来源", "内容", "时间"], rows: [["微信", "张工：日志我看到了，晚点同步结论", "14:32"], ["系统更新", "安全补丁可下载", "13:05"], ["MirrorDock", "APK 安装完成", "10:24"]] },
+    { t: "actions", tone: 3, items: [{ label: "全部标为已读", primary: true }, { label: "刷新" }] },
+    { t: "note", text: "通知正文默认不持久化；开启持久化属于显式选择，可在设置里随时关闭。" }
+  ] },
+  info: { title: "设备信息", sub: "小狸 · 只读诊断摘要", action: "复制诊断摘要", sections: [
+    { t: "kv", title: "只读信息", tone: 6, items: [["型号", "M2104K10AC"], ["系统", "Android 13"], ["分辨率", "1080 × 2400"], ["存储", "64 / 128 GB"], ["电量", "78% · USB 直连"]] },
+    { t: "actions", tone: 6, items: [{ label: "复制诊断摘要", primary: true }, { label: "查看 adb 日志" }] }
+  ] },
+  multi: { title: "多端", sub: "设备组 2 · 在线 3", action: "＋ 新建组", sections: [
+    { t: "table", title: "设备组", tone: 8, cols: ["组", "设备", "同步内容"], rows: [["我的设备", "小狸 / 平板 / 备用机", "设置 · 设备分组"], ["演示机组", "4 台（2 在线）", "投屏 · 安装队列"]] },
+    { t: "actions", tone: 8, items: [{ label: "新建组", primary: true }, { label: "批量操作" }] },
+    { t: "note", text: "多端同步只涉及本机配置，不经云端；设备间不互传文件。" }
+  ] },
+  settings: { title: "设置", sub: "通用 · 镜像 · 传输 · 隐私", action: "导出配置", sections: [
+    { t: "table", title: "通用与隐私", tone: 4, cols: ["设置项", "当前值", "说明"], rows: [["开机自启", "开启", "随系统登录"], ["通知持久化", "关闭", "默认关"], ["操作回放", "关闭", "需二次确认"], ["更新检查", "开启", "仅校验签名包"]] },
+    { t: "actions", tone: 4, items: [{ label: "导出配置", primary: true }, { label: "导入配置" }, { label: "恢复默认" }] }
+  ] },
+  help: { title: "帮助中心", sub: "12 篇 · 默认折叠", action: "展开全部", sections: [
+    { t: "details", title: "常见问题", tone: 2, items: [["如何连接第一台设备？", "开启 USB 调试并授权，设备卡变绿即可镜像。"], ["无线 ADB 总是掉线怎么办？", "优先 USB；无线依赖路由器多播与设备休眠策略。"], ["APK 拖拽安装安全吗？", "仅本机解析，推送后仍需手机逐次确认。"], ["开机自启后白屏？", "升级到 0.4.27 或更新版本，客户端会自动修复自启路径。"]] },
+    { t: "note", text: "默认折叠、点击标题展开；不读取短信正文，不做远程清除。" }
+  ] },
+  pro: { title: "Pro / 激活", sub: "当前状态 · 免费版", action: "输入激活码", sections: [
+    { t: "kv", title: "Pro 权益", tone: 3, items: [["录像与定时录制", "本机保存，不云录制"], ["操作回放", "默认禁用，可显式开启"], ["批量安装与扫码配对", "多设备队列 / 无同网环境"]] },
+    { t: "actions", tone: 3, items: [{ label: "输入激活码", primary: true }, { label: "查看全部权益" }] },
+    { t: "note", text: "激活只在本机校验，不需要账号；未激活时核心镜像与传输保持免费可用。" }
+  ] }
+};
+
+const GROUPS = [
+  { name: "设备", ids: ["home", "connect", "info", "multi"] },
+  { name: "镜像与会话", ids: ["mirror", "present", "keymap", "schedule", "replay"] },
+  { name: "内容与传输", ids: ["files", "shot", "record", "album", "install", "apps"] },
+  { name: "系统", ids: ["notify", "settings", "help", "pro"] }
+];
+
+const MODULES = [
+  { id: "device", label: "我的设备", icon: "i-phone", group: "设备", view: "home" },
+  { id: "tools", label: "智能工具", icon: "i-apps", group: "镜像与会话", view: "mirror" },
+  { id: "content", label: "资料管理", icon: "i-folder", group: "内容与传输", view: "files" },
+  { id: "system", label: "系统", icon: "i-set", group: "系统", view: "notify" }
+];
+const icon = (id, cls = "") => `<svg class="icon ${cls}" aria-hidden="true"><use href="#${id}"/></svg>`;
+const toneClass = n => `tone-${n || 1}`;
+/* ============ 5 套视觉主题切换：只改 data-theme，不动布局与交互 ============ */
+const THEME_INFO = {
+  a: "云鲸桌台", b: "深空控制台", c: "彩色磁贴", d: "极简留白", e: "玻璃 HUD"
+};
+function applyTheme(key, silent) {
+  const app = document.getElementById("app");
+  if (!app || !THEME_INFO[key]) return;
+  app.dataset.theme = key;
+  document.body.dataset.theme = key;
+  document.querySelectorAll(".theme-switcher button[data-theme]").forEach(button => {
+    if (button.dataset.theme === key) button.setAttribute("aria-selected", "true");
+    else button.removeAttribute("aria-selected");
+  });
+  if (!silent && typeof showToast === "function") showToast("已切换主题：" + THEME_INFO[key] + "（布局与交互保持不变）");
+}
+document.addEventListener("click", event => {
+  const button = event.target.closest(".theme-switcher button[data-theme]");
+  if (button) applyTheme(button.dataset.theme);
+});
+applyTheme("a", true);
+
+const app = document.getElementById("app");
+let currentView = "home";
+
+function renderModules() {
+  document.getElementById("module-nav").innerHTML = MODULES.map(m =>
+    `<button type="button" data-module="${m.id}" data-view="${m.view}">${icon(m.icon, "sm")}<span>${m.label}</span></button>`
+  ).join("");
+}
+
+function renderSideDevices() {
+  document.getElementById("side-devices").innerHTML = DEVICES.map(d => `
+    <button type="button" class="device-card${d.name === "小狸" ? " is-active" : ""}" data-device="${d.name}" aria-label="切换到${d.name}">
+      <span class="device-ico ${d.cls}">${icon("i-phone")}</span>
+      <span><b>${d.name}</b><small>${d.model}</small></span>
+      <span class="state-dot ${d.state}"></span>
+    </button>`).join("");
+}
+
+function renderNavTree() {
+  document.getElementById("nav-tree").innerHTML = GROUPS.map((g, i) => `
+    <details class="nav-group"${i < 3 ? " open" : ""}>
+      <summary>${g.name}</summary>
+      ${g.ids.map(id => `<button type="button" class="nav-item" data-view="${id}"${id === "home" ? ' aria-current="page"' : ""}>${icon(moduleIcon(id), "sm")}<span>${VIEWS[id].title}</span><small>›</small></button>`).join("")}
+    </details>`).join("");
+}
+
+function moduleIcon(id) {
+  if (["home", "connect", "info", "multi"].includes(id)) return "i-phone";
+  if (["mirror", "present", "keymap", "schedule", "replay"].includes(id)) return "i-mirror";
+  if (["files", "shot", "record", "album", "install", "apps"].includes(id)) return "i-folder";
+  if (["notify", "settings", "help", "pro"].includes(id)) return "i-set";
+  return "i-info";
+}
+
+function renderMiniTools() {
+  document.getElementById("mini-tools").innerHTML = TOOLS.map((t, i) => `
+    <button type="button" class="mini-tool" data-view="${t.id}" title="${t.name}">
+      <span class="mini-icon ${toneClass(i + 1)}">${icon(t.icon)}</span><span>${t.name.replace("与控制", "").replace("管理", "")}</span>
+    </button>`).join("");
+}
+
+function renderSection(s) {
+  const tone = toneClass(s.tone);
+  if (s.t === "devices") return `<div class="section-title"><h3>设备列表</h3><span>点选设备后，右侧状态与概览同步更新</span></div><div class="device-grid">${DEVICES.map(d => `
+    <article class="device-tile" data-device="${d.name}" tabindex="0" role="button">
+      <div class="tile-phone"></div>
+      <div><h4>${d.name} · ${d.channel}</h4><p>${d.model}<br>${d.battery}% · ${d.storage}</p><div class="mini-meter"><i style="--p:${d.battery}%"></i></div></div>
+    </article>`).join("")}</div>`;
+  if (s.t === "tools") return `<div class="section-title"><h3>常用工具</h3><span>当前设备可用 · 8 项</span></div><div class="tool-grid">${TOOLS.map((t, i) => `
+    <button type="button" class="tool-card" data-view="${t.id}">
+      <span class="tool-icon-box ${toneClass(i + 1)}">${icon(t.icon, "lg")}</span>
+      <span><b>${t.name}</b><small>${t.desc}</small></span>
+    </button>`).join("")}</div>`;
+  if (s.t === "table") {
+    return `<div class="page-card ${tone}"><h4>${s.title || "列表"}</h4><table class="data-table">
+      <thead><tr>${s.cols.map(c => `<th scope="col">${c}</th>`).join("")}</tr></thead>
+      <tbody>${s.rows.map(r => `<tr>${r.map((c, i) => {
+        const danger = /^(卸载|取消|移除)$/.test(c);
+        return `<td>${i === 0 ? `<b>${c}</b>` : danger ? `<button type="button" class="link-danger" data-confirm="${c} · ${r[0]}">${c}</button>` : c}</td>`;
+      }).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }
+  if (s.t === "kv") return `<div class="page-card ${tone}"><h4>${s.title || "参数"}</h4><div class="kv-grid">${s.items.map(([k, v]) => `<div class="kv"><b>${k}</b><span>${v}</span></div>`).join("")}</div></div>`;
+  if (s.t === "actions") return `<div class="action-row">${s.items.map(a => `<button type="button" class="btn ${a.primary ? "primary" : ""}"${a.view ? ` data-view="${a.view}"` : ` data-toast="原型演示：${a.label}"`}>${a.label}</button>`).join("")}</div>`;
+  if (s.t === "note") return `<p class="note">${s.text}</p>`;
+  if (s.t === "shots") return `<div class="page-card ${tone}"><h4>${s.title || "缩略图"}</h4><div class="shots">${s.items.map(v => `<i class="shot">${v}</i>`).join("")}</div></div>`;
+  if (s.t === "steps") return `<div class="page-card ${tone}"><h4>${s.title || "步骤"}</h4><div class="steps">${s.items.map(v => `<p>${v}</p>`).join("")}</div></div>`;
+  if (s.t === "details") return `<div class="page-card ${tone}"><h4>${s.title || "问答"}</h4>${s.items.map(([q, a]) => `<details><summary>${q}</summary><p>${a}</p></details>`).join("")}</div>`;
+  if (s.t === "phone") return `<div class="page-card ${tone}"><h4>${s.title || "实时画面"}</h4><div class="phone-preview-wrap"><div class="phone-big" aria-hidden="true"><i></i><span></span><span></span><span></span></div></div></div>`;
+  return "";
+}
+
+function renderViews() {
+  document.getElementById("view-stack").innerHTML = Object.keys(VIEWS).map(id =>
+    `<section class="view" data-view="${id}"${id === "home" ? "" : " hidden"}>${VIEWS[id].sections.map(renderSection).join("")}</section>`
+  ).join("");
+}
+
+const toast = document.createElement("div");
+toast.className = "toast";
+toast.setAttribute("role", "status");
+document.body.appendChild(toast);
+let toastTimer;
+function showToast(message) {
+  toast.textContent = message;
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), 2000);
+}
+
+function deviceAwareText(text) {
+  return String(text).replace(/小狸|平板|备用机/g, app.dataset.currentDevice);
+}
+
+function updateWorkMeta() {
+  const meta = VIEWS[currentView];
+  if (!meta) return;
+  document.getElementById("work-sub").textContent = deviceAwareText(meta.sub);
+  app.querySelectorAll(".view:not([hidden]) .page-card > h4").forEach(h => {
+    h.textContent = deviceAwareText(h.textContent);
+  });
+}
+
+function switchView(id) {
+  const meta = VIEWS[id];
+  if (!meta) return;
+  currentView = id;
+  app.querySelectorAll(".view").forEach(v => { v.hidden = v.dataset.view !== id; });
+  app.querySelectorAll(".nav-item").forEach(b => {
+    if (b.dataset.view === id) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  document.getElementById("work-title").textContent = meta.title;
+  document.getElementById("work-sub").textContent = deviceAwareText(meta.sub);
+  document.getElementById("crumb-view").textContent = meta.title;
+  const action = document.querySelector(".view-action");
+  action.textContent = meta.action;
+  action.setAttribute("data-toast", "原型演示：" + meta.action);
+  const group = GROUPS.find(g => g.ids.includes(id));
+  document.getElementById("crumb-module").textContent = group ? group.name : "我的设备";
+  document.querySelectorAll(".module-nav button").forEach(b => {
+    const module = MODULES.find(m => m.id === b.dataset.module);
+    if (module && module.group === (group && group.name)) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  });
+  const search = document.getElementById("view-search");
+  search.value = "";
+  search.dispatchEvent(new Event("input"));
+  updateWorkMeta();
+  document.getElementById("main-scroll").scrollTop = 0;
+}
+
+function switchDevice(name) {
+  const d = DEVICES.find(x => x.name === name);
+  if (!d) return;
+  app.dataset.currentDevice = name;
+  app.querySelectorAll("[data-device]").forEach(card => card.classList.toggle("is-active", card.dataset.device === name));
+  document.getElementById("hero-name").textContent = d.name;
+  document.getElementById("hero-sub").textContent = `${d.model} · ${d.os} · ${d.last}`;
+  document.getElementById("hero-os").textContent = d.os;
+  document.getElementById("hero-battery").textContent = d.battery + "%";
+  document.getElementById("hero-storage").textContent = d.storage;
+  const stateText = d.state === "ready" ? "● USB 已授权" : d.state === "wifi" ? "● 无线 ADB 已连接" : "○ 设备离线";
+  document.getElementById("hero-state").textContent = stateText;
+  document.getElementById("hero-state").className = "badge " + (d.state === "off" ? "warn" : "ok");
+  document.getElementById("hero-channel").textContent = d.state === "off" ? "等待重新连接" : `${d.channel} · ${d.state === "wifi" ? "延迟 62 ms" : "延迟 38 ms"}`;
+  document.getElementById("side-device-name").textContent = d.name;
+  document.getElementById("side-device-model").textContent = d.os + " · " + d.storage;
+  document.getElementById("side-device-link").textContent = d.state === "off" ? "离线 · 需重新授权" : `${d.channel} · 可镜像`;
+  document.getElementById("health-ring").style.setProperty("--pct", d.battery + "%");
+  const num = String(d.battery);
+  document.getElementById("health-num").textContent = num;
+  document.getElementById("health-ring").dataset.num = num;
+  document.getElementById("foot-device").textContent = d.name;
+  document.getElementById("link-text").textContent = d.state === "off" ? "设备离线 · 等待授权" : `adb 已连接 · ${d.channel} 优先`;
+  updateWorkMeta();
+  showToast("已切换设备：" + d.name);
+}
+
+renderModules();
+renderSideDevices();
+renderNavTree();
+renderMiniTools();
+renderViews();
+switchView("home");
+
+const dialog = document.getElementById("confirm-dialog");
+let pendingConfirm = "";
+document.addEventListener("click", event => {
+  const target = event.target;
+  const danger = target.closest("[data-confirm]");
+  if (danger) {
+    pendingConfirm = danger.dataset.confirm;
+    document.getElementById("confirm-text").textContent = `「${pendingConfirm}」属于设备侧高风险操作。原型仅演示流程：真实客户端会再次请求设备端确认，不会静默执行。`;
+    dialog.showModal();
+    return;
+  }
+  if (target.closest("[data-close-dialog]")) { dialog.close(); return; }
+  if (target.id === "confirm-ok") { dialog.close(); showToast("已确认流程：" + pendingConfirm); return; }
+  const device = target.closest("[data-device]");
+  if (device && !device.closest(".tool-card")) { switchDevice(device.dataset.device); return; }
+  const viewButton = target.closest("[data-view]");
+  if (viewButton) { switchView(viewButton.dataset.view); return; }
+  const action = target.closest("[data-toast]");
+  if (action) showToast(action.getAttribute("data-toast"));
+});
+
+document.addEventListener("keydown", event => {
+  if ((event.key === "Enter" || event.key === " ") && event.target.matches(".device-tile")) {
+    event.preventDefault(); switchDevice(event.target.dataset.device);
+  }
+});
+
+document.getElementById("view-search").addEventListener("input", event => {
+  const q = event.target.value.trim().toLowerCase();
+  const activeView = app.querySelector(".view:not([hidden])");
+  if (!activeView) return;
+  activeView.querySelectorAll(".data-table tbody tr").forEach(row => {
+    row.hidden = !!q && !row.textContent.toLowerCase().includes(q);
+  });
+});
+
+document.getElementById("global-search").addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  const q = event.target.value.trim().toLowerCase();
+  if (!q) return;
+  const hit = Object.keys(VIEWS).find(id => VIEWS[id].title.toLowerCase().includes(q));
+  if (hit) { switchView(hit); showToast("已跳转到：" + VIEWS[hit].title); }
+  else showToast("未找到匹配页面，试试「文件」「镜像」「帮助」");
+});
+
+const drop = document.getElementById("apk-drop");
+drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("is-over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
+drop.addEventListener("drop", event => {
+  event.preventDefault(); drop.classList.remove("is-over");
+  const file = event.dataTransfer.files[0];
+  switchView("install");
+  showToast("已接收 " + (file ? file.name : "安装包.apk") + " · 等待设备确认");
+});
+drop.addEventListener("click", () => switchView("install"));
+drop.addEventListener("keydown", event => {
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); switchView("install"); }
+});
+</script>
+</body>
+</html>

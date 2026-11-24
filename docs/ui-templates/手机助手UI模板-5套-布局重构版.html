@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>MirrorDock 手机助手 · 5 套布局方案（与视觉皮肤版不同）</title>
+<style>
+/* ==================== 查看器外壳（不属于任何方案） ==================== */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  color: #1c2430; background: #eceef3;
+  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+}
+body { margin: 0; padding: 24px clamp(16px, 3vw, 40px) 60px; }
+h1, h2, h3, h4, p, dl, dd, dt { margin: 0; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+svg { flex: none; }
+.viewer-head { max-width: 1440px; margin: 0 auto 18px; }
+.viewer-head h1 { font-size: 22px; letter-spacing: -.02em; margin-bottom: 6px; }
+.viewer-head p { color: #5d6775; font-size: 13px; line-height: 1.6; }
+.viewer-head .meta { color: #8a93a1; font-size: 12px; margin-top: 6px; }
+.switcher {
+  display: flex; flex-wrap: wrap; gap: 8px; max-width: 1440px; margin: 16px auto 20px;
+  padding: 8px; background: #fff; border: 1px solid #dfe3ea; border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(30, 40, 60, .05);
+}
+.switcher button {
+  flex: 1 1 210px; padding: 11px 14px; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: #48535f; text-align: left;
+  transition: background .16s ease, color .16s ease, border-color .16s ease;
+}
+.switcher button:hover { background: #f3f6fb; }
+.switcher button[aria-selected="true"] { background: #eaf1ff; border-color: #c5d9ff; color: #1f4fc4; }
+.switcher button b { display: block; font-size: 14px; margin-bottom: 2px; }
+.switcher button small { display: block; font-size: 11px; color: #7b8592; }
+.switcher button[aria-selected="true"] small { color: #5474ab; }
+.panel { display: none; max-width: 1440px; margin: 0 auto; }
+.panel.active { display: block; }
+.panel-note {
+  display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: baseline;
+  margin: 0 0 12px; padding: 12px 16px; background: #fff; border: 1px solid #e2e6ed;
+  border-left: 3px solid #2e6be6; border-radius: 8px; font-size: 12.5px; color: #49545f;
+}
+.panel-note b { color: #1f4fc4; font-size: 13px; }
+.panel-note span { color: #69737f; }
+.compare { max-width: 1440px; margin: 34px auto 0; }
+.compare h2 { font-size: 17px; margin-bottom: 12px; }
+.compare .scroll { overflow-x: auto; border: 1px solid #dfe3ea; border-radius: 10px; background: #fff; }
+.compare table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 1040px; }
+.compare th, .compare td { padding: 11px 13px; text-align: left; border-bottom: 1px solid #edf0f4; vertical-align: top; }
+.compare th { background: #f7f9fc; font-weight: 650; color: #394552; }
+.compare tr:last-child td { border-bottom: 0; }
+.compare td:first-child { font-weight: 650; color: #26313d; white-space: nowrap; }
+.pick { color: #1f4fc4; font-weight: 650; }
+.compare .advice { margin-top: 12px; font-size: 12.5px; color: #5d6775; line-height: 1.75; }
+.advice b { color: #1f4fc4; }
+.icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.icon.lg { width: 22px; height: 22px; }
+.icon.sm { width: 14px; height: 14px; }
+.sr-only { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+[hidden] { display: none !important; }
+.toast {
+  position: fixed; inset-inline: 50% auto; inset-block-end: 26px; transform: translateX(50%) translateY(16px);
+  padding: 10px 16px; border-radius: 10px; background: #1c2430; color: #fff; font-size: 12.5px;
+  box-shadow: 0 12px 32px rgba(20,30,50,.26); opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .2s ease; z-index: 99;
+}
+.toast.show { opacity: 1; transform: translateX(50%) translateY(0); }
+
+/* ==================== A 设备卡片墙：无侧栏，设备即入口 ==================== */
+.stage-a {
+  --a-blue: #2e6be6; --a-ink: #1f4fc4; --a-line: #e3e9f4;
+  min-block-size: 720px; padding: 20px 22px 24px; border: 1px solid #e2e7f0; border-radius: 18px;
+  background: radial-gradient(900px 420px at 4% -8%, #e7efff, transparent 60%), linear-gradient(160deg, #f8faff, #f1f4fa);
+  box-shadow: 0 14px 36px rgba(42,66,118,.09); color: #1c2430;
+}
+.a-top { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding-bottom: 18px; border-bottom: 1px solid var(--a-line); }
+.a-brand { display: flex; align-items: center; gap: 9px; font-weight: 750; letter-spacing: -.01em; }
+.a-mark { display: grid; place-items: center; inline-size: 30px; block-size: 30px; border-radius: 9px; background: var(--a-blue); color: #fff; font-size: 14px; font-weight: 800; }
+.a-nav { display: flex; gap: 4px; overflow-x: auto; max-inline-size: 100%; padding-bottom: 2px; scrollbar-width: thin; }
+.a-nav button { flex: none; padding: 7px 13px; border: 0; border-radius: 8px; background: transparent; color: #667287; font-size: 12.5px; }
+.a-nav button:hover { background: #eef3fb; }
+.a-nav button[aria-current="page"] { background: #e6efff; color: var(--a-ink); font-weight: 700; }
+.a-current { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid #dce6fa; border-radius: 999px; background: #f2f6ff; color: #47608f; font-size: 10.5px; white-space: nowrap; }
+.a-current i { inline-size: 6px; block-size: 6px; border-radius: 50%; background: #16a34a; }
+.a-search { display: flex; align-items: center; gap: 8px; margin-inline-start: auto; inline-size: min(320px, 100%); padding: 8px 11px; border: 1px solid var(--a-line); border-radius: 9px; background: rgba(255,255,255,.82); color: #8a94a4; font-size: 12px; }
+.a-search kbd { margin-inline-start: auto; font: inherit; font-size: 10px; padding: 1px 5px; border: 1px solid #dfe5ef; border-radius: 4px; background: #f6f8fc; }
+.a-intro { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin: 22px 0 16px; }
+.a-intro h2 { font-size: 20px; letter-spacing: -.015em; }
+.a-intro h2 small { font-size: 12px; font-weight: 500; color: #7c8798; margin-inline-start: 8px; }
+.a-add { padding: 8px 14px; border: 1px dashed #b8cdf5; border-radius: 9px; background: rgba(255,255,255,.7); color: var(--a-ink); font-size: 12px; font-weight: 650; }
+.a-wall { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.a-device { container: a-card / inline-size; display: grid; gap: 14px; padding: 18px; border: 1px solid #e5eaf4; border-radius: 18px; background: rgba(255,255,255,.92); box-shadow: 0 6px 22px rgba(40,65,115,.06); }
+.a-device:first-child { border-color: #c4d9ff; box-shadow: 0 10px 28px rgba(46,107,230,.12); }
+.a-device__head { display: flex; align-items: center; gap: 8px; }
+.a-dot { inline-size: 8px; block-size: 8px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 4px rgba(22,163,74,.12); }
+.a-dot.wifi { background: var(--a-blue); box-shadow: 0 0 0 4px rgba(46,107,230,.12); }
+.a-dot.off { background: #a4adbb; box-shadow: none; }
+.a-device h3 { font-size: 15px; }
+.a-chip { padding: 2px 7px; border-radius: 6px; background: #eaf6ef; color: #15803d; font-size: 10px; font-weight: 700; }
+.a-chip.wifi { background: #eaf1ff; color: var(--a-ink); }
+.a-chip.off { background: #f1f3f6; color: #8b95a3; }
+.a-more { margin-inline-start: auto; border: 0; background: transparent; color: #98a2b1; font-size: 18px; line-height: 1; }
+.a-device__body { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 15px; align-items: center; }
+.a-phone { inline-size: 92px; aspect-ratio: 9 / 16; padding: 5px; border: 5px solid #253247; border-radius: 15px; background: linear-gradient(165deg, #b6d2ff, #e8f0ff 42%, #f8d9c4); box-shadow: inset 0 0 0 1px rgba(255,255,255,.4); }
+.a-phone i { display: block; block-size: 4px; inline-size: 26px; margin: 3px auto 7px; border-radius: 4px; background: #253247; }
+.a-phone span { display: block; block-size: 22px; margin-block: 5px; border-radius: 5px; background: rgba(255,255,255,.65); }
+.a-phone.is-off { background: #d9dee6; filter: grayscale(1); }
+@container a-card (inline-size > 360px) { .a-device__body { grid-template-columns: 112px minmax(0,1fr); } .a-phone { inline-size: 112px; } }
+.a-meta p { font-size: 11.5px; color: #6b7686; line-height: 1.5; }
+.a-meta dl { display: grid; gap: 5px; margin-block-start: 9px; font-size: 11px; color: #7b8696; }
+.a-meta dl div { display: flex; gap: 8px; }
+.a-meta dt { min-inline-size: 42px; color: #9aa4b2; }
+.a-meta dd { font-variant-numeric: tabular-nums; color: #3c4756; }
+.a-battery { inline-size: 100%; block-size: 5px; margin-block-start: 10px; border-radius: 5px; background: #e9edf4; overflow: hidden; }
+.a-battery i { display: block; inline-size: var(--p); block-size: 100%; border-radius: inherit; background: #16a34a; }
+.a-battery.low i { background: #e08a1e; }
+.a-quick { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; }
+.a-quick button { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 8px 4px; border: 1px solid #e3e9f3; border-radius: 9px; background: #f8faff; color: #46536a; font-size: 11.5px; font-weight: 600; }
+.a-quick button:first-child { border-color: var(--a-blue); background: var(--a-blue); color: #fff; }
+.a-bottom { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; margin-block-start: 16px; }
+.a-card { padding: 14px 17px; border: 1px solid #e5eaf4; border-radius: 14px; background: rgba(255,255,255,.88); }
+.a-card h3 { font-size: 12.5px; margin-bottom: 9px; }
+.a-card ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.a-card li { display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: #6b7686; }
+.a-card li b { color: #303c4d; font-weight: 650; }
+.a-card time { margin-inline-start: auto; color: #a0a9b6; font-size: 10.5px; }
+.a-tag { padding: 2px 6px; border-radius: 5px; background: #eaf6ef; color: #15803d; font-size: 10px; font-weight: 650; }
+.a-note { font-size: 11.5px; color: #718093; line-height: 1.65; }
+
+/* A 的功能页通用部件：沿用卡片墙的浅色 / 大圆角 / 状态语义色 */
+.a-view { display: grid; gap: 14px; margin-block-start: 18px; }
+.a-page-head { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.a-page-head h2 { font-size: 19px; letter-spacing: -.015em; }
+.a-page-head p { color: #7c8798; font-size: 12px; margin-block-start: 3px; }
+.a-page-head .a-actions { margin-inline-start: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.a-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-block-size: 34px; padding: 0 13px; border: 1px solid #dfe6f1; border-radius: 9px; background: #fff; color: #46536a; font-size: 11.5px; font-weight: 650; }
+.a-btn.primary { border-color: #2e6be6; background: #2e6be6; color: #fff; }
+.a-btn.warn { border-color: #f0cda1; background: #fff8ee; color: #a7630f; }
+.a-btn:disabled { opacity: .5; cursor: not-allowed; }
+.a-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.a-grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.a-card h3 { font-size: 13px; }
+.a-card h4 { font-size: 12px; margin-bottom: 7px; }
+.a-card ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.a-card li { font-size: 11.5px; color: #6b7686; line-height: 1.5; }
+.a-kv { display: grid; gap: 7px; margin-block-start: 8px; font-size: 11.5px; }
+.a-kv div { display: flex; justify-content: space-between; gap: 10px; }
+.a-kv dt { color: #96a0ae; }
+.a-kv dd { color: #344052; font-variant-numeric: tabular-nums; }
+.a-table { inline-size: 100%; border-collapse: collapse; font-size: 11.5px; }
+.a-table th { padding: 8px 9px; border-bottom: 1px solid #e7ecf4; color: #98a2b1; font-size: 10.5px; font-weight: 650; text-align: left; }
+.a-table td { padding: 9px; border-bottom: 1px solid #f0f3f7; color: #4a5666; }
+.a-table tr:last-child td { border-bottom: 0; }
+.a-table b { color: #2c3949; font-weight: 650; }
+.a-pill { display: inline-block; padding: 2px 7px; border-radius: 5px; background: #edf2fb; color: #2f5fbe; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.a-pill.ok { background: #e9f6ee; color: #15803d; }
+.a-pill.warn { background: #fff3e4; color: #b26a0d; }
+.a-pill.off { background: #f1f3f6; color: #8b95a3; }
+.a-switch { display: inline-flex; align-items: center; gap: 4px; color: #7b8696; font-size: 11px; }
+.a-switch i { position: relative; inline-size: 28px; block-size: 16px; border-radius: 999px; background: #d9dfe8; }
+.a-switch i::after { content: ""; position: absolute; inset-block-start: 2px; inset-inline-start: 2px; inline-size: 12px; block-size: 12px; border-radius: 50%; background: #fff; }
+.a-switch.on i { background: #2e6be6; }
+.a-switch.on i::after { inset-inline-start: 14px; }
+.a-thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.a-thumb { aspect-ratio: 4 / 3; display: grid; align-content: end; padding: 7px; border: 1px solid #e5eaf3; border-radius: 9px; background: linear-gradient(145deg, #c8dcf7, #f1dfd1); color: #42546e; font-size: 9.5px; }
+.a-thumb:nth-child(even) { background: linear-gradient(145deg, #cfe9db, #dcd4f2); }
+.a-progress { inline-size: 100%; block-size: 6px; border-radius: 6px; background: #e9edf4; overflow: hidden; }
+.a-progress i { display: block; inline-size: var(--p); block-size: 100%; border-radius: inherit; background: #2e6be6; }
+.a-steps { display: grid; gap: 10px; counter-reset: a-step; }
+.a-steps li { display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 9px; align-items: start; }
+.a-steps li::before { counter-increment: a-step; content: counter(a-step); display: grid; place-items: center; inline-size: 22px; block-size: 22px; border-radius: 7px; background: #eaf1ff; color: #1f4fc4; font-size: 10px; font-weight: 700; }
+.a-steps b { display: block; color: #344052; font-size: 11.5px; margin-bottom: 2px; }
+.a-notice { padding: 11px 13px; border: 1px solid #dce8fb; border-radius: 10px; background: #f3f7ff; color: #53688d; font-size: 11.5px; line-height: 1.6; }
+.a-notice.warn { border-color: #f0d9b5; background: #fff9f0; color: #94601a; }
+.a-drop { padding: 24px 14px; border: 1px dashed #b9cdf5; border-radius: 12px; background: #f9fbff; color: #7086a8; font-size: 12px; text-align: center; line-height: 1.7; }
+.a-details { display: grid; gap: 8px; }
+.a-details details { border: 1px solid #e6ebf3; border-radius: 9px; background: #fff; }
+.a-details summary { padding: 10px 13px; cursor: pointer; font-size: 12px; color: #344052; font-weight: 650; }
+.a-details details p { padding: 0 13px 11px; font-size: 11px; color: #7b8696; line-height: 1.6; }
+.a-phone-mini { inline-size: 150px; aspect-ratio: 9 / 16; justify-self: center; padding: 6px; border: 5px solid #253247; border-radius: 16px; background: linear-gradient(170deg, #b6d2ff, #e8f0ff 45%, #f8d9c4); }
+.a-phone-mini i { display: block; inline-size: 26px; block-size: 4px; margin: 3px auto 6px; border-radius: 4px; background: #253247; }
+.a-phone-mini span { display: block; block-size: 18px; margin-block: 5px; border-radius: 5px; background: rgba(255,255,255,.65); }
+.a-group-label { margin: 4px 0 -4px; font-size: 10px; letter-spacing: .08em; color: #9aa4b2; font-weight: 700; }
+.a-center { text-align: center; }
+.a-search-narrow { max-inline-size: 520px; margin-inline-start: 0; }
+.a-mt { margin-block-start: 10px; }
+
+/* ==================== B 四栏工作台：侧栏导航 + 列表 + 内容 + 详情 ==================== */
+.stage-b {
+  --b-line: #e4e8ee; --b-blue: #2e6be6;
+  display: grid; grid-template-columns: 66px 218px minmax(0,1fr) 252px;
+  grid-template-rows: 52px minmax(660px, 1fr);
+  grid-template-areas: "top top top top" "rail list main info";
+  min-block-size: 712px; border: 1px solid #dce2ea; border-radius: 12px; overflow: hidden;
+  background: #f3f5f8; color: #28313f; font-size: 12.5px; box-shadow: 0 10px 30px rgba(31,44,68,.09);
+}
+.b-top { grid-area: top; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: #fff; border-bottom: 1px solid var(--b-line); }
+.b-top .b-brand { display: flex; align-items: center; gap: 8px; font-weight: 750; }
+.b-top .b-mark { display: grid; place-items: center; inline-size: 25px; block-size: 25px; border-radius: 7px; background: #1f2937; color: #fff; font-size: 12px; font-weight: 800; }
+.b-crumb { color: #8a94a3; font-size: 11.5px; }
+.b-crumb b { color: #3b4758; font-weight: 650; }
+.b-top .b-right { margin-inline-start: auto; display: flex; align-items: center; gap: 10px; color: #8a94a3; }
+.b-key { padding: 3px 7px; border: 1px solid #e1e5eb; border-radius: 5px; background: #f8f9fb; font-size: 10.5px; }
+.b-rail { grid-area: rail; display: grid; align-content: start; justify-items: center; gap: 4px; padding: 14px 0; background: #1e2734; }
+.b-rail button { display: grid; justify-items: center; gap: 3px; inline-size: 50px; padding: 9px 0 7px; border: 0; border-radius: 8px; background: transparent; color: #8493a8; font-size: 9.5px; }
+.b-rail button:hover { background: rgba(255,255,255,.07); color: #dbe6f7; }
+.b-rail button[aria-current="page"] { background: rgba(91,157,255,.18); color: #9dc4ff; }
+.b-rail .b-sep { inline-size: 24px; block-size: 1px; margin: 9px 0; background: #364153; }
+.b-list { grid-area: list; padding: 15px 12px; background: #fafbfc; border-right: 1px solid var(--b-line); }
+.b-list h3, .b-info h3 { font-size: 10.5px; letter-spacing: .06em; color: #8b95a4; text-transform: uppercase; margin-bottom: 9px; }
+.b-tree { display: grid; gap: 2px; margin: 0 0 18px; padding: 0; list-style: none; }
+.b-tree button { inline-size: 100%; display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: #4d5968; font-size: 11.5px; text-align: left; }
+.b-tree button[aria-current="page"] { background: #e9f0ff; color: #1f4fc4; font-weight: 650; }
+.b-tree .b-dim { margin-inline-start: auto; color: #a6afbc; font-size: 10px; }
+.b-main { grid-area: main; min-inline-size: 0; padding: 14px 16px 20px; background: #fff; }
+.b-main__bar { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid #edf0f4; }
+.b-main__bar strong { font-size: 14px; }
+.b-main__bar span { color: #939daa; font-size: 11px; }
+.b-main__bar button { margin-inline-start: auto; padding: 7px 11px; border: 1px solid #2e6be6; border-radius: 6px; background: #2e6be6; color: #fff; font-size: 11px; font-weight: 650; }
+.b-table { inline-size: 100%; border-collapse: collapse; font-size: 11.5px; }
+.b-table th { padding: 9px 8px; color: #98a2b1; font-size: 10.5px; font-weight: 600; text-align: left; border-bottom: 1px solid #e9edf2; }
+.b-table td { padding: 9px 8px; border-bottom: 1px solid #f0f2f6; color: #45515f; }
+.b-table tr:hover td { background: #f8faff; }
+.b-table .b-num { text-align: right; font-variant-numeric: tabular-nums; }
+.b-table .b-name { color: #273544; font-weight: 600; }
+.b-table .b-sub { color: #9aa4b2; font-size: 10px; }
+.b-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 8px; margin-block-start: 12px; }
+.b-shot { aspect-ratio: 3 / 4; border-radius: 7px; background: linear-gradient(160deg, #cfe0ff, #f6e4d7); border: 1px solid #e5eaf2; display: grid; align-content: end; padding: 6px; font-size: 9.5px; color: #4a5b75; }
+.b-shot:nth-child(even) { background: linear-gradient(160deg, #d9f2e7, #e9e6ff); }
+.b-notify { display: grid; gap: 8px; margin-block-start: 12px; }
+.b-notify article { display: flex; gap: 10px; padding: 10px; border: 1px solid #edf0f4; border-radius: 7px; }
+.b-notify b { font-size: 11.5px; }
+.b-notify p { color: #768190; font-size: 11px; margin-block-start: 2px; }
+.b-notify time { margin-inline-start: auto; color: #a2abb8; font-size: 10px; }
+.b-info { grid-area: info; padding: 15px 14px; background: #fafbfc; border-left: 1px solid var(--b-line); }
+.b-card { padding: 12px; margin-bottom: 12px; border: 1px solid #e8ebf0; border-radius: 8px; background: #fff; }
+.b-card h4 { font-size: 12px; margin-bottom: 8px; }
+.b-card dl { display: grid; gap: 6px; font-size: 11px; }
+.b-card dl div { display: flex; justify-content: space-between; gap: 8px; }
+.b-card dt { color: #98a2b1; }
+.b-card dd { color: #3d4958; font-variant-numeric: tabular-nums; }
+.b-health { display: flex; align-items: center; gap: 10px; }
+.b-ring { position: relative; inline-size: 40px; block-size: 40px; border-radius: 50%; background: conic-gradient(#16a34a 0 var(--pct, 78%), #e8edf3 var(--pct, 78%) 100%); display: grid; place-items: center; }
+.b-ring::after { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: #fff; }
+.b-ring b { position: relative; z-index: 1; font-size: 11px; font-weight: 700; color: #15803d; }
+.b-health p { font-size: 10.5px; color: #8792a1; line-height: 1.5; }
+.b-hint { font-size: 10.5px; color: #98a2b1; line-height: 1.6; }
+.b-copy { margin-block-start: 8px; padding: 6px 9px; border: 1px solid #dfe4ec; border-radius: 6px; background: #fff; color: #536175; font-size: 10.5px; }
+.b-rail { overflow-y: auto; scrollbar-width: thin; }
+.b-rail button { padding-block: 7px 5px; }
+.b-list, .b-main, .b-info { overflow-y: auto; scrollbar-width: thin; }
+.b-view { display: grid; gap: 11px; margin-block-start: 12px; }
+.b-panel { padding: 12px; border: 1px solid #e9edf2; border-radius: 8px; background: #fff; }
+.b-panel > h3 { font-size: 12px; margin-bottom: 9px; }
+.b-panel > p { font-size: 11px; color: #7b8696; line-height: 1.6; }
+.b-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.b-actions button { padding: 6px 9px; border: 1px solid #dfe5ee; border-radius: 6px; background: #fff; color: #536175; font-size: 10.5px; font-weight: 600; }
+.b-actions button.primary { border-color: #2e6be6; background: #2e6be6; color: #fff; }
+.b-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+.b-tile { padding: 10px; border: 1px solid #e9edf2; border-radius: 7px; background: #fbfcfe; }
+.b-tile b { display: block; font-size: 11.5px; color: #273544; }
+.b-tile span { display: block; margin-block-start: 3px; color: #8792a1; font-size: 10.5px; line-height: 1.5; }
+.b-bar { inline-size: 100%; block-size: 6px; margin-block-start: 7px; border-radius: 6px; background: #e9edf4; overflow: hidden; }
+.b-bar i { display: block; inline-size: var(--p); block-size: 100%; border-radius: inherit; background: #2e6be6; }
+.b-steps { display: grid; gap: 8px; counter-reset: b-step; }
+.b-steps div { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; font-size: 11px; color: #5b6776; line-height: 1.5; }
+.b-steps div::before { counter-increment: b-step; content: counter(b-step); display: grid; place-items: center; inline-size: 20px; block-size: 20px; border-radius: 6px; background: #eaf1ff; color: #1f4fc4; font-size: 9.5px; font-weight: 700; }
+.b-note { padding: 9px 11px; border: 1px solid #dce8fb; border-radius: 7px; background: #f3f7ff; color: #53688d; font-size: 10.5px; line-height: 1.6; }
+.b-phone-xs { inline-size: 96px; aspect-ratio: 9 / 16; justify-self: center; padding: 5px; border: 4px solid #253247; border-radius: 13px; background: linear-gradient(165deg, #b6d2ff, #e8f0ff 42%, #f8d9c4); }
+.b-phone-xs i { display: block; inline-size: 18px; block-size: 3px; margin: 3px auto 5px; border-radius: 3px; background: #253247; }
+.b-phone-xs span { display: block; block-size: 12px; margin-block: 4px; border-radius: 4px; background: rgba(255, 255, 255, .65); }
+.b-panel details { border-bottom: 1px solid #edf0f4; }
+.b-panel details:last-child { border-bottom: 0; }
+.b-panel summary { padding: 11px 12px; font-size: 11.5px; font-weight: 650; color: #3b4758; cursor: pointer; }
+.b-panel details p { padding: 0 12px 11px; font-size: 10.5px; color: #7b8696; line-height: 1.6; }
+
+/* ==================== C 镜像舞台：会话标签 + 大画面 + 悬浮工具 + 抽屉 ==================== */
+.stage-c {
+  --c-line: #2a3545; --c-blue: #5b9dff;
+  min-block-size: 720px; padding: 14px; border: 1px solid #1a2230; border-radius: 14px;
+  background: #0d121b; color: #e8eef8; font-size: 12.5px; box-shadow: 0 18px 42px rgba(10,18,32,.28);
+}
+.c-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 2px 4px 13px; border-bottom: 1px solid var(--c-line); }
+.c-brand { display: flex; align-items: center; gap: 8px; font-weight: 750; }
+.c-brand i { inline-size: 9px; block-size: 9px; border-radius: 50%; background: #5b9dff; box-shadow: 0 0 10px #5b9dff; }
+.c-tabs { display: flex; gap: 5px; }
+.c-tabs button { display: flex; align-items: center; gap: 7px; padding: 7px 12px; border: 1px solid var(--c-line); border-radius: 7px; background: #151d29; color: #8e9caf; font-size: 11.5px; }
+.c-tabs button[aria-current="page"] { border-color: #3765aa; background: #1b2c46; color: #dbeaff; }
+.c-tabs button i { inline-size: 6px; block-size: 6px; border-radius: 50%; background: #4ade80; }
+.c-tabs button.off i { background: #6b778a; }
+.c-top .c-right { margin-inline-start: auto; display: flex; align-items: center; gap: 8px; color: #8e9caf; font-size: 11px; }
+.c-top .c-right span { padding: 5px 9px; border: 1px solid var(--c-line); border-radius: 6px; }
+.c-body { display: grid; grid-template-columns: 54px minmax(0,1fr) 278px; gap: 10px; padding-block: 12px; min-block-size: 548px; }
+.c-tools { display: grid; align-content: start; gap: 5px; padding: 8px 0; border: 1px solid var(--c-line); border-radius: 10px; background: #141b26; }
+.c-tools button { display: grid; place-items: center; inline-size: 38px; block-size: 38px; margin-inline: auto; border: 0; border-radius: 8px; background: transparent; color: #8494aa; }
+.c-tools button:hover { background: #223049; color: #cfe2ff; }
+.c-tools button[aria-current="page"] { background: #1b2c46; color: #8fc0ff; }
+.c-canvas { position: relative; display: grid; place-items: center; border: 1px solid var(--c-line); border-radius: 12px; background: radial-gradient(600px 420px at 50% 20%, #1b2a40, #0b111a 70%); overflow: hidden; }
+.c-canvas::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(rgba(120,160,220,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(120,160,220,.045) 1px, transparent 1px); background-size: 34px 34px; }
+.c-live { position: absolute; inset-block-start: 12px; inset-inline-start: 14px; display: flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid #31405a; border-radius: 999px; background: rgba(13,18,27,.78); color: #a9bdd6; font-size: 10.5px; }
+.c-live i { inline-size: 6px; block-size: 6px; border-radius: 50%; background: #4ade80; }
+.c-phone { position: relative; z-index: 1; inline-size: min(52%, 240px); max-block-size: 430px; aspect-ratio: 9 / 16; padding: 8px; border: 6px solid #2d3a4d; border-radius: 26px; background: linear-gradient(180deg, #1a2b45 0%, #243e63 40%, #e2bfa9 100%); box-shadow: 0 20px 60px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.08); }
+.c-phone::before { content: ""; position: absolute; inset-block-start: 7px; inset-inline: 35%; block-size: 9px; border-radius: 8px; background: #0b1119; }
+.c-apps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px 7px; margin-block-start: 40px; }
+.c-apps i { aspect-ratio: 1; border-radius: 9px; background: rgba(255,255,255,.72); box-shadow: 0 2px 6px rgba(0,0,0,.16); }
+.c-apps i:nth-child(3n) { background: rgba(146,196,255,.8); }
+.c-apps i:nth-child(4n) { background: rgba(255,211,180,.85); }
+.c-float { position: absolute; inset-block-end: 14px; inset-inline-start: 50%; transform: translateX(-50%); z-index: 2; display: flex; gap: 4px; padding: 5px; border: 1px solid #35455e; border-radius: 10px; background: rgba(14,20,30,.86); backdrop-filter: blur(12px); box-shadow: 0 10px 28px rgba(0,0,0,.4); }
+.c-float button { display: grid; place-items: center; inline-size: 34px; block-size: 30px; border: 0; border-radius: 6px; background: transparent; color: #b9c8dc; }
+.c-float button:hover { background: #243552; color: #fff; }
+.c-float button.stop { color: #ff9c9c; }
+.c-drawer { display: grid; align-content: start; gap: 10px; padding: 12px; border: 1px solid var(--c-line); border-radius: 10px; background: #141b26; }
+.c-drawer__tabs { display: flex; gap: 4px; }
+.c-drawer__tabs button { flex: 1; padding: 6px 2px; border: 0; border-radius: 6px; background: transparent; color: #7f8ea3; font-size: 10.5px; }
+.c-drawer__tabs button[aria-current="page"] { background: #22324a; color: #cfe2ff; }
+.c-drawer h4 { font-size: 11px; color: #9aabc0; margin-block: 4px 2px; }
+.c-drawer ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.c-drawer li { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid #263348; border-radius: 7px; background: #192231; color: #b4c2d4; font-size: 11px; }
+.c-drawer li small { margin-inline-start: auto; color: #6f7f95; }
+.c-drop { padding: 13px 10px; border: 1px dashed #3a4f70; border-radius: 8px; color: #8ba2c2; font-size: 10.5px; text-align: center; line-height: 1.55; }
+.c-film { display: flex; align-items: center; gap: 8px; padding: 10px 4px 2px; border-top: 1px solid var(--c-line); }
+.c-film > span { font-size: 10.5px; color: #8090a5; }
+.c-film i { inline-size: 46px; block-size: 30px; border-radius: 5px; background: linear-gradient(135deg, #5678a8, #d0b19c); border: 1px solid #34445e; }
+.c-film i:nth-child(even) { background: linear-gradient(135deg, #4c8f88, #9a8cc2); }
+.c-film button { margin-inline-start: auto; padding: 5px 10px; border: 1px solid var(--c-line); border-radius: 6px; background: #151d29; color: #9fb1c8; font-size: 10.5px; }
+
+/* ==================== D 双栏文件台：本机 / 手机对照 + 传输队列 ==================== */
+.stage-d {
+  --d-line: #dfe3e9; --d-blue: #2e6be6;
+  min-block-size: 720px; padding: 16px; border: 1px solid #d9dee6; border-radius: 12px;
+  background: #f5f6f8; color: #263140; font-size: 12.5px; box-shadow: 0 10px 30px rgba(30,42,64,.08);
+}
+.d-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 13px; }
+.d-brand { display: flex; align-items: center; gap: 8px; font-weight: 750; }
+.d-brand i { display: grid; place-items: center; inline-size: 26px; block-size: 26px; border-radius: 7px; background: #2e6be6; color: #fff; font-size: 12px; font-style: normal; font-weight: 800; }
+.d-device { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--d-line); border-radius: 7px; background: #fff; font-size: 11.5px; }
+.d-device i { inline-size: 7px; block-size: 7px; border-radius: 50%; background: #16a34a; }
+.d-seg { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--d-line); border-radius: 8px; background: #e9ecf1; }
+.d-seg button { padding: 6px 13px; border: 0; border-radius: 6px; background: transparent; color: #6b7686; font-size: 11.5px; }
+.d-seg button[aria-pressed="true"] { background: #fff; color: #1f4fc4; font-weight: 700; box-shadow: 0 1px 4px rgba(20,35,60,.12); }
+.d-top .d-right { margin-inline-start: auto; display: flex; gap: 7px; }
+.d-top .d-right button { padding: 7px 11px; border: 1px solid var(--d-line); border-radius: 7px; background: #fff; color: #4a5667; font-size: 11px; }
+.d-pathbar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; margin-bottom: 11px; border: 1px solid var(--d-line); border-radius: 7px; background: #fff; color: #808b9a; font-size: 11px; }
+.d-pathbar b { color: #3a4657; font-weight: 650; }
+.d-pathbar button { margin-inline-start: auto; border: 0; background: transparent; color: #2e6be6; font-size: 11px; }
+.d-panes { display: grid; grid-template-columns: minmax(0,1fr) 88px minmax(0,1fr); gap: 10px; min-block-size: 484px; }
+.d-pane { min-inline-size: 0; display: grid; grid-template-rows: auto auto minmax(0,1fr); border: 1px solid var(--d-line); border-radius: 9px; background: #fff; overflow: hidden; }
+.d-pane__head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--d-line); background: #fbfcfd; }
+.d-pane__head b { font-size: 12px; }
+.d-pane__head small { color: #99a3b0; }
+.d-pane__head button { margin-inline-start: auto; padding: 5px 9px; border: 1px solid var(--d-line); border-radius: 6px; background: #fff; font-size: 10.5px; color: #556174; }
+.d-pane__path { padding: 7px 12px; border-bottom: 1px solid #eef1f4; color: #97a1ae; font-size: 10.5px; }
+.d-rows { display: grid; align-content: start; margin: 0; padding: 0; list-style: none; }
+.d-row { display: grid; grid-template-columns: minmax(0,1fr) 82px 62px; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #f1f3f6; font-size: 11.5px; color: #495564; }
+.d-row[aria-selected="true"] { background: #e9f0ff; color: #1f4fc4; }
+.d-row .d-name { display: flex; align-items: center; gap: 8px; min-inline-size: 0; overflow-wrap: anywhere; }
+.d-row .d-size, .d-row time { color: #9ba5b2; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.d-transfer { display: grid; align-content: center; justify-items: center; gap: 10px; }
+.d-transfer button { inline-size: 42px; block-size: 32px; border: 1px solid #cad8f5; border-radius: 7px; background: #fff; color: #2e6be6; font-size: 16px; }
+.d-transfer p { writing-mode: vertical-rl; color: #a3acb9; font-size: 10px; letter-spacing: .12em; }
+.d-albums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 10px; }
+.d-albums i { aspect-ratio: 1; border-radius: 6px; background: linear-gradient(135deg, #c7d9f5, #eed9ca); border: 1px solid #e6eaf0; }
+.d-albums i:nth-child(3n+2) { background: linear-gradient(135deg, #cde9dc, #dcd2f3); }
+.d-queue { margin-block-start: 11px; padding: 12px 14px; border: 1px solid var(--d-line); border-radius: 9px; background: #fff; }
+.d-queue h3 { font-size: 11.5px; margin-bottom: 9px; }
+.d-queue ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.d-queue li { display: grid; grid-template-columns: minmax(160px,1fr) minmax(120px,2fr) 54px; align-items: center; gap: 12px; font-size: 10.5px; color: #6c7787; }
+.d-queue progress { inline-size: 100%; block-size: 6px; accent-color: #2e6be6; }
+.d-queue b { text-align: right; font-variant-numeric: tabular-nums; color: #41506a; }
+
+/* ==================== E 活动流：命令搜索 + 时间线 + 快速操作侧栏 ==================== */
+.stage-e {
+  --e-line: #e9e5df; --e-blue: #3b6fe0;
+  display: grid; grid-template-columns: 174px minmax(0,1fr) 282px; gap: 18px;
+  min-block-size: 720px; padding: 20px 22px 24px; border: 1px solid #e9e5df; border-radius: 14px;
+  background: #fcfbfa; color: #25303e; font-size: 12.5px; box-shadow: 0 12px 32px rgba(50,42,32,.07);
+}
+.e-command { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid #e5e0d8; border-radius: 10px; background: #fff; box-shadow: 0 2px 8px rgba(40,35,25,.04); }
+.e-command > svg { color: #99a3b1; }
+.e-command input { flex: 1; border: 0; outline: 0; background: transparent; color: #25303e; font-size: 13px; }
+.e-command input::placeholder { color: #a4adb9; }
+.e-command kbd { padding: 3px 7px; border: 1px solid #e5e0d8; border-radius: 5px; background: #faf9f7; color: #98a1ac; font: inherit; font-size: 10px; }
+.e-nav { display: grid; align-content: start; gap: 3px; }
+.e-nav h3 { margin: 0 0 8px 10px; font-size: 10px; letter-spacing: .08em; color: #a19c93; }
+.e-nav button { display: flex; align-items: center; gap: 9px; inline-size: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #5d6878; font-size: 12px; text-align: left; }
+.e-nav button[aria-current="page"] { background: #eef2fb; color: #2f5fbe; font-weight: 700; }
+.e-nav button small { margin-inline-start: auto; color: #a7b0bb; }
+.e-nav .e-group { height: 1px; margin: 14px 8px; background: #eeeae4; }
+.e-feed { min-inline-size: 0; }
+.e-feed__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.e-feed__head h2 { font-size: 17px; letter-spacing: -.01em; }
+.e-feed__head small { color: #9aa3af; }
+.e-feed__head button { margin-inline-start: auto; padding: 6px 10px; border: 1px solid #e9e5df; border-radius: 7px; background: #fff; font-size: 11px; color: #657082; }
+.e-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.e-filters button { padding: 5px 10px; border: 1px solid #e9e5df; border-radius: 999px; background: #fff; color: #7a8492; font-size: 10.5px; }
+.e-filters button[aria-pressed="true"] { border-color: #b9c9ea; background: #edf2fd; color: #2f5fbe; font-weight: 650; }
+.e-items { display: grid; gap: 10px; }
+.e-item { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; gap: 12px; padding: 13px 14px; border: 1px solid #ece8e2; border-radius: 10px; background: #fff; }
+.e-item__icon { display: grid; place-items: center; inline-size: 32px; block-size: 32px; border-radius: 9px; background: #edf2fd; color: #3b6fe0; }
+.e-item__icon.green { background: #e9f6ee; color: #16803c; }
+.e-item__icon.amber { background: #fdf3e3; color: #b26a0d; }
+.e-item__body h3 { font-size: 12.5px; }
+.e-item__body p { margin-block-start: 3px; color: #798391; font-size: 11px; line-height: 1.5; }
+.e-item__tag { display: inline-block; margin-block-start: 7px; padding: 2px 7px; border-radius: 5px; background: #f4f5f7; color: #8993a0; font-size: 9.5px; font-weight: 650; }
+.e-item__side { display: grid; align-content: space-between; justify-items: end; gap: 8px; }
+.e-item__side time { color: #a7afba; font-size: 10px; }
+.e-item__side button { padding: 4px 8px; border: 1px solid #e5e8ee; border-radius: 6px; background: #fff; color: #536175; font-size: 10px; }
+.e-day { margin: 8px 0 0 4px; font-size: 10.5px; font-weight: 700; color: #a39d94; }
+.e-side { display: grid; align-content: start; gap: 12px; }
+.e-card { padding: 14px; border: 1px solid #ece8e2; border-radius: 10px; background: #fff; }
+.e-card h3 { font-size: 12px; margin-bottom: 10px; }
+.e-primary { inline-size: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 10px; border: 1px solid #3b6fe0; border-radius: 8px; background: #3b6fe0; color: #fff; font-size: 12px; font-weight: 650; }
+.e-drop { margin-block-start: 9px; padding: 14px 10px; border: 1px dashed #cbd6ea; border-radius: 8px; color: #7f8a99; font-size: 10.5px; text-align: center; line-height: 1.6; }
+.e-health { display: flex; align-items: center; gap: 12px; }
+.e-donut { inline-size: 58px; block-size: 58px; border-radius: 50%; background: conic-gradient(#3b6fe0 0 78%, #eef0f4 78% 100%); display: grid; place-items: center; }
+.e-donut::after { content: "78%"; inline-size: 44px; block-size: 44px; display: grid; place-items: center; border-radius: 50%; background: #fff; font-size: 12px; font-weight: 750; color: #2f5fbe; }
+.e-health p { font-size: 10.5px; color: #8b95a2; line-height: 1.55; }
+.e-privacy { font-size: 10.5px; color: #8a847b; line-height: 1.6; }
+.e-nav { max-block-size: 760px; overflow-y: auto; scrollbar-width: thin; }
+.e-feed { display: grid; align-content: start; }
+.e-view { display: grid; gap: 10px; }
+.e-panel { padding: 14px; border: 1px solid #ece8e2; border-radius: 10px; background: #fff; }
+.e-panel > h3 { font-size: 12.5px; margin-bottom: 10px; }
+.e-panel > p { font-size: 11px; color: #798391; line-height: 1.6; }
+.e-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.e-actions button { padding: 6px 10px; border: 1px solid #e5e8ee; border-radius: 7px; background: #fff; color: #536175; font-size: 10.5px; font-weight: 600; }
+.e-actions button.primary { border-color: #3b6fe0; background: #3b6fe0; color: #fff; }
+.e-line { display: grid; grid-template-columns: 26px minmax(0,1fr) auto; gap: 10px; align-items: start; padding: 9px 0; border-bottom: 1px solid #f2f0ec; font-size: 11.5px; }
+.e-line:last-child { border-bottom: 0; }
+.e-line i { display: grid; place-items: center; inline-size: 26px; block-size: 26px; border-radius: 7px; background: #edf2fd; color: #3b6fe0; font-style: normal; font-size: 10px; font-weight: 700; }
+.e-line b { color: #2d3746; }
+.e-line p { margin-block-start: 2px; color: #7d8794; font-size: 10.5px; line-height: 1.5; }
+.e-line time { color: #a7afba; font-size: 10px; white-space: nowrap; }
+.e-quote { padding: 10px 12px; border-left: 3px solid #3b6fe0; border-radius: 0 7px 7px 0; background: #f6f8fd; color: #64718a; font-size: 11px; line-height: 1.6; }
+
+@media (max-width: 1100px) {
+  .stage-b { grid-template-columns: 60px 180px minmax(0,1fr); grid-template-areas: "top top top" "rail list main" "rail info info"; }
+  .stage-e { grid-template-columns: 150px minmax(0,1fr); }
+  .stage-e .e-side { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6z"/><path d="M10 19h4"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H2.7v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4 7l2.9-2.8.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V2.7h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L20 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></symbol>
+  <symbol id="i-mirror" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M9 9l3-2 3 2-3 2z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-apps" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6"/><path d="M20 5v6h-6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4M5 20h14"/></symbol>
+</svg>
+
+<header class="viewer-head">
+  <h1>MirrorDock 手机助手 · 5 套布局方案</h1>
+  <p>这一版与上一版<strong>不是换主题色</strong>：五套分别采用不同的信息架构、导航范式与首屏主角。A 已补齐 <strong>19 个可真实切换的产品功能页面</strong>，顶部导航与设备卡快捷按钮均可直接切页。</p>
+  <p class="meta">基于《手机助手升级调研报告》F1–F12 · 2026-11-24 · 原《手机助手UI模板-5套.html》保持不动 · 本页为设计提案，未改产品代码</p>
+</header>
+
+<div class="switcher" role="tablist" aria-label="布局方案切换">
+  <button id="tab-a" role="tab" aria-selected="true" aria-controls="tpl-a" data-tpl="a"><b>A · 设备卡片墙</b><small>先看到「我的设备」</small></button>
+  <button id="tab-b" role="tab" aria-selected="false" aria-controls="tpl-b" data-tpl="b"><b>B · 四栏工作台</b><small>先看到「可管理的内容」</small></button>
+  <button id="tab-c" role="tab" aria-selected="false" aria-controls="tpl-c" data-tpl="c"><b>C · 镜像舞台</b><small>先看到「手机画面」</small></button>
+  <button id="tab-d" role="tab" aria-selected="false" aria-controls="tpl-d" data-tpl="d"><b>D · 双栏文件台</b><small>先看到「本机 ↔ 手机」</small></button>
+  <button id="tab-e" role="tab" aria-selected="false" aria-controls="tpl-e" data-tpl="e"><b>E · 活动流助手</b><small>先看到「发生了什么」</small></button>
+</div>
+
+<main id="panels">
+
+<!-- ==================== A ==================== -->
+<section class="panel active" id="tpl-a" role="tabpanel" aria-labelledby="tab-a">
+  <div class="panel-note"><b>A · 设备卡片墙</b><span>布局：无侧栏 · 顶部视图真切换 · 19 个产品功能页面</span><span>点顶部导航或设备卡内快捷按钮，会切到对应功能页</span></div>
+  <div class="stage-a">
+    <header class="a-top">
+      <div class="a-brand"><span class="a-mark">M</span>MirrorDock</div>
+      <nav class="a-nav" aria-label="功能视图切换">
+        <button type="button" data-a-view="home" aria-current="page">设备中心</button>
+        <button type="button" data-a-view="connect">连接授权</button>
+        <button type="button" data-a-view="mirror">镜像控制</button>
+        <button type="button" data-a-view="shot">截图</button>
+        <button type="button" data-a-view="record">录像</button>
+        <button type="button" data-a-view="files">文件传输</button>
+        <button type="button" data-a-view="apps">应用管理</button>
+        <button type="button" data-a-view="album">相册</button>
+        <button type="button" data-a-view="notify">通知中心</button>
+        <button type="button" data-a-view="info">设备信息</button>
+        <button type="button" data-a-view="install">批量安装</button>
+        <button type="button" data-a-view="present">投屏演示</button>
+        <button type="button" data-a-view="keymap">按键映射</button>
+        <button type="button" data-a-view="schedule">定时录制</button>
+        <button type="button" data-a-view="replay">操作回放</button>
+        <button type="button" data-a-view="multi">多端</button>
+        <button type="button" data-a-view="settings">设置</button>
+        <button type="button" data-a-view="help">帮助中心</button>
+        <button type="button" data-a-view="pro">Pro / 激活</button>
+      </nav>
+      <div class="a-search"><svg class="icon sm" aria-hidden="true"><use href="#i-search"/></svg><span>搜索设备、应用或命令</span><kbd>⌘ K</kbd></div>
+      <span class="a-current" id="a-current-device"><i aria-hidden="true"></i><span>小狸 · Redmi K40</span></span>
+      <button class="a-more" aria-label="设置" data-a-view="settings">⚙</button>
+    </header>
+
+    <!-- 1 设备中心 -->
+    <section class="a-view" data-a-view="home" aria-label="设备中心">
+      <div class="a-intro"><h2>我的设备 <small>3 台 · 2 在线</small></h2><button class="a-add" data-a-view="connect">＋ 添加设备</button></div>
+      <div class="a-wall">
+        <article class="a-device">
+          <div class="a-device__head"><span class="a-dot"></span><h3>小狸</h3><span class="a-chip">USB</span><button class="a-more" aria-label="设备更多操作" data-a-view="info">···</button></div>
+          <div class="a-device__body">
+            <div class="a-phone" aria-hidden="true"><i></i><span></span><span></span><span></span></div>
+            <div class="a-meta">
+              <p>Redmi K40 · M2104K10AC<br>Android 13 · 刚刚镜像过</p>
+              <dl><div><dt>电量</dt><dd>78%</dd></div><div><dt>存储</dt><dd>64 / 128 GB</dd></div><div><dt>通道</dt><dd>USB 直连</dd></div></dl>
+              <div class="a-battery" style="--p:78%"><i></i></div>
+            </div>
+          </div>
+          <div class="a-quick"><button type="button" data-a-view="mirror" data-a-device="小狸 · Redmi K40">镜像</button><button type="button" data-a-view="shot" data-a-device="小狸 · Redmi K40">截图</button><button type="button" data-a-view="files" data-a-device="小狸 · Redmi K40">文件</button></div>
+        </article>
+        <article class="a-device">
+          <div class="a-device__head"><span class="a-dot wifi"></span><h3>平板</h3><span class="a-chip wifi">无线</span><button class="a-more" aria-label="设备更多操作" data-a-view="info">···</button></div>
+          <div class="a-device__body">
+            <div class="a-phone" aria-hidden="true"><i></i><span></span><span></span><span></span></div>
+            <div class="a-meta">
+              <p>小米平板 5 · Android 12<br>2 小时前镜像过</p>
+              <dl><div><dt>电量</dt><dd>52%</dd></div><div><dt>存储</dt><dd>128 / 256 GB</dd></div><div><dt>通道</dt><dd>局域网 ADB</dd></div></dl>
+              <div class="a-battery" style="--p:52%"><i></i></div>
+            </div>
+          </div>
+          <div class="a-quick"><button type="button" data-a-view="mirror" data-a-device="平板 · 小米平板 5">镜像</button><button type="button" data-a-view="shot" data-a-device="平板 · 小米平板 5">截图</button><button type="button" data-a-view="files" data-a-device="平板 · 小米平板 5">文件</button></div>
+        </article>
+        <article class="a-device">
+          <div class="a-device__head"><span class="a-dot off"></span><h3>备用机</h3><span class="a-chip off">离线</span><button class="a-more" aria-label="设备更多操作" data-a-view="info">···</button></div>
+          <div class="a-device__body">
+            <div class="a-phone is-off" aria-hidden="true"><i></i><span></span><span></span><span></span></div>
+            <div class="a-meta">
+              <p>Pixel 6 · Android 14<br>3 天前连接过</p>
+              <dl><div><dt>电量</dt><dd>31%</dd></div><div><dt>存储</dt><dd>—</dd></div><div><dt>通道</dt><dd>等待连接</dd></div></dl>
+              <div class="a-battery low" style="--p:31%"><i></i></div>
+            </div>
+          </div>
+          <div class="a-quick"><button type="button" data-a-view="connect" data-a-device="备用机 · Pixel 6">连接</button><button type="button" data-a-view="info" data-a-device="备用机 · Pixel 6">详情</button><button type="button" data-toast="原型演示：移除设备">移除</button></div>
+        </article>
+      </div>
+      <div class="a-bottom">
+        <section class="a-card"><h3>最近任务</h3><ul>
+          <li><span class="a-tag">完成</span><b>AfterServiceApp-v0.3.0.apk</b> 已安装到小狸 <time>10:24</time></li>
+          <li><span class="a-tag">完成</span><b>截图_20261124.png</b> 已保存到 MirrorDock 目录 <time>09:58</time></li>
+          <li><span class="a-tag">进行中</span><b>DCIM/2026-11</b> 12 张照片取回中 <time>09:31</time></li>
+        </ul></section>
+        <section class="a-card"><h3>安全边界（常驻可见）</h3><p class="a-note">无需账号，数据不出本机。镜像、传输、卸载均需设备显式授权；不读取短信正文，不远程清除数据。</p></section>
+      </div>
+    </section>
+
+    <!-- 2 连接与授权 -->
+    <section class="a-view" data-a-view="connect" aria-label="连接与授权" hidden>
+      <div class="a-page-head"><div><h2>连接与授权</h2><p>USB / 同局域网无线 ADB / 扫码配对 · 授权状态可见可撤销</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：开始配对">＋ 添加设备</button></div></div>
+      <div class="a-grid3">
+        <article class="a-card"><h3>USB 直连</h3><p class="a-note">插线即用，稳定性最好。</p><ul><li>· 手机开启「开发者选项 → USB 调试」</li><li>· 首次连接需在手机点「允许」</li><li>· 当前：小狸 已连接</li></ul></article>
+        <article class="a-card"><h3>同局域网无线 ADB</h3><p class="a-note">同 Wi-Fi 下免插线，mDNS 自动发现。</p><ul><li>· 扫描局域网设备</li><li>· 配对码 / 扫码二选一</li><li>· 当前：平板 已连接</li></ul></article>
+        <article class="a-card"><h3>设备备注与分组</h3><p class="a-note">按序列号难以辨认时，用备注与收藏区分。</p><ul><li>· 备注仅存本机 localStorage</li><li>· 分组：常用 / 测试机</li><li>· 收藏置顶设备卡</li></ul></article>
+      </div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>授权状态机</h3><ol class="a-steps"><li><span><b>待连接</b>设备未插入或不在同一网络</span></li><li><span><b>待授权</b>手机弹出 RSA / 调试授权确认</span></li><li><span><b>已授权</b>可镜像、传文件、读取只读信息</span></li><li><span><b>可撤销</b>可在手机端撤销，也可在本机移除</span></li></ol></article>
+        <article class="a-card"><h3>mDNS 发现与厂商诊断</h3><table class="a-table"><thead><tr><th scope="col">设备</th><th scope="col">状态</th><th scope="col">提示</th></tr></thead><tbody><tr><td><b>平板</b></td><td><span class="a-pill ok">在线</span></td><td>局域网 ADB 可用</td></tr><tr><td><b>备用机</b></td><td><span class="a-pill warn">配对中</span></td><td>请在手机确认调试授权</td></tr><tr><td><b>小米设备</b></td><td><span class="a-pill">诊断</span></td><td>需额外开启「USB 安装」</td></tr></tbody></table></article>
+      </div>
+    </section>
+
+    <!-- 3 镜像与控制 -->
+    <section class="a-view" data-a-view="mirror" aria-label="镜像控制" hidden>
+      <div class="a-page-head"><div><h2>镜像与控制</h2><p>键鼠 / UHID 直输 · 画质预设 · 桌面模式按设备生效</p></div><div class="a-actions"><button class="a-btn" type="button" data-toast="原型演示：停止镜像">停止</button><button class="a-btn primary" type="button" data-toast="原型演示：开始镜像">开始镜像</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>实时画面 · <span id="a-mirror-device">小狸 · Redmi K40</span></h3><div class="a-phone-mini" aria-hidden="true"><i></i><span></span><span></span><span></span></div><p class="a-note a-center">延迟 38 ms · 1080 × 2400 · 60 fps</p></article>
+        <article class="a-card"><h3>会话参数</h3><div class="a-kv"><div><dt>画质预设</dt><dd><span class="a-pill">流畅</span> <span class="a-pill ok">均衡</span> <span class="a-pill">高清</span></dd></div><div><dt>自动旋转</dt><dd><span class="a-switch on"><i></i>已开启</span></dd></div><div><dt>桌面模式</dt><dd><span class="a-switch"><i></i>按设备关闭</span></dd></div><div><dt>摄像头源</dt><dd><span class="a-switch"><i></i>默认关闭</span></dd></div><div><dt>全局快捷键</dt><dd>⌘1 截图 · ⌘2 录像</dd></div></div></article>
+      </div>
+      <p class="a-notice">摄像头源必须逐会话显式开启，且画面上有可见提示；不提供默认开启的远程摄像头 / 麦克风监听。</p>
+    </section>
+
+    <!-- 4 截图 -->
+    <section class="a-view" data-a-view="shot" aria-label="截图" hidden>
+      <div class="a-page-head"><div><h2>截图</h2><p>保存到本机，可标注后复用；不上传</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：立即截图">立即截图</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>最近截图</h3><div class="a-thumbs"><i class="a-thumb">14:32</i><i class="a-thumb">11:07</i><i class="a-thumb">昨天</i><i class="a-thumb">昨天</i><i class="a-thumb">11-22</i><i class="a-thumb">11-21</i></div></article>
+        <article class="a-card"><h3>截图设置</h3><div class="a-kv"><div><dt>保存目录</dt><dd>/Users/…/MirrorDock/截图</dd></div><div><dt>命名规则</dt><dd>截图_yyyyMMdd_HHmm.png</dd></div><div><dt>标注工具</dt><dd>画笔 / 箭头 / 文字</dd></div><div><dt>快捷键</dt><dd>⌘1</dd></div></div><p class="a-note a-mt">取回路径可自定义；受保护内容仍遵守黑屏边界。</p></article>
+      </div>
+    </section>
+
+    <!-- 5 录像 -->
+    <section class="a-view" data-a-view="record" aria-label="录像" hidden>
+      <div class="a-page-head"><div><h2>录像</h2><p>Pro 功能 · 手动启停 · 不默认云录制</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：开始录像">● 开始录像</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>最近录像</h3><table class="a-table"><thead><tr><th scope="col">文件</th><th scope="col">设备</th><th scope="col">时长</th><th scope="col">大小</th></tr></thead><tbody><tr><td><b>recording_1124.mp4</b></td><td>小狸</td><td>04:12</td><td>86.7 MB</td></tr><tr><td><b>recording_1122.mp4</b></td><td>小狸</td><td>12:38</td><td>241 MB</td></tr></tbody></table></article>
+        <article class="a-card"><h3>录制策略</h3><ul><li>· 仅在点击后开始，状态栏常驻指示可随时停止</li><li>· 免费版仅提示升级，不静默录制</li><li>· 归档目录：MirrorDock/录像</li></ul><p class="a-note a-mt">定时 / 条件录制见「定时录制」页，依赖 NAS 常开机场景。</p></article>
+      </div>
+    </section>
+
+    <!-- 6 文件传输 -->
+    <section class="a-view" data-a-view="files" aria-label="文件传输" hidden>
+      <div class="a-page-head"><div><h2>文件传输</h2><p>本机 ↔ 手机双向传输 · 仅走 ADB 通道</p></div><div class="a-actions"><button class="a-btn" type="button" data-a-view="install">拖拽安装 APK</button><button class="a-btn primary" type="button" data-toast="原型演示：取回所选">取回所选</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>本机 · MirrorDock 目录</h3><ul><li>📁 2026-11-24</li><li>📁 APK</li><li>📄 截图_20261124_1432.png · 2.1 MB</li><li>📄 diagnostics.txt · 12 KB</li></ul></article>
+        <article class="a-card"><h3>手机 · Download</h3><ul><li>📦 AfterServiceApp-v0.3.0.apk · 18.4 MB</li><li>📄 日志截图_1123.png · 2.1 MB</li><li>📁 MirrorDock</li><li>🎬 recording_1122.mp4 · 86.7 MB</li></ul></article>
+      </div>
+      <article class="a-card"><h3>传输队列</h3><table class="a-table"><thead><tr><th scope="col">任务</th><th scope="col">方向</th><th scope="col">进度</th><th scope="col">状态</th></tr></thead><tbody><tr><td><b>DCIM/IMG_1124.jpg</b></td><td>→ 本机</td><td><span class="a-progress" style="--p:72%"><i></i></span></td><td>72%</td></tr><tr><td><b>AfterServiceApp.apk</b></td><td>→ 手机</td><td><span class="a-progress" style="--p:100%"><i></i></span></td><td><span class="a-pill ok">完成</span></td></tr></tbody></table></article>
+    </section>
+
+    <!-- 7 应用管理 -->
+    <section class="a-view" data-a-view="apps" aria-label="应用管理" hidden>
+      <div class="a-page-head"><div><h2>应用管理</h2><p>列表 / 搜索 / 按占用排序 / 导出清单 · 卸载逐次确认</p></div><div class="a-actions"><button class="a-btn" type="button" data-a-view="install">批量安装</button><button class="a-btn primary" type="button" data-toast="原型演示：导出 CSV">导出清单 CSV</button></div></div>
+      <article class="a-card"><table class="a-table"><thead><tr><th scope="col">应用</th><th scope="col">分区</th><th scope="col">占用</th><th scope="col">操作</th></tr></thead><tbody>
+        <tr><td><b>MirrorDock 伴侣</b><br>com.mirrordock.companion</td><td>用户</td><td>24.6 MB</td><td><span class="a-pill ok">已安装</span></td></tr>
+        <tr><td><b>微信</b><br>com.tencent.mm</td><td>用户</td><td>412 MB</td><td><button class="a-btn warn" type="button" data-toast="原型演示：需逐次确认">卸载</button></td></tr>
+        <tr><td><b>Chrome</b><br>com.android.chrome</td><td>用户</td><td>168 MB</td><td><button class="a-btn warn" type="button" data-toast="原型演示：需逐次确认">卸载</button></td></tr>
+        <tr><td><b>系统桌面</b><br>com.android.launcher</td><td>系统</td><td>—</td><td><span class="a-pill off">不可卸载</span></td></tr>
+      </tbody></table></article>
+      <p class="a-notice warn">卸载第三方应用必须逐次确认，且只在用户明确点击后执行；不预装、不静默、不批量无确认卸载。</p>
+    </section>
+
+    <!-- 8 相册 -->
+    <section class="a-view" data-a-view="album" aria-label="相册" hidden>
+      <div class="a-page-head"><div><h2>相册</h2><p>缩略图流 · 按日期分组 · 批量取回</p></div><div class="a-actions"><button class="a-btn" type="button" data-toast="原型演示：筛选图片">图片</button><button class="a-btn" type="button" data-toast="原型演示：筛选视频">视频</button><button class="a-btn primary" type="button" data-toast="原型演示：批量取回">批量取回</button></div></div>
+      <p class="a-group-label">2026-11-24</p><div class="a-thumbs"><i class="a-thumb">14:02</i><i class="a-thumb">11:37</i><i class="a-thumb">09:15</i><i class="a-thumb">08:44</i></div>
+      <p class="a-group-label">2026-11-23</p><div class="a-thumbs"><i class="a-thumb">20:15</i><i class="a-thumb">18:04</i><i class="a-thumb">16:22</i><i class="a-thumb">12:09</i></div>
+      <p class="a-note">缩略图先取小尺寸；受保护图片遵守黑屏边界，取回后按日期自动建文件夹。</p>
+    </section>
+
+    <!-- 9 通知中心 -->
+    <section class="a-view" data-a-view="notify" aria-label="通知中心" hidden>
+      <div class="a-page-head"><div><h2>通知中心</h2><p>实时镜像 · 按应用白名单筛选 · 点击跳转对应会话</p></div><div class="a-actions"><button class="a-btn" type="button" data-toast="原型演示：清空已读">全部已读</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>实时通知</h3><ul><li><span class="a-pill">微信</span> 张工：日志我看到了 <time>14:32</time></li><li><span class="a-pill warn">系统更新</span> 安全补丁可下载 <time>13:05</time></li><li><span class="a-pill ok">MirrorDock</span> APK 安装完成 <time>10:24</time></li></ul></article>
+        <article class="a-card"><h3>隐私设置</h3><div class="a-kv"><div><dt>应用白名单</dt><dd>仅微信 / 系统更新</dd></div><div><dt>本机持久化</dt><dd><span class="a-switch"><i></i>默认关闭</span></dd></div><div><dt>过期清理</dt><dd>30 天（若开启持久化）</dd></div></div><p class="a-note a-mt">通知正文默认只在内存保留 50 条；持久化需单独评审后开启。</p></article>
+      </div>
+    </section>
+
+    <!-- 10 设备信息 -->
+    <section class="a-view" data-a-view="info" aria-label="设备信息" hidden>
+      <div class="a-page-head"><div><h2>设备信息</h2><p>只读诊断摘要 · 用于客服与兼容性反馈</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：复制诊断摘要">复制诊断摘要</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>硬件与系统</h3><dl class="a-kv"><div><dt>设备备注</dt><dd>小狸</dd></div><div><dt>型号</dt><dd>Redmi K40 · M2104K10AC</dd></div><div><dt>系统</dt><dd>Android 13 · MIUI 14</dd></div><div><dt>分辨率</dt><dd>1080 × 2400</dd></div><div><dt>存储</dt><dd>64 / 128 GB</dd></div><div><dt>电量</dt><dd>78%</dd></div></dl></article>
+        <article class="a-card"><h3>会话与兼容性</h3><ul><li>· 最近镜像：2 小时前</li><li>· 平均延迟：38 ms</li><li>· 已用时长：无残留会话</li><li>· 上报兼容性问题需用户显式确认</li></ul><p class="a-note a-mt">所有命令均为只读 dumpsys / getprop，不修改设备设置。</p></article>
+      </div>
+    </section>
+
+    <!-- 11 批量安装 -->
+    <section class="a-view" data-a-view="install" aria-label="批量安装" hidden>
+      <div class="a-page-head"><div><h2>批量安装 APK</h2><p>多包顺序安装 · 逐个回执 · 每包仍需手机确认</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：选择 APK">选择 APK</button></div></div>
+      <div class="a-drop">把 APK 拖到这里加入安装队列<br>拖拽安装沿用现有 X10-63 逻辑，扩展为队列后逐个回执</div>
+      <article class="a-card"><h3>安装队列</h3><table class="a-table"><thead><tr><th scope="col">文件</th><th scope="col">顺序</th><th scope="col">结果</th></tr></thead><tbody><tr><td><b>AfterServiceApp-v0.3.0.apk</b></td><td>1 / 3</td><td><span class="a-pill ok">已安装</span></td></tr><tr><td><b>companion-debug.apk</b></td><td>2 / 3</td><td><span class="a-pill warn">等待手机确认</span></td></tr><tr><td><b>test-tool.apk</b></td><td>3 / 3</td><td><span class="a-pill off">排队中</span></td></tr></tbody></table></article>
+    </section>
+
+    <!-- 12 投屏演示 -->
+    <section class="a-view" data-a-view="present" aria-label="投屏演示" hidden>
+      <div class="a-page-head"><div><h2>投屏演示模式</h2><p>镜像画面叠加激光笔 / 画笔批注 · 适合教学与会议</p></div><div class="a-actions"><button class="a-btn" type="button" data-toast="原型演示：清空批注">清空批注</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>画面批注示意</h3><div class="a-phone-mini" aria-hidden="true"><i></i><span></span><span></span><span></span></div><p class="a-note a-center">批注层浮在镜像画面上，不写入手机</p></article>
+        <article class="a-card"><h3>批注工具</h3><ul><li>· 激光笔（临时高亮，抬手消失）</li><li>· 画笔 / 箭头 / 文字</li><li>· 批注可一键清空，不随录像保存</li></ul><p class="a-note a-mt">纯前端 overlay，不改视频管线，低风险。</p></article>
+      </div>
+    </section>
+
+    <!-- 13 游戏按键映射 -->
+    <section class="a-view" data-a-view="keymap" aria-label="按键映射" hidden>
+      <div class="a-page-head"><div><h2>游戏按键映射</h2><p>键鼠映射为手机触控点 · 对标 QtScrcpy</p></div><div class="a-actions"><button class="a-btn" type="button" data-toast="原型演示：新建映射">＋ 新建映射</button></div></div>
+      <article class="a-card"><table class="a-table"><thead><tr><th scope="col">键位</th><th scope="col">映射</th><th scope="col">游戏</th><th scope="col">状态</th></tr></thead><tbody><tr><td><b>W / A / S / D</b></td><td>方向轮盘</td><td>示例游戏 A</td><td><span class="a-switch"><i></i>未启用</span></td></tr><tr><td><b>鼠标左键</b></td><td>点击射击</td><td>示例游戏 A</td><td><span class="a-switch"><i></i>未启用</span></td></tr></tbody></table></article>
+      <p class="a-notice warn">需先评估 scrcpy 4.1 --mouse-bind 的 vendored 方案可行性；默认不启用，避免误触与无人值守风险。</p>
+    </section>
+
+    <!-- 14 定时录制 -->
+    <section class="a-view" data-a-view="schedule" aria-label="定时录制" hidden>
+      <div class="a-page-head"><div><h2>定时 / 条件录制</h2><p>按时间或设备状态自动开始 / 结束 · 配合 NAS 常开机</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：新建规则">＋ 新建规则</button></div></div>
+      <article class="a-card"><table class="a-table"><thead><tr><th scope="col">规则</th><th scope="col">条件</th><th scope="col">动作</th><th scope="col">状态</th></tr></thead><tbody><tr><td><b>夜间归档</b></td><td>每天 23:00–02:00</td><td>开始录像 → NAS 归档</td><td><span class="a-switch on"><i></i>已开启</span></td></tr><tr><td><b>充电时录制</b></td><td>设备电量 &gt; 80%</td><td>开始录像</td><td><span class="a-switch"><i></i>未开启</span></td></tr></tbody></table></article>
+      <p class="a-notice">归档策略复用 NAS 版 headless 录制（X10-114），不引入云端存储。</p>
+    </section>
+
+    <!-- 15 操作回放 -->
+    <section class="a-view" data-a-view="replay" aria-label="操作回放" hidden>
+      <div class="a-page-head"><div><h2>操作回放与脚本</h2><p>记录键鼠操作序列并回放 · 用于重复测试与演示</p></div><div class="a-actions"><button class="a-btn" type="button" disabled>回放（默认禁用）</button></div></div>
+      <article class="a-card"><h3>已记录序列</h3><ul><li>· 2026-11-24 · 小狸 · 12 步 · 未回放</li><li>· 2026-11-22 · 平板 · 8 步 · 未回放</li></ul></article>
+      <p class="a-notice warn">红线复核：默认不启用、逐次确认；不提供无人值守通用控制。若评估触及红线，本功能不落地。</p>
+    </section>
+
+    <!-- 16 多端 -->
+    <section class="a-view" data-a-view="multi" aria-label="多端" hidden>
+      <div class="a-page-head"><div><h2>多端协同</h2><p>桌面端 / 安卓伴侣 App / NAS Web · 同一套本地优先原则</p></div></div>
+      <div class="a-grid3">
+        <article class="a-card"><h3>桌面客户端</h3><p class="a-note">四平台 Tauri 应用，本机直连、托盘 / 菜单栏、开机自启、自动更新。</p><p><span class="a-pill ok">当前</span></p></article>
+        <article class="a-card"><h3>安卓伴侣 App</h3><p class="a-note">配对 / 传输 / 通知 / 崩溃取证；APK 经 CI 签名打包。</p><p><span class="a-pill ok">已安装 2 台</span></p></article>
+        <article class="a-card"><h3>NAS 版 Web</h3><p class="a-note">Web 实时镜像 / 录制归档 / 文件 / 鉴权；USB 插 NAS 时可用。</p><p><span class="a-pill">远程访问需 FN Connect</span></p></article>
+      </div>
+      <article class="a-card"><h3>同步状态</h3><dl class="a-kv"><div><dt>设备列表</dt><dd>3 台 · 本机为主</dd></div><div><dt>配对凭据</dt><dd>仅存本机，不上传</dd></div></dl></article>
+    </section>
+
+    <!-- 17 设置 -->
+    <section class="a-view" data-a-view="settings" aria-label="设置" hidden>
+      <div class="a-page-head"><div><h2>设置</h2><p>本地优先 · 所有开关可见可撤销</p></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>通用</h3><div class="a-kv"><div><dt>开机自启</dt><dd><span class="a-switch on"><i></i>已开启</span></dd></div><div><dt>隐藏 Dock 图标</dt><dd><span class="a-switch"><i></i>未开启</span></dd></div><div><dt>白屏自愈</dt><dd><span class="a-switch on"><i></i>已开启</span></dd></div><div><dt>托盘 / 菜单栏</dt><dd>显示设备状态</dd></div></div></article>
+        <article class="a-card"><h3>画质与会话</h3><div class="a-kv"><div><dt>默认画质</dt><dd>均衡</dd></div><div><dt>断线重连</dt><dd><span class="a-switch on"><i></i>已开启</span></dd></div><div><dt>自动旋转</dt><dd><span class="a-switch on"><i></i>已开启</span></dd></div></div></article>
+        <article class="a-card"><h3>传输与存储</h3><div class="a-kv"><div><dt>接收目录</dt><dd>~/MirrorDock</dd></div><div><dt>截图目录</dt><dd>~/MirrorDock/截图</dd></div><div><dt>录像目录</dt><dd>~/MirrorDock/录像</dd></div></div></article>
+        <article class="a-card"><h3>更新与安全</h3><div class="a-kv"><div><dt>自动更新</dt><dd><span class="a-switch on"><i></i>已开启</span></dd></div><div><dt>当前版本</dt><dd>v0.4.27-beta</dd></div><div><dt>签名 / SBOM</dt><dd>四平台签名齐全</dd></div></div></article>
+        <article class="a-card"><h3>隐私</h3><p class="a-note">无账号、无云端中继、无默认遥测。通知正文默认不落盘；卸载与安装均需显式确认。</p></article>
+      </div>
+    </section>
+
+    <!-- 18 帮助中心 -->
+    <section class="a-view" data-a-view="help" aria-label="帮助中心" hidden>
+      <div class="a-page-head"><div><h2>帮助中心</h2><p>12 篇内置文章 · 默认折叠，点击标题展开（X10-125）</p></div></div>
+      <div class="a-search a-search-narrow"><svg class="icon sm" aria-hidden="true"><use href="#i-search"/></svg><span>搜索帮助文章</span></div>
+      <div class="a-details">
+        <details><summary>连接失败 / 设备不在线怎么办</summary><p>检查 USB 调试、数据线与手机授权弹窗；无线需同一局域网并确认 ADB 授权。</p></details>
+        <details><summary>无线 ADB 如何配对</summary><p>同网段下用 mDNS 自动发现，或输入配对码 / 扫码完成一次性配对。</p></details>
+        <details><summary>镜像黑屏或 early eof</summary><p>先确认 adb 正常；抓 adb logcat 定位设备端 scrcpy-server 退出原因。</p></details>
+        <details><summary>手机发来的文件看不到</summary><p>进入文件传输页会自动加载设备目录；读取失败会置空并提示，不伪装成「没有文件」。</p></details>
+        <details><summary>如何拖拽安装 APK</summary><p>把 APK 拖到应用页或批量安装页；每包仍需在手机上确认。</p></details>
+        <details><summary>录像与 Pro 权益</summary><p>录像为 Pro 功能，手动启停；免费版不会静默录制。</p></details>
+        <details><summary>通知镜像与隐私</summary><p>通知默认只在内存保留；持久化默认关闭，开启后 30 天过期清理。</p></details>
+        <details><summary>多设备如何切换</summary><p>设备中心点选设备卡即可切换当前设备；镜像页用会话标签管理多个会话。</p></details>
+        <details><summary>桌面模式按设备设置</summary><p>桌面模式是设备级配置，切换设备不会串用设置。</p></details>
+        <details><summary>安卓伴侣 App 怎么装</summary><p>伴侣 APK 走 CI 签名打包，可在多端页查看安装状态。</p></details>
+        <details><summary>NAS 版如何远程访问</summary><p>NAS Web 面板可远程访问；FN Connect 仅代理管理面板 443，不提供端口映射。</p></details>
+        <details><summary>开机自启白屏怎么处理</summary><p>检查 LaunchAgent 是否指向正式安装版；v0.4.27 已加入自愈逻辑。</p></details>
+      </div>
+    </section>
+
+    <!-- 19 Pro / 激活 -->
+    <section class="a-view" data-a-view="pro" aria-label="Pro 与激活" hidden>
+      <div class="a-page-head"><div><h2>免费 / Pro 与激活</h2><p>离线激活 · 三渠道分发 · 不引入账号体系</p></div><div class="a-actions"><button class="a-btn primary" type="button" data-toast="原型演示：输入激活码">输入激活码</button></div></div>
+      <div class="a-grid2">
+        <article class="a-card"><h3>功能对比</h3><table class="a-table"><thead><tr><th scope="col">能力</th><th scope="col">免费</th><th scope="col">Pro</th></tr></thead><tbody><tr><td><b>镜像 / 截图 / 文件</b></td><td><span class="a-pill ok">支持</span></td><td><span class="a-pill ok">支持</span></td></tr><tr><td><b>录像</b></td><td><span class="a-pill off">提示升级</span></td><td><span class="a-pill ok">支持</span></td></tr><tr><td><b>批量安装 / 定时录制</b></td><td><span class="a-pill off">—</span></td><td><span class="a-pill ok">支持</span></td></tr></tbody></table></article>
+        <article class="a-card"><h3>激活与渠道</h3><ul><li>· 离线激活码，无需登录</li><li>· 官网 / GitHub Release / 应用内更新三渠道</li><li>· 四平台签名与 SBOM 随包提供</li></ul><p class="a-note a-mt">无账号、无云中继；激活状态仅存本机。</p></article>
+      </div>
+    </section>
+  </div>
+</section>
+
+<!-- ==================== B ==================== -->
+<section class="panel" id="tpl-b" role="tabpanel" aria-labelledby="tab-b">
+  <div class="panel-note"><b>B · 四栏工作台</b><span>布局：图标导航栏 + 上下文列表 + 内容区 + 设备详情</span><span>最强场景：装应用 / 翻文件 / 看相册 / 查设备</span></div>
+  <div class="stage-b">
+    <header class="b-top">
+      <div class="b-brand"><span class="b-mark">M</span>MirrorDock</div>
+      <span class="b-crumb"><span id="b-crumb-device">小狸</span> / <b id="b-crumb-text">设备中心</b></span>
+      <div class="b-right"><span class="b-key">⌘ K 快速跳转</span><span class="b-key">⌘ 1–5 切换视图</span><svg class="icon sm" aria-hidden="true"><use href="#i-bell"/></svg></div>
+    </header>
+
+    <nav class="b-rail" aria-label="工作区导航">
+      <button type="button" data-b-view="home" aria-current="page" title="设备中心"><svg class="icon lg" aria-hidden="true"><use href="#i-apps"/></svg>设备</button>
+      <button type="button" data-b-view="connect" title="连接授权"><svg class="icon lg" aria-hidden="true"><use href="#i-rotate"/></svg>连接</button>
+      <button type="button" data-b-view="info" title="设备信息"><svg class="icon lg" aria-hidden="true"><use href="#i-info"/></svg>信息</button>
+      <button type="button" data-b-view="multi" title="多端"><svg class="icon lg" aria-hidden="true"><use href="#i-apps"/></svg>多端</button>
+      <span class="b-sep" aria-hidden="true"></span>
+      <button type="button" data-b-view="mirror" title="镜像控制"><svg class="icon lg" aria-hidden="true"><use href="#i-mirror"/></svg>镜像</button>
+      <button type="button" data-b-view="present" title="投屏演示"><svg class="icon lg" aria-hidden="true"><use href="#i-mirror"/></svg>投屏</button>
+      <button type="button" data-b-view="keymap" title="按键映射"><svg class="icon lg" aria-hidden="true"><use href="#i-set"/></svg>键位</button>
+      <button type="button" data-b-view="schedule" title="定时录制"><svg class="icon lg" aria-hidden="true"><use href="#i-clock"/></svg>定时</button>
+      <button type="button" data-b-view="replay" title="操作回放"><svg class="icon lg" aria-hidden="true"><use href="#i-rotate"/></svg>回放</button>
+      <span class="b-sep" aria-hidden="true"></span>
+      <button type="button" data-b-view="files" title="文件传输"><svg class="icon lg" aria-hidden="true"><use href="#i-folder"/></svg>文件</button>
+      <button type="button" data-b-view="shot" title="截图"><svg class="icon lg" aria-hidden="true"><use href="#i-camera"/></svg>截图</button>
+      <button type="button" data-b-view="record" title="录像"><svg class="icon lg" aria-hidden="true"><use href="#i-camera"/></svg>录像</button>
+      <button type="button" data-b-view="album" title="相册"><svg class="icon lg" aria-hidden="true"><use href="#i-image"/></svg>相册</button>
+      <button type="button" data-b-view="install" title="批量安装"><svg class="icon lg" aria-hidden="true"><use href="#i-download"/></svg>安装</button>
+      <button type="button" data-b-view="apps" title="应用管理"><svg class="icon lg" aria-hidden="true"><use href="#i-apps"/></svg>应用</button>
+      <span class="b-sep" aria-hidden="true"></span>
+      <button type="button" data-b-view="notify" title="通知中心"><svg class="icon lg" aria-hidden="true"><use href="#i-bell"/></svg>通知</button>
+      <button type="button" data-b-view="settings" title="设置"><svg class="icon lg" aria-hidden="true"><use href="#i-set"/></svg>设置</button>
+      <button type="button" data-b-view="help" title="帮助中心"><svg class="icon lg" aria-hidden="true"><use href="#i-info"/></svg>帮助</button>
+      <button type="button" data-b-view="pro" title="Pro / 激活"><svg class="icon lg" aria-hidden="true"><use href="#i-shield"/></svg>Pro</button>
+    </nav>
+
+    <aside class="b-list" aria-label="上下文列表">
+      <div class="b-context" data-b-context="home"><h3>我的设备</h3><ul class="b-tree"><li><button type="button" data-b-pick="小狸 · Redmi K40" aria-current="page">● 小狸 <span class="b-dim">USB</span></button></li><li><button type="button" data-b-pick="平板 · 小米平板 5">● 平板 <span class="b-dim">无线</span></button></li><li><button type="button" data-b-pick="备用机 · Pixel 6">○ 备用机 <span class="b-dim">离线</span></button></li></ul><h3>入口</h3><ul class="b-tree"><li><button type="button" data-b-view="connect">＋ 添加设备 <span class="b-dim">→</span></button></li><li><button type="button" data-b-view="multi">设备分组 <span class="b-dim">3</span></button></li></ul></div>
+      <div class="b-context" data-b-context="connect" hidden><h3>连接通道</h3><ul class="b-tree"><li><button type="button" aria-current="page">USB 直连 <span class="b-dim">已授权</span></button></li><li><button type="button">无线 ADB <span class="b-dim">同局域网</span></button></li><li><button type="button">扫码配对 <span class="b-dim">Pro</span></button></li></ul><h3>授权</h3><ul class="b-tree"><li><button type="button">已授权设备 <span class="b-dim">2</span></button></li><li><button type="button">撤销记录 <span class="b-dim">1</span></button></li></ul></div>
+      <div class="b-context" data-b-context="mirror" hidden><h3>镜像会话</h3><ul class="b-tree"><li><button type="button" aria-current="page">小狸 · 1080×2400 <span class="b-dim">38ms</span></button></li><li><button type="button">平板 · 1600×2560 <span class="b-dim">待机</span></button></li></ul><h3>画质</h3><ul class="b-tree"><li><button type="button">高清 <span class="b-dim">默认</span></button></li><li><button type="button">流畅</button></li><li><button type="button">演示</button></li></ul></div>
+      <div class="b-context" data-b-context="present" hidden><h3>演示文稿</h3><ul class="b-tree"><li><button type="button" aria-current="page">产品评审 11-24 <span class="b-dim">12 页</span></button></li><li><button type="button">客户演示稿 <span class="b-dim">8 页</span></button></li></ul><h3>白板</h3><ul class="b-tree"><li><button type="button">标注图层 <span class="b-dim">3</span></button></li></ul></div>
+      <div class="b-context" data-b-context="keymap" hidden><h3>键位方案</h3><ul class="b-tree"><li><button type="button" aria-current="page">默认桌面 <span class="b-dim">12 条</span></button></li><li><button type="button">游戏 · 射击 <span class="b-dim">18 条</span></button></li><li><button type="button">自定义 <span class="b-dim">4 条</span></button></li></ul></div>
+      <div class="b-context" data-b-context="schedule" hidden><h3>计划任务</h3><ul class="b-tree"><li><button type="button" aria-current="page">早间录屏 <span class="b-dim">启用</span></button></li><li><button type="button">夜间备份 <span class="b-dim">暂停</span></button></li></ul></div>
+      <div class="b-context" data-b-context="replay" hidden><h3>回放库</h3><ul class="b-tree"><li><button type="button" aria-current="page">11-24 操作录制 <span class="b-dim">4 段</span></button></li><li><button type="button">11-22 回归录制 <span class="b-dim">2 段</span></button></li></ul></div>
+      <div class="b-context" data-b-context="files" hidden><h3>快捷位置</h3><ul class="b-tree"><li><button type="button" aria-current="page">Download <span class="b-dim">28</span></button></li><li><button type="button">DCIM/Camera <span class="b-dim">412</span></button></li><li><button type="button">Documents <span class="b-dim">16</span></button></li><li><button type="button">MirrorDock <span class="b-dim">9</span></button></li></ul><h3>队列</h3><ul class="b-tree"><li><button type="button">进行中 <span class="b-dim">1</span></button></li></ul></div>
+      <div class="b-context" data-b-context="shot" hidden><h3>截图集</h3><ul class="b-tree"><li><button type="button" aria-current="page">11-24 <span class="b-dim">6</span></button></li><li><button type="button">11-23 <span class="b-dim">9</span></button></li></ul></div>
+      <div class="b-context" data-b-context="record" hidden><h3>录像库</h3><ul class="b-tree"><li><button type="button" aria-current="page">本机录制 <span class="b-dim">7</span></button></li><li><button type="button">设备录制 <span class="b-dim">2</span></button></li></ul></div>
+      <div class="b-context" data-b-context="album" hidden><h3>相册</h3><ul class="b-tree"><li><button type="button" aria-current="page">DCIM/Camera <span class="b-dim">412</span></button></li><li><button type="button">Download <span class="b-dim">28</span></button></li><li><button type="button">已取回 <span class="b-dim">64</span></button></li></ul></div>
+      <div class="b-context" data-b-context="install" hidden><h3>安装包</h3><ul class="b-tree"><li><button type="button" aria-current="page">待安装 <span class="b-dim">3</span></button></li><li><button type="button">已安装 <span class="b-dim">18</span></button></li></ul></div>
+      <div class="b-context" data-b-context="apps" hidden><h3>应用分组</h3><ul class="b-tree"><li><button type="button" aria-current="page">用户应用 <span class="b-dim">63</span></button></li><li><button type="button">系统应用 <span class="b-dim">41</span></button></li><li><button type="button">可卸载 <span class="b-dim">52</span></button></li></ul></div>
+      <div class="b-context" data-b-context="notify" hidden><h3>通知筛选</h3><ul class="b-tree"><li><button type="button" aria-current="page">全部 <span class="b-dim">28</span></button></li><li><button type="button">未读 <span class="b-dim">2</span></button></li><li><button type="button">系统 <span class="b-dim">6</span></button></li></ul><h3>开关</h3><ul class="b-tree"><li><button type="button">持久化正文 <span class="b-dim">关</span></button></li></ul></div>
+      <div class="b-context" data-b-context="info" hidden><h3>设备</h3><ul class="b-tree"><li><button type="button" aria-current="page">小狸 <span class="b-dim">在线</span></button></li><li><button type="button">平板 <span class="b-dim">待授权</span></button></li></ul><h3>诊断</h3><ul class="b-tree"><li><button type="button">导出报告 <span class="b-dim">→</span></button></li></ul></div>
+      <div class="b-context" data-b-context="multi" hidden><h3>设备组</h3><ul class="b-tree"><li><button type="button" aria-current="page">我的设备 <span class="b-dim">3</span></button></li><li><button type="button">演示机组 <span class="b-dim">4</span></button></li></ul></div>
+      <div class="b-context" data-b-context="settings" hidden><h3>设置分组</h3><ul class="b-tree"><li><button type="button" aria-current="page">通用</button></li><li><button type="button">镜像</button></li><li><button type="button">传输</button></li><li><button type="button">隐私</button></li></ul></div>
+      <div class="b-context" data-b-context="help" hidden><h3>帮助分类</h3><ul class="b-tree"><li><button type="button" aria-current="page">快速上手 <span class="b-dim">4</span></button></li><li><button type="button">连接与授权 <span class="b-dim">3</span></button></li><li><button type="button">传输与安装 <span class="b-dim">3</span></button></li><li><button type="button">故障排查 <span class="b-dim">2</span></button></li></ul></div>
+      <div class="b-context" data-b-context="pro" hidden><h3>授权</h3><ul class="b-tree"><li><button type="button" aria-current="page">当前状态 <span class="b-dim">免费</span></button></li><li><button type="button">激活码 <span class="b-dim">→</span></button></li></ul></div>
+    </aside>
+
+    <main class="b-main">
+      <div class="b-main__bar"><strong id="b-view-title">设备中心</strong><span id="b-view-path">小狸 · 全部设备 3 台</span><button type="button" id="b-main-action" data-toast="原型演示：添加设备">＋ 添加设备</button></div>
+
+      <div class="b-view" data-view="home">
+        <div class="b-kv">
+          <div class="b-tile"><b>小狸 · Redmi K40</b><span>USB 直连 · 78% · 刚刚镜像过<div class="b-bar" style="--p:78%"><i></i></div></span></div>
+          <div class="b-tile"><b>平板 · 小米平板 5</b><span>无线 ADB · 52% · 2 小时前<div class="b-bar" style="--p:52%"><i></i></div></span></div>
+          <div class="b-tile"><b>备用机 · Pixel 6</b><span>离线 · 31% · 3 天前<div class="b-bar" style="--p:31%"><i></i></div></span></div>
+        </div>
+        <div class="b-panel"><h3>最近任务</h3><table class="b-table"><tbody><tr><td>AfterServiceApp-v0.3.0.apk 已安装到小狸</td><td class="b-num">10:24</td></tr><tr><td>截图_20261124.png 已保存到 MirrorDock 目录</td><td class="b-num">09:58</td></tr><tr><td>DCIM/2026-11 · 12 张照片取回中</td><td class="b-num">09:31</td></tr></tbody></table></div>
+        <p class="b-note">安全边界：无需账号、数据不出本机；镜像、传输、卸载都需设备显式授权。</p>
+      </div>
+
+      <div class="b-view" data-view="connect" hidden>
+        <div class="b-panel"><h3>连接通道</h3><table class="b-table"><thead><tr><th>通道</th><th>状态</th><th>适用</th><th>操作</th></tr></thead><tbody><tr><td>USB 直连</td><td>已授权 · 小狸</td><td>稳定镜像 / 传输</td><td><button type="button" data-toast="原型演示：断开 USB">断开</button></td></tr><tr><td>无线 ADB</td><td>待重新授权 · 平板</td><td>同局域网</td><td><button type="button" data-toast="原型演示：重新授权">重新授权</button></td></tr><tr><td>扫码配对</td><td>未启用 · Pro</td><td>无同网环境</td><td><button type="button" data-b-view="pro">查看 Pro</button></td></tr></tbody></table></div>
+        <div class="b-panel"><h3>首次连接步骤</h3><div class="b-steps"><div>开启手机开发者选项与 USB 调试。</div><div>用数据线连接，手机上点「始终允许」。</div><div>设备卡显示绿色圆点后即可镜像。</div></div></div>
+        <p class="b-note">授权可随时在手机上撤销；撤销后客户端立即显示离线，不保留静默通道。</p>
+      </div>
+
+      <div class="b-view" data-view="mirror" hidden>
+        <div class="b-panel"><h3>实时画面 · <span id="b-mirror-device">小狸 · Redmi K40</span></h3><div class="b-phone-xs" aria-hidden="true"><i></i><span></span><span></span><span></span></div><p>延迟 38 ms · 1080 × 2400 · 60 fps · H.264</p></div>
+        <div class="b-kv"><div class="b-tile"><b>键鼠直输</b><span>UHID，无需在手机装输入法</span></div><div class="b-tile"><b>画质预设</b><span>高清 · 流畅 · 演示三档</span></div><div class="b-tile"><b>桌面模式</b><span>按设备记忆，插拔后自动恢复</span></div></div>
+        <div class="b-panel"><h3>会话控制</h3><div class="b-actions"><button type="button" class="primary" data-toast="原型演示：开始镜像">开始镜像</button><button type="button" data-toast="原型演示：暂停">暂停</button><button type="button" data-toast="原型演示：旋转">旋转</button><button type="button" data-toast="原型演示：停止镜像">停止</button></div></div>
+      </div>
+
+      <div class="b-view" data-view="present" hidden>
+        <div class="b-panel"><h3>当前演示文稿</h3><table class="b-table"><tbody><tr><td>产品评审 11-24</td><td class="b-num">12 页</td><td>进行中</td></tr><tr><td>客户演示稿</td><td class="b-num">8 页</td><td>已保存</td></tr></tbody></table></div>
+        <div class="b-panel"><h3>演示工具</h3><div class="b-actions"><button type="button" class="primary" data-toast="原型演示：开始放映">开始放映</button><button type="button" data-toast="原型演示：激光笔">激光笔</button><button type="button" data-toast="原型演示：白板标注">白板标注</button><button type="button" data-toast="原型演示：翻页">下一页</button></div></div>
+        <p class="b-note">投屏画面只在本机渲染；标注图层可导出为 PNG，不写入手机相册。</p>
+      </div>
+
+      <div class="b-view" data-view="keymap" hidden>
+        <div class="b-panel"><h3>键位方案 · 默认桌面</h3><table class="b-table"><thead><tr><th>手机操作</th><th>键盘</th><th>方案</th></tr></thead><tbody><tr><td>返回</td><td>Esc</td><td>全局</td></tr><tr><td>主页</td><td>H</td><td>全局</td></tr><tr><td>多任务</td><td>Tab</td><td>全局</td></tr><tr><td>技能 1</td><td>Q</td><td>游戏 · 射击</td></tr></tbody></table></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：新建方案">＋ 新建方案</button><button type="button" data-toast="原型演示：导入配置">导入配置</button><button type="button" data-toast="原型演示：导出配置">导出配置</button></div>
+      </div>
+
+      <div class="b-view" data-view="schedule" hidden>
+        <div class="b-panel"><h3>计划任务</h3><table class="b-table"><thead><tr><th>任务</th><th>触发</th><th>动作</th><th>状态</th></tr></thead><tbody><tr><td>早间录屏</td><td>每天 08:30</td><td>录制 10 分钟</td><td>启用</td></tr><tr><td>夜间备份</td><td>每天 23:00</td><td>取回 DCIM</td><td>暂停</td></tr></tbody></table></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：新建计划">＋ 新建计划</button><button type="button" data-toast="原型演示：查看执行日志">执行日志</button></div>
+        <p class="b-note">定时任务需设备保持在线；手机端仍会弹出镜像授权确认，不会后台静默拉起。</p>
+      </div>
+
+      <div class="b-view" data-view="replay" hidden>
+        <div class="b-panel"><h3>回放库</h3><table class="b-table"><thead><tr><th>录制</th><th>设备</th><th>时长</th><th>操作</th></tr></thead><tbody><tr><td>11-24 安装流程</td><td>小狸</td><td>01:42</td><td><button type="button" data-toast="原型演示：播放回放">播放</button></td></tr><tr><td>11-22 回归录制</td><td>平板</td><td>03:18</td><td><button type="button" data-toast="原型演示：播放回放">播放</button></td></tr></tbody></table></div>
+        <p class="b-note">默认禁用操作回放；开启需二次确认，回放文件只保存在本机，不上传。</p>
+      </div>
+
+      <div class="b-view" data-view="files">
+        <table class="b-table"><thead><tr><th scope="col">名称</th><th scope="col" class="b-num">大小</th><th scope="col" class="b-num">修改日期</th><th scope="col">状态</th></tr></thead><tbody><tr><td><span class="b-name">AfterServiceApp-v0.3.0.apk</span><br><span class="b-sub">application/vnd.android.package-archive</span></td><td class="b-num">18.4 MB</td><td class="b-num">11-24 10:20</td><td>可安装</td></tr><tr><td><span class="b-name">日志截图_1123.png</span></td><td class="b-num">2.1 MB</td><td class="b-num">11-23 18:04</td><td>可取回</td></tr><tr><td><span class="b-name">MirrorDock</span><br><span class="b-sub">文件夹 · 9 项</span></td><td class="b-num">—</td><td class="b-num">11-22 09:12</td><td>—</td></tr><tr><td><span class="b-name">recording_1122.mp4</span></td><td class="b-num">86.7 MB</td><td class="b-num">11-22 21:36</td><td>可取回</td></tr></tbody></table>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：取回到电脑">取回到电脑</button><button type="button" data-b-view="install">拖拽安装 APK</button><button type="button" data-toast="原型演示：新建文件夹">新建文件夹</button></div>
+        <p class="b-note">文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不伪装成「没有文件」。</p>
+      </div>
+
+      <div class="b-view" data-view="shot" hidden>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：立即截图">立即截图</button><button type="button" data-toast="原型演示：打开截图目录">打开目录</button></div>
+        <div class="b-grid"><i class="b-shot">11-24 14:12</i><i class="b-shot">11-24 11:37</i><i class="b-shot">11-23 20:15</i><i class="b-shot">11-23 18:04</i><i class="b-shot">11-22 09:12</i><i class="b-shot">11-21 16:48</i></div>
+        <p class="b-note">截图默认保存到本机 MirrorDock 目录，可标注后复用；不自动上传。</p>
+      </div>
+
+      <div class="b-view" data-view="record" hidden>
+        <div class="b-panel"><h3>录制参数</h3><table class="b-table"><tbody><tr><td>保存位置</td><td>本机 MirrorDock / Recordings</td></tr><tr><td>最高规格</td><td>1080 × 2400 · 60 fps</td></tr><tr><td>默认时长</td><td>不限制 · 手动停止</td></tr></tbody></table></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：开始录像">● 开始录像</button><button type="button" data-b-view="schedule">定时录制</button></div>
+        <p class="b-note">录像是 Pro 功能；不默认云录制，不读取手机本地录像文件。</p>
+      </div>
+
+      <div class="b-view" data-view="album" hidden>
+        <p class="b-hint">DCIM/Camera · 按日期分组 · 勾选后取回到电脑</p>
+        <div class="b-grid"><i class="b-shot">11-24 14:02</i><i class="b-shot">11-24 11:37</i><i class="b-shot">11-23 20:15</i><i class="b-shot">11-23 18:04</i><i class="b-shot">11-22 09:12</i><i class="b-shot">11-21 16:48</i><i class="b-shot">11-20 08:21</i><i class="b-shot">11-19 19:05</i></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：取回所选">取回所选</button><button type="button" data-toast="原型演示：按日期建文件夹">按日期建文件夹</button></div>
+      </div>
+
+      <div class="b-view" data-view="install" hidden>
+        <div class="b-panel"><h3>安装队列</h3><table class="b-table"><thead><tr><th>安装包</th><th>目标设备</th><th>状态</th><th>操作</th></tr></thead><tbody><tr><td>AfterServiceApp-v0.3.0.apk</td><td>小狸</td><td>已完成 10:24</td><td><button type="button" data-toast="原型演示：查看结果">结果</button></td></tr><tr><td>companion-v0.4.27.apk</td><td>平板</td><td>等待设备确认</td><td><button type="button" data-toast="原型演示：取消">取消</button></td></tr></tbody></table></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：选择 APK">＋ 选择 APK</button><button type="button" data-toast="原型演示：批量安装">批量安装</button></div>
+        <p class="b-note">支持拖拽 APK 到窗口安装；每台设备都需在手机上逐次确认，不做静默安装。</p>
+      </div>
+
+      <div class="b-view" data-view="apps" hidden>
+        <table class="b-table"><thead><tr><th scope="col">应用</th><th scope="col">分区</th><th scope="col" class="b-num">占用</th><th scope="col">操作</th></tr></thead><tbody><tr><td><span class="b-name">com.mirrordock.companion</span><br><span class="b-sub">MirrorDock 伴侣</span></td><td>用户</td><td class="b-num">24.6 MB</td><td><button type="button" data-toast="原型演示：导出清单">导出</button></td></tr><tr><td><span class="b-name">com.tencent.mm</span><br><span class="b-sub">微信</span></td><td>用户</td><td class="b-num">412 MB</td><td><button type="button" data-toast="原型演示：需逐次确认">卸载</button></td></tr><tr><td><span class="b-name">com.android.chrome</span><br><span class="b-sub">Chrome</span></td><td>用户</td><td class="b-num">168 MB</td><td><button type="button" data-toast="原型演示：需逐次确认">卸载</button></td></tr></tbody></table>
+        <div class="b-actions"><button type="button" data-toast="原型演示：导出应用清单">导出清单</button><button type="button" data-b-view="install">安装 APK</button></div>
+        <p class="b-note">只读列出已安装应用；卸载需逐次设备端确认，不读取应用数据。</p>
+      </div>
+
+      <div class="b-view" data-view="notify" hidden>
+        <div class="b-notify"><article><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg><div><b>微信</b><p>张工：日志我看到了，晚点同步结论</p></div><time>14:32</time></article><article><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><div><b>系统更新</b><p>安全补丁可下载</p></div><time>13:05</time></article><article><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><div><b>MirrorDock</b><p>APK 安装完成</p></div><time>10:24</time></article></div>
+        <div class="b-actions"><button type="button" data-toast="原型演示：全部标为已读">全部标为已读</button><button type="button" data-toast="原型演示：刷新通知">刷新</button></div>
+        <p class="b-note">通知正文默认不持久化；开启持久化属于显式选择，可在设置里随时关闭。</p>
+      </div>
+
+      <div class="b-view" data-view="info" hidden>
+        <div class="b-panel"><h3>只读设备信息</h3><div class="b-card" style="margin:0"><dl><div><dt>型号</dt><dd>M2104K10AC</dd></div><div><dt>系统</dt><dd>Android 13</dd></div><div><dt>分辨率</dt><dd>1080 × 2400</dd></div><div><dt>存储</dt><dd>64 / 128 GB</dd></div><div><dt>电量</dt><dd>78%</dd></div></dl></div></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：复制诊断摘要">复制诊断摘要</button><button type="button" data-toast="原型演示：查看 adb 日志">查看 adb 日志</button></div>
+      </div>
+
+      <div class="b-view" data-view="multi" hidden>
+        <div class="b-panel"><h3>设备组</h3><table class="b-table"><thead><tr><th>组</th><th>设备</th><th>同步内容</th></tr></thead><tbody><tr><td>我的设备</td><td>小狸 / 平板 / 备用机</td><td>设置 · 设备分组</td></tr><tr><td>演示机组</td><td>4 台（2 在线）</td><td>投屏 · 安装队列</td></tr></tbody></table></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：新建设备组">＋ 新建组</button><button type="button" data-toast="原型演示：批量操作">批量操作</button></div>
+        <p class="b-note">多端同步只涉及本机配置，不经云端；设备间不互传文件。</p>
+      </div>
+
+      <div class="b-view" data-view="settings" hidden>
+        <div class="b-panel"><h3>通用与隐私</h3><table class="b-table"><tbody><tr><td>开机自启</td><td>开启</td><td>随系统登录</td></tr><tr><td>通知持久化</td><td>关闭</td><td>默认关</td></tr><tr><td>操作回放</td><td>关闭</td><td>需二次确认</td></tr><tr><td>更新检查</td><td>开启</td><td>仅校验签名包</td></tr></tbody></table></div>
+        <div class="b-actions"><button type="button" data-toast="原型演示：导出配置">导出配置</button><button type="button" data-toast="原型演示：导入配置">导入配置</button><button type="button" data-toast="原型演示：恢复默认">恢复默认</button></div>
+      </div>
+
+      <div class="b-view" data-view="help" hidden>
+        <div class="b-panel" style="padding:0"><details open><summary>如何连接第一台设备？</summary><p>开启 USB 调试并用数据线连接，手机上点「始终允许」后设备卡变绿即可。</p></details><details><summary>无线 ADB 总是掉线怎么办？</summary><p>优先使用 USB；无线通道依赖路由器多播与设备休眠策略，可在连接页重新授权。</p></details><details><summary>APK 拖拽安装安全吗？</summary><p>安装包只在本机解析，推送后仍需手机逐次确认，不做静默安装。</p></details><details><summary>开机自启后白屏？</summary><p>升级到 0.4.27 或更新版本，客户端会自动修复指向旧路径的自启项。</p></details></div>
+        <p class="b-note">更多文章可在 A 方案的帮助中心逐篇展开；这里保留工作台内的速查。</p>
+      </div>
+
+      <div class="b-view" data-view="pro" hidden>
+        <div class="b-kv"><div class="b-tile"><b>录像与定时录制</b><span>已包含在 Pro</span></div><div class="b-tile"><b>操作回放</b><span>默认禁用，可显式开启</span></div><div class="b-tile"><b>批量安装</b><span>多设备队列</span></div></div>
+        <div class="b-actions"><button type="button" class="primary" data-toast="原型演示：输入激活码">输入激活码</button><button type="button" data-toast="原型演示：查看权益">查看全部权益</button></div>
+        <p class="b-note">激活只在本机校验，不需要账号；未激活时核心镜像与传输保持免费可用。</p>
+      </div>
+    </main>
+
+    <aside class="b-info" aria-label="设备详情">
+      <h3>当前设备</h3>
+      <div class="b-card"><h4 id="b-current-device">小狸 · Redmi K40</h4><div class="b-health"><span class="b-ring" id="b-ring" aria-hidden="true"><b id="b-ring-num">78</b></span><p id="b-health-text">设备状态 78%<br>USB 直连 · 可镜像</p></div></div>
+      <div class="b-card"><h4>只读信息</h4><dl>
+        <div><dt>型号</dt><dd id="b-info-model">M2104K10AC</dd></div>
+        <div><dt>系统</dt><dd id="b-info-os">Android 13</dd></div>
+        <div><dt>分辨率</dt><dd id="b-info-res">1080 × 2400</dd></div>
+        <div><dt>存储</dt><dd id="b-info-storage">64 / 128 GB</dd></div>
+        <div><dt>电量</dt><dd id="b-info-battery">78%</dd></div>
+      </dl></div>
+      <div class="b-card"><h4>会话</h4><p class="b-hint">最近镜像 2 小时前 · 平均延迟 38 ms · 无残留会话</p><button class="b-copy" type="button" data-toast="原型演示：复制诊断摘要">复制诊断摘要</button></div>
+      <p class="b-hint" id="b-info-context">当前视图：设备中心 · 侧栏常驻、内容区独立滚动，切换视图不丢失设备上下文。</p>
+    </aside>
+  </div>
+</section>
+
+<!-- ==================== C ==================== -->
+<section class="panel" id="tpl-c" role="tabpanel" aria-labelledby="tab-c">
+  <div class="panel-note"><b>C · 镜像舞台</b><span>布局：多会话标签 + 中央大画面 + 悬浮控制条 + 右侧工具抽屉</span><span>最强场景：长时间投屏控制 / 群控切换</span></div>
+  <div class="stage-c">
+    <header class="c-top">
+      <div class="c-brand"><i aria-hidden="true"></i>MirrorDock Live</div>
+      <nav class="c-tabs" aria-label="镜像会话">
+        <button type="button" aria-current="page" data-c-session="小狸 · Redmi K40" data-toast="原型演示：切换会话"><i aria-hidden="true"></i>小狸 · USB</button>
+        <button type="button" data-c-session="平板 · 小米平板 5" data-toast="原型演示：切换会话"><i aria-hidden="true"></i>平板 · 无线</button>
+        <button type="button" data-toast="原型演示：新建会话">＋ 新会话</button>
+      </nav>
+      <div class="c-right"><span>延迟 38 ms</span><span>1080 × 2400 · 60 fps</span><button type="button" data-toast="原型演示：全屏">全屏</button></div>
+    </header>
+
+    <div class="c-body">
+      <nav class="c-tools" aria-label="舞台工具">
+        <button type="button" aria-current="page" data-toast="原型演示：镜像"><svg class="icon lg" aria-hidden="true"><use href="#i-mirror"/></svg></button>
+        <button type="button" data-toast="原型演示：截图"><svg class="icon lg" aria-hidden="true"><use href="#i-camera"/></svg></button>
+        <button type="button" data-toast="原型演示：文件"><svg class="icon lg" aria-hidden="true"><use href="#i-folder"/></svg></button>
+        <button type="button" data-toast="原型演示：应用"><svg class="icon lg" aria-hidden="true"><use href="#i-apps"/></svg></button>
+        <button type="button" data-toast="原型演示：相册"><svg class="icon lg" aria-hidden="true"><use href="#i-image"/></svg></button>
+        <button type="button" data-toast="原型演示：通知"><svg class="icon lg" aria-hidden="true"><use href="#i-bell"/></svg></button>
+        <button type="button" data-toast="原型演示：设备信息"><svg class="icon lg" aria-hidden="true"><use href="#i-info"/></svg></button>
+      </nav>
+
+      <div class="c-canvas">
+        <div class="c-live"><i aria-hidden="true"></i>实时镜像 · <span id="c-session-title">小狸 · Redmi K40</span></div>
+        <div class="c-phone" aria-hidden="true"><div class="c-apps"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+        <div class="c-float" aria-label="悬浮控制条">
+          <button type="button" data-toast="原型演示：截图" aria-label="截图"><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg></button>
+          <button type="button" data-toast="原型演示：录像" aria-label="录像"><svg class="icon" aria-hidden="true"><use href="#i-apps"/></svg></button>
+          <button type="button" data-toast="原型演示：旋转" aria-label="旋转"><svg class="icon" aria-hidden="true"><use href="#i-rotate"/></svg></button>
+          <button type="button" data-toast="原型演示：唤醒屏幕" aria-label="唤醒屏幕"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg></button>
+          <button type="button" class="stop" data-toast="原型演示：断开会话" aria-label="断开会话">⏻</button>
+        </div>
+      </div>
+
+      <aside class="c-drawer" aria-label="工具抽屉">
+        <div class="c-drawer__tabs" role="group" aria-label="抽屉内容">
+          <button type="button" aria-current="page" data-toast="原型演示：最近文件">文件</button>
+          <button type="button" data-toast="原型演示：应用列表">应用</button>
+          <button type="button" data-toast="原型演示：相册">相册</button>
+          <button type="button" data-toast="原型演示：通知">通知</button>
+        </div>
+        <h4>最近文件</h4>
+        <ul>
+          <li>Download/日志截图.png <small>2.1M</small></li>
+          <li>DCIM/IMG_1124.jpg <small>4.8M</small></li>
+          <li>MirrorDock/app.apk <small>18M</small></li>
+        </ul>
+        <h4>最近通知</h4>
+        <ul>
+          <li>微信 · 张工：日志我看到了 <small>14:32</small></li>
+          <li>系统更新 · 补丁可下载 <small>13:05</small></li>
+        </ul>
+        <div class="c-drop">把 APK 或文件拖到此处<br>安装仍需在手机上确认</div>
+      </aside>
+    </div>
+
+    <footer class="c-film"><span>最近画面</span><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i><button type="button" data-toast="原型演示：打开录像归档">打开录像归档 ›</button></footer>
+  </div>
+</section>
+
+<!-- ==================== D ==================== -->
+<section class="panel" id="tpl-d" role="tabpanel" aria-labelledby="tab-d">
+  <div class="panel-note"><b>D · 双栏文件台</b><span>布局：本机 / 手机双栏对照 + 中间传输动作 + 底部队列</span><span>最强场景：批量取回照片、传文件、管应用</span></div>
+  <div class="stage-d">
+    <header class="d-top">
+      <div class="d-brand"><i aria-hidden="true">M</i>MirrorDock</div>
+      <div class="d-device"><i aria-hidden="true"></i>小狸 · Redmi K40 · USB</div>
+      <div class="d-seg" role="group" aria-label="内容类型">
+        <button type="button" aria-pressed="true" data-d-seg="files">文件</button>
+        <button type="button" aria-pressed="false" data-d-seg="apps">应用</button>
+        <button type="button" aria-pressed="false" data-d-seg="album">相册</button>
+      </div>
+      <div class="d-right"><button type="button" data-toast="原型演示：新建文件夹">新建文件夹</button><button type="button" data-toast="原型演示：刷新">刷新</button></div>
+    </header>
+
+    <div class="d-pathbar">当前位置 <b id="d-mode-label">手机 / Download</b> <button type="button" data-toast="原型演示：选择目录">选择其他目录 ›</button></div>
+
+    <div class="d-panes">
+      <section class="d-pane" aria-label="这台电脑">
+        <header class="d-pane__head"><b>这台电脑</b><small>macOS · Mirrordock 目录</small><button type="button" data-toast="原型演示：显示隐藏文件">⋯</button></header>
+        <div class="d-pane__path">/Users/huluobo/MirrorDock / 传输</div>
+        <ul class="d-rows">
+          <li class="d-row" aria-selected="true"><span class="d-name">📁 2026-11-24</span><span class="d-size">—</span><time>今天</time></li>
+          <li class="d-row"><span class="d-name">📁 APK</span><span class="d-size">—</span><time>11-20</time></li>
+          <li class="d-row"><span class="d-name">📄 截图_20261124_1432.png</span><span class="d-size">2.1 MB</span><time>14:32</time></li>
+          <li class="d-row"><span class="d-name">📄 recording_1122.mp4</span><span class="d-size">86.7 MB</span><time>11-22</time></li>
+          <li class="d-row"><span class="d-name">📄 diagnostics.txt</span><span class="d-size">12 KB</span><time>11-18</time></li>
+        </ul>
+      </section>
+
+      <div class="d-transfer" aria-label="传输操作">
+        <button type="button" aria-label="发送到手机" data-toast="原型演示：发送到手机">→</button>
+        <button type="button" aria-label="取回到电脑" data-toast="原型演示：取回到电脑">←</button>
+        <p>仅在本机传输 · 不经过云端</p>
+      </div>
+
+      <section class="d-pane" aria-label="手机">
+        <header class="d-pane__head"><b>小狸 · Android</b><small>ADB 通道 · 已授权</small><button type="button" data-toast="原型演示：新建文件夹">＋</button></header>
+        <div class="d-pane__path" id="d-right-path">/sdcard/Download</div>
+
+        <div class="d-seg-view" data-seg="files">
+          <ul class="d-rows">
+            <li class="d-row"><span class="d-name">📦 AfterServiceApp-v0.3.0.apk</span><span class="d-size">18.4 MB</span><time>10:20</time></li>
+            <li class="d-row" aria-selected="true"><span class="d-name">📄 日志截图_1123.png</span><span class="d-size">2.1 MB</span><time>11-23</time></li>
+            <li class="d-row"><span class="d-name">📁 MirrorDock</span><span class="d-size">—</span><time>11-22</time></li>
+            <li class="d-row"><span class="d-name">🎬 recording_1122.mp4</span><span class="d-size">86.7 MB</span><time>11-22</time></li>
+            <li class="d-row"><span class="d-name">📄 notes.md</span><span class="d-size">8 KB</span><time>11-17</time></li>
+          </ul>
+        </div>
+
+        <div class="d-seg-view" data-seg="apps" hidden>
+          <ul class="d-rows">
+            <li class="d-row"><span class="d-name">MirrorDock 伴侣</span><span class="d-size">24.6 MB</span><time>用户</time></li>
+            <li class="d-row"><span class="d-name">微信</span><span class="d-size">412 MB</span><time>用户</time></li>
+            <li class="d-row"><span class="d-name">Chrome</span><span class="d-size">168 MB</span><time>用户</time></li>
+            <li class="d-row"><span class="d-name">系统桌面</span><span class="d-size">—</span><time>系统</time></li>
+          </ul>
+        </div>
+
+        <div class="d-seg-view" data-seg="album" hidden>
+          <div class="d-albums"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="d-queue" aria-label="传输队列">
+      <h3>传输队列 · 2 项</h3>
+      <ul>
+        <li><span>DCIM/2026-11/IMG_1124.jpg → 本机</span><progress value="72" max="100">72%</progress><b>72%</b></li>
+        <li><span>AfterServiceApp-v0.3.0.apk → 手机</span><progress value="100" max="100">100%</progress><b>完成</b></li>
+      </ul>
+    </section>
+  </div>
+</section>
+
+<!-- ==================== E ==================== -->
+<section class="panel" id="tpl-e" role="tabpanel" aria-labelledby="tab-e">
+  <div class="panel-note"><b>E · 活动流助手</b><span>布局：顶部命令条 + 左侧分组 + 中间时间线 + 右侧快速操作</span><span>最强场景：通知回溯、传输历史、设备动态</span></div>
+  <div class="stage-e">
+    <div class="e-command"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><label class="sr-only" for="e-search">搜索设备、应用或命令</label><input id="e-search" type="search" placeholder="搜索设备、应用、文件，或输入命令…"><kbd>⌘ K</kbd></div>
+
+    <nav class="e-nav" aria-label="功能导航">
+      <h3>设备</h3>
+      <button type="button" data-e-view="home" aria-current="page">设备中心 <small>3</small></button>
+      <button type="button" data-e-view="connect">连接授权 <small>1</small></button>
+      <button type="button" data-e-view="info">设备信息 <small>—</small></button>
+      <button type="button" data-e-view="multi">多端 <small>2</small></button>
+      <span class="e-group" aria-hidden="true"></span>
+      <h3>镜像与会话</h3>
+      <button type="button" data-e-view="mirror">镜像控制 <small>38ms</small></button>
+      <button type="button" data-e-view="present">投屏演示 <small>2</small></button>
+      <button type="button" data-e-view="keymap">按键映射 <small>12</small></button>
+      <button type="button" data-e-view="schedule">定时录制 <small>2</small></button>
+      <button type="button" data-e-view="replay">操作回放 <small>2</small></button>
+      <span class="e-group" aria-hidden="true"></span>
+      <h3>内容与传输</h3>
+      <button type="button" data-e-view="files">文件传输 <small>28</small></button>
+      <button type="button" data-e-view="shot">截图 <small>6</small></button>
+      <button type="button" data-e-view="record">录像 <small>7</small></button>
+      <button type="button" data-e-view="album">相册 <small>412</small></button>
+      <button type="button" data-e-view="install">批量安装 <small>2</small></button>
+      <button type="button" data-e-view="apps">应用管理 <small>104</small></button>
+      <span class="e-group" aria-hidden="true"></span>
+      <h3>系统</h3>
+      <button type="button" data-e-view="notify">通知中心 <small>2</small></button>
+      <button type="button" data-e-view="settings">设置 <small>—</small></button>
+      <button type="button" data-e-view="help">帮助中心 <small>12</small></button>
+      <button type="button" data-e-view="pro">Pro / 激活 <small>免费</small></button>
+    </nav>
+
+    <main class="e-feed">
+      <div class="e-feed__head"><h2 id="e-view-title">设备中心</h2><small id="e-view-sub">11 月 24 日 · 按时间倒序</small><button type="button" id="e-view-action" data-toast="原型演示：全部标为已读">全部标为已读</button></div>
+
+      <div class="e-view" data-e-view="home">
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg></span><div class="e-item__body"><h3>APK 安装完成</h3><p>AfterServiceApp-v0.3.0.apk 已安装到小狸，设备端确认通过。</p><span class="e-item__tag">传输 · 小狸</span></div><div class="e-item__side"><time>14:41</time><button type="button" data-e-view="install">详情</button></div></article>
+        <article class="e-item"><span class="e-item__icon green"><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg></span><div class="e-item__body"><h3>微信 · 张工</h3><p>日志我看到了，晚点同步结论。</p><span class="e-item__tag">通知 · 小狸</span></div><div class="e-item__side"><time>14:32</time><button type="button" data-e-view="notify">跳到会话</button></div></article>
+        <article class="e-item"><span class="e-item__icon amber"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg></span><div class="e-item__body"><h3>平板需要重新授权</h3><p>无线 ADB 授权已过期，连接后可恢复镜像与传输。</p><span class="e-item__tag">设备 · 平板</span></div><div class="e-item__side"><time>13:58</time><button type="button" data-e-view="connect">处理</button></div></article>
+        <p class="e-day">昨天</p>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-image"/></svg></span><div class="e-item__body"><h3>12 张照片已取回</h3><p>DCIM/Camera → /Users/huluobo/MirrorDock/2026-11-23，按日期自动建文件夹。</p><span class="e-item__tag">传输 · 小狸</span></div><div class="e-item__side"><time>昨天 20:16</time><button type="button" data-e-view="album">打开</button></div></article>
+      </div>
+
+      <div class="e-view" data-e-view="connect" hidden>
+        <article class="e-item"><span class="e-item__icon green"><svg class="icon" aria-hidden="true"><use href="#i-rotate"/></svg></span><div class="e-item__body"><h3>小狸 · USB 直连已授权</h3><p>设备端勾选「始终允许」，当前可镜像、可传输。</p><span class="e-item__tag">连接 · 小狸</span></div><div class="e-item__side"><time>14:02</time><button type="button" data-toast="原型演示：断开">断开</button></div></article>
+        <article class="e-item"><span class="e-item__icon amber"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg></span><div class="e-item__body"><h3>平板 · 无线 ADB 授权过期</h3><p>同局域网通道需重新确认，确认后恢复镜像与传输。</p><span class="e-item__tag">连接 · 平板</span></div><div class="e-item__side"><time>13:58</time><button type="button" data-toast="原型演示：重新授权">重新授权</button></div></article>
+        <div class="e-panel"><h3>可用通道</h3><div class="e-line"><i>1</i><div><b>USB 直连</b><p>最稳定，推荐用于镜像与批量传输</p></div><time>默认</time></div><div class="e-line"><i>2</i><div><b>无线 ADB</b><p>依赖路由器多播与设备休眠策略</p></div><time>可选</time></div><div class="e-line"><i>3</i><div><b>扫码配对</b><p>Pro 功能，无需同网环境</p></div><time>Pro</time></div></div>
+        <p class="e-quote">蓝牙不在支持范围内：scrcpy 只走 USB 或 TCP/IP，授权随时可在手机端撤销。</p>
+      </div>
+
+      <div class="e-view" data-e-view="mirror" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-mirror"/></svg></span><div class="e-item__body"><h3>镜像会话已建立</h3><p>小狸 · 1080 × 2400 · 60 fps · 平均延迟 38 ms。</p><span class="e-item__tag">会话 · 小狸</span></div><div class="e-item__side"><time>14:36</time><button type="button" data-toast="原型演示：停止">停止</button></div></article>
+        <div class="e-panel"><h3>会话时间线</h3><div class="e-line"><i>1</i><div><b>14:36 连接建立</b><p>视频通道握手成功，首帧已渲染</p></div><time>正常</time></div><div class="e-line"><i>2</i><div><b>14:38 键鼠直输</b><p>UHID 注入生效，无需手机输入法</p></div><time>正常</time></div><div class="e-line"><i>3</i><div><b>14:41 桌面模式</b><p>按设备记忆，插拔后自动恢复</p></div><time>正常</time></div></div>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：开始镜像">开始镜像</button><button type="button" data-toast="原型演示：暂停">暂停</button><button type="button" data-toast="原型演示：旋转">旋转</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="present" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-mirror"/></svg></span><div class="e-item__body"><h3>演示文稿已载入</h3><p>产品评审 11-24 · 12 页，投屏画面只在本机渲染。</p><span class="e-item__tag">演示 · 小狸</span></div><div class="e-item__side"><time>14:20</time><button type="button" data-toast="原型演示：开始放映">放映</button></div></article>
+        <div class="e-panel"><h3>演示工具</h3><div class="e-actions"><button type="button" class="primary" data-toast="原型演示：开始放映">开始放映</button><button type="button" data-toast="原型演示：激光笔">激光笔</button><button type="button" data-toast="原型演示：白板标注">白板标注</button><button type="button" data-toast="原型演示：下一页">下一页</button></div></div>
+        <p class="e-quote">标注图层可导出为 PNG，不写入手机相册。</p>
+      </div>
+
+      <div class="e-view" data-e-view="keymap" hidden>
+        <div class="e-panel"><h3>键位变更记录</h3><div class="e-line"><i>1</i><div><b>默认桌面 · 12 条</b><p>Esc 返回 / H 主页 / Tab 多任务</p></div><time>默认</time></div><div class="e-line"><i>2</i><div><b>游戏 · 射击 · 18 条</b><p>Q/E/R 映射技能键</p></div><time>11-22</time></div><div class="e-line"><i>3</i><div><b>自定义 · 4 条</b><p>按设备保存，互不覆盖</p></div><time>11-20</time></div></div>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：新建方案">＋ 新建方案</button><button type="button" data-toast="原型演示：导入配置">导入配置</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="schedule" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg></span><div class="e-item__body"><h3>早间录屏 · 已启用</h3><p>每天 08:30 自动录制 10 分钟，文件只保存在本机。</p><span class="e-item__tag">计划 · 小狸</span></div><div class="e-item__side"><time>08:40</time><button type="button" data-toast="原型演示：查看记录">记录</button></div></article>
+        <article class="e-item"><span class="e-item__icon amber"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg></span><div class="e-item__body"><h3>夜间备份 · 已暂停</h3><p>原定每天 23:00 取回 DCIM，设备离线时自动跳过。</p><span class="e-item__tag">计划 · 平板</span></div><div class="e-item__side"><time>昨天</time><button type="button" data-toast="原型演示：恢复">恢复</button></div></article>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：新建计划">＋ 新建计划</button><button type="button" data-toast="原型演示：执行日志">执行日志</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="replay" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-rotate"/></svg></span><div class="e-item__body"><h3>11-24 安装流程 · 01:42</h3><p>小狸 · 可在本地回放，回放文件不上传。</p><span class="e-item__tag">回放 · 小狸</span></div><div class="e-item__side"><time>10:31</time><button type="button" data-toast="原型演示：播放">播放</button></div></article>
+        <p class="e-quote">操作回放默认禁用；开启需二次确认，且不读取短信正文等敏感内容。</p>
+      </div>
+
+      <div class="e-view" data-e-view="files" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></span><div class="e-item__body"><h3>Download 目录已读取</h3><p>28 项 · 含 1 个可安装 APK 与 2 个可取回文件。</p><span class="e-item__tag">文件 · 小狸</span></div><div class="e-item__side"><time>14:28</time><button type="button" data-toast="原型演示：刷新">刷新</button></div></article>
+        <div class="e-panel"><h3>最近传输</h3><div class="e-line"><i>1</i><div><b>AfterServiceApp-v0.3.0.apk</b><p>手机 → 本机 · 18.4 MB · 可安装</p></div><time>10:20</time></div><div class="e-line"><i>2</i><div><b>日志截图_1123.png</b><p>手机 → 本机 · 2.1 MB · 已完成</p></div><time>昨天</time></div></div>
+        <div class="e-actions"><button type="button" class="primary" data-e-view="install">拖拽安装 APK</button><button type="button" data-toast="原型演示：取回所选">取回所选</button></div>
+        <p class="e-quote">文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不伪装成「没有文件」。</p>
+      </div>
+
+      <div class="e-view" data-e-view="shot" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg></span><div class="e-item__body"><h3>截图已保存</h3><p>截图_20261124.png → 本机 MirrorDock 目录，可标注后复用。</p><span class="e-item__tag">截图 · 小狸</span></div><div class="e-item__side"><time>14:12</time><button type="button" data-toast="原型演示：打开目录">打开</button></div></article>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：立即截图">立即截图</button><button type="button" data-toast="原型演示：标注">标注</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="record" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg></span><div class="e-item__body"><h3>录制已停止</h3><p>recording_1122.mp4 · 86.7 MB · 保存在本机 Recordings。</p><span class="e-item__tag">录像 · 小狸</span></div><div class="e-item__side"><time>21:36</time><button type="button" data-toast="原型演示：播放">播放</button></div></article>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：开始录像">● 开始录像</button><button type="button" data-e-view="schedule">定时录制</button></div>
+        <p class="e-quote">录像是 Pro 功能；不默认云录制，不读取手机本地录像文件。</p>
+      </div>
+
+      <div class="e-view" data-e-view="album" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-image"/></svg></span><div class="e-item__body"><h3>12 张照片已取回</h3><p>DCIM/Camera → /Users/huluobo/MirrorDock/2026-11-23，按日期自动建文件夹。</p><span class="e-item__tag">相册 · 小狸</span></div><div class="e-item__side"><time>昨天 20:16</time><button type="button" data-toast="原型演示：打开文件夹">打开</button></div></article>
+        <div class="e-panel"><h3>相册时间线</h3><div class="e-line"><i>1</i><div><b>11-24 · 6 张</b><p>14:02 / 11:37 等，未取回</p></div><time>手机</time></div><div class="e-line"><i>2</i><div><b>11-23 · 12 张</b><p>已取回到本机，按日期归档</p></div><time>本机</time></div></div>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：取回所选">取回所选</button><button type="button" data-toast="原型演示：按日期建文件夹">按日期建文件夹</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="install" hidden>
+        <article class="e-item"><span class="e-item__icon green"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg></span><div class="e-item__body"><h3>APK 安装完成</h3><p>AfterServiceApp-v0.3.0.apk 已安装到小狸，设备端确认通过。</p><span class="e-item__tag">安装 · 小狸</span></div><div class="e-item__side"><time>14:41</time><button type="button" data-toast="原型演示：查看结果">结果</button></div></article>
+        <article class="e-item"><span class="e-item__icon amber"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg></span><div class="e-item__body"><h3>等待设备确认</h3><p>companion-v0.4.27.apk 已推送到平板，等待手机逐次确认。</p><span class="e-item__tag">安装 · 平板</span></div><div class="e-item__side"><time>14:38</time><button type="button" data-toast="原型演示：取消">取消</button></div></article>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：选择 APK">＋ 选择 APK</button><button type="button" data-toast="原型演示：批量安装">批量安装</button></div>
+        <p class="e-quote">支持拖拽安装；每台设备都需在手机上逐次确认，不做静默安装。</p>
+      </div>
+
+      <div class="e-view" data-e-view="apps" hidden>
+        <div class="e-panel"><h3>应用变更时间线</h3><div class="e-line"><i>1</i><div><b>com.mirrordock.companion</b><p>24.6 MB · 安装 / 更新成功</p></div><time>10:24</time></div><div class="e-line"><i>2</i><div><b>com.tencent.mm</b><p>412 MB · 仅列出，未做变更</p></div><time>只读</time></div><div class="e-line"><i>3</i><div><b>com.android.chrome</b><p>168 MB · 卸载需设备端确认</p></div><time>只读</time></div></div>
+        <div class="e-actions"><button type="button" data-toast="原型演示：导出清单">导出清单</button><button type="button" data-e-view="install">安装 APK</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="notify" hidden>
+        <article class="e-item"><span class="e-item__icon green"><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg></span><div class="e-item__body"><h3>微信 · 张工</h3><p>日志我看到了，晚点同步结论。</p><span class="e-item__tag">通知 · 小狸</span></div><div class="e-item__side"><time>14:32</time><button type="button" data-toast="原型演示：标记已读">已读</button></div></article>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg></span><div class="e-item__body"><h3>系统更新</h3><p>安全补丁可下载，是否取回安装包由你决定。</p><span class="e-item__tag">通知 · 小狸</span></div><div class="e-item__side"><time>13:05</time><button type="button" data-toast="原型演示：忽略">忽略</button></div></article>
+        <p class="e-quote">通知正文默认不持久化；开启后仍只保存在本机，可在设置里随时关闭。</p>
+      </div>
+
+      <div class="e-view" data-e-view="info" hidden>
+        <div class="e-panel"><h3>小狸 · 只读信息</h3><div class="e-line"><i>1</i><div><b>M2104K10AC · Android 13</b><p>1080 × 2400 · 64 / 128 GB · 78%</p></div><time>刚刚</time></div><div class="e-line"><i>2</i><div><b>最近镜像 2 小时前</b><p>平均延迟 38 ms · 无残留会话</p></div><time>14:02</time></div></div>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：复制诊断摘要">复制诊断摘要</button><button type="button" data-toast="原型演示：查看日志">查看 adb 日志</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="multi" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-apps"/></svg></span><div class="e-item__body"><h3>演示机组 · 4 台（2 在线）</h3><p>投屏与安装队列按组同步，文件不在设备间互传。</p><span class="e-item__tag">多端 · 设备组</span></div><div class="e-item__side"><time>11:20</time><button type="button" data-toast="原型演示：管理">管理</button></div></article>
+        <div class="e-actions"><button type="button" class="primary" data-toast="原型演示：新建组">＋ 新建组</button><button type="button" data-toast="原型演示：批量操作">批量操作</button></div>
+        <p class="e-quote">同步只涉及本机配置，不经云端。</p>
+      </div>
+
+      <div class="e-view" data-e-view="settings" hidden>
+        <div class="e-panel"><h3>开关变更</h3><div class="e-line"><i>1</i><div><b>开机自启 · 开启</b><p>0.4.27 起自动修复指向旧路径的自启项</p></div><time>11-13</time></div><div class="e-line"><i>2</i><div><b>通知持久化 · 关闭</b><p>默认关，需显式开启</p></div><time>默认</time></div><div class="e-line"><i>3</i><div><b>操作回放 · 关闭</b><p>需二次确认</p></div><time>默认</time></div></div>
+        <div class="e-actions"><button type="button" data-toast="原型演示：导出配置">导出配置</button><button type="button" data-toast="原型演示：恢复默认">恢复默认</button></div>
+      </div>
+
+      <div class="e-view" data-e-view="help" hidden>
+        <div class="e-panel"><h3>常见问题</h3><div class="e-line"><i>1</i><div><b>如何连接第一台设备？</b><p>开启 USB 调试并授权，设备卡变绿即可镜像。</p></div><time>入门</time></div><div class="e-line"><i>2</i><div><b>无线总掉线？</b><p>优先 USB；无线依赖路由器多播与休眠策略。</p></div><time>连接</time></div><div class="e-line"><i>3</i><div><b>安装 APK 安全吗？</b><p>仅本机解析，推送后仍需手机逐次确认。</p></div><time>传输</time></div><div class="e-line"><i>4</i><div><b>开机白屏？</b><p>升级到 0.4.27 或更新版本会自动修复自启路径。</p></div><time>排查</time></div></div>
+        <p class="e-quote">共 12 篇帮助文章，默认折叠，点击标题展开。</p>
+      </div>
+
+      <div class="e-view" data-e-view="pro" hidden>
+        <article class="e-item"><span class="e-item__icon"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></span><div class="e-item__body"><h3>当前状态 · 免费版</h3><p>镜像、截图、文件传输、应用管理保持免费可用。</p><span class="e-item__tag">授权 · 本机</span></div><div class="e-item__side"><time>今天</time><button type="button" data-toast="原型演示：输入激活码">激活</button></div></article>
+        <div class="e-panel"><h3>Pro 权益</h3><div class="e-line"><i>1</i><div><b>录像与定时录制</b><p>本机保存，不云录制</p></div><time>Pro</time></div><div class="e-line"><i>2</i><div><b>操作回放</b><p>默认禁用，可显式开启</p></div><time>Pro</time></div><div class="e-line"><i>3</i><div><b>批量安装与扫码配对</b><p>多设备队列 / 无同网环境</p></div><time>Pro</time></div></div>
+        <p class="e-quote">激活只在本机校验，不需要账号。</p>
+      </div>
+    </main>
+
+    <aside class="e-side" aria-label="快速操作">
+      <section class="e-card"><h3>快速开始</h3><button class="e-primary" type="button" data-toast="原型演示：开始镜像"><svg class="icon" aria-hidden="true"><use href="#i-mirror"/></svg>开始镜像 · 小狸</button><div class="e-drop">把 APK 拖到这里安装<br>仍需在手机上逐次确认</div></section>
+      <section class="e-card"><h3>设备健康</h3><div class="e-health"><span class="e-donut" aria-hidden="true"></span><p id="e-side-health">小狸状态 78%<br>USB 直连 · 延迟 38 ms<br>存储 64 / 128 GB</p></div></section>
+      <section class="e-card"><h3>本机优先</h3><p class="e-privacy">动态仅保存在本机，默认不持久化通知正文；会话、传输与卸载始终可见可撤销。</p></section>
+    </aside>
+  </div>
+</section>
+
+</main>
+
+<section class="compare" aria-labelledby="compare-title">
+  <h2 id="compare-title">五套怎么选</h2>
+  <div class="scroll"><table>
+    <thead><tr><th scope="col">维度</th><th scope="col">A 设备卡片墙</th><th scope="col">B 四栏工作台</th><th scope="col">C 镜像舞台</th><th scope="col">D 双栏文件台</th><th scope="col">E 活动流助手</th></tr></thead>
+    <tbody>
+      <tr><td>核心隐喻</td><td>设备选择器</td><td>专业工作台 / IDE</td><td>播放器 / 控制台</td><td>Finder 文件管理</td><td>消息与任务时间线</td></tr>
+      <tr><td>第一屏主角</td><td>3 张设备大卡</td><td>内容表格与详情</td><td>手机实时画面</td><td>两侧目录与文件</td><td>按时间排列的动态</td></tr>
+      <tr><td>导航方式</td><td>无侧栏，顶部真切页 + 卡内直达</td><td>图标栏 + 列表双导航</td><td>会话标签 + 竖排工具栏</td><td>顶部段控件切内容</td><td>左侧分组 + 顶栏搜索</td></tr>
+      <tr><td>工具入口形态</td><td>顶部 19 个视图 + 卡内快捷</td><td>左栏视图，工具即导航</td><td>悬浮条 + 右侧抽屉</td><td>传输按钮 + 队列</td><td>动态卡片内操作</td></tr>
+      <tr><td>多设备处理</td><td class="pick">并列展示，最强</td><td>左侧设备列表切换</td><td>顶部多会话标签，最强</td><td>顶部设备下拉选择</td><td>按设备筛选动态</td></tr>
+      <tr><td>最强场景</td><td>选设备、快速开始、全流程演示</td><td class="pick">装应用、翻文件、查信息</td><td>长时间投屏控制</td><td class="pick">批量传文件与照片</td><td>通知回溯、历史审计</td></tr>
+      <tr><td>实现代价</td><td>中高：19 个视图内容量大</td><td>高：四区联动与状态保持</td><td>高：舞台布局与悬浮层</td><td>中：双栏 + 队列</td><td>中：时间线数据源聚合</td></tr>
+      <tr><td>主要风险</td><td>设备多了要分页/搜索</td><td>新用户觉得复杂</td><td>离开镜像态后功能不好找</td><td>只覆盖管理场景，不像首页</td><td>实时操作感弱</td></tr>
+    </tbody>
+  </table></div>
+  <p class="advice"><b>我的建议</b>：A 现已补齐 <b>19 个真实可切视图</b>（设备中心 → 连接 / 镜像 / 截图 / 录像 / 文件 / 应用 / 相册 / 通知 / 设备信息 / 批量安装 / 投屏演示 / 按键映射 / 定时录制 / 操作回放 / 多端 / 设置 / 帮助 / Pro），若希望一套界面就能走完所有产品功能，选 A，学习成本最低。<b>B 四栏工作台</b>仍更适合专业管理场景（应用 / 相册 / 信息密度更高），可作为 A 的「设备工作台」并存。C 是镜像会话内形态，D 适合独立文件/应用窗口，E 更适合通知中心而非主界面。五套都遵守本地优先红线，不引入账号或云中继。</p>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const tabs = Array.from(document.querySelectorAll(".switcher [role=tab]"));
+const panels = Array.from(document.querySelectorAll(".panel"));
+tabs.forEach(tab => tab.addEventListener("click", () => {
+  const key = tab.dataset.tpl;
+  tabs.forEach(t => t.setAttribute("aria-selected", String(t === tab)));
+  panels.forEach(p => p.classList.toggle("active", p.id === "tpl-" + key));
+}));
+
+const toast = document.getElementById("toast");
+let toastTimer;
+function showToast(message) {
+  toast.textContent = message;
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), 2000);
+}
+
+const aViewSections = Array.from(document.querySelectorAll("section.a-view[data-a-view]"));
+const aNavButtons = Array.from(document.querySelectorAll(".a-nav button[data-a-view]"));
+const aCurrentDevice = document.querySelector("#a-current-device span");
+const aMirrorDevice = document.getElementById("a-mirror-device");
+function switchAView(view, device) {
+  aViewSections.forEach(section => { section.hidden = section.dataset.aView !== view; });
+  aNavButtons.forEach(button => {
+    if (button.dataset.aView === view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  if (device) {
+    aCurrentDevice.textContent = device;
+    if (view === "mirror") aMirrorDevice.textContent = device;
+  }
+}
+
+const VIEW_META = {
+  home: { title: "设备中心", path: "小狸 · 全部设备 3 台", crumb: "设备中心", action: "＋ 添加设备" },
+  connect: { title: "连接与授权", path: "USB / 无线 ADB / 扫码配对", crumb: "连接授权", action: "＋ 添加设备" },
+  info: { title: "设备信息", path: "小狸 / 只读信息", crumb: "设备信息", action: "复制诊断摘要" },
+  multi: { title: "多端", path: "设备组 2 · 在线 3", crumb: "多端", action: "＋ 新建组" },
+  mirror: { title: "镜像控制", path: "小狸 · 1080 × 2400 · 38 ms", crumb: "镜像", action: "开始镜像" },
+  present: { title: "投屏演示", path: "产品评审 11-24 · 12 页", crumb: "投屏", action: "开始放映" },
+  keymap: { title: "按键映射", path: "默认桌面 · 12 条键位", crumb: "键位", action: "＋ 新建方案" },
+  schedule: { title: "定时录制", path: "计划任务 2 · 启用 1", crumb: "定时", action: "＋ 新建计划" },
+  replay: { title: "操作回放", path: "回放库 2 段 · 默认禁用", crumb: "回放", action: "＋ 新建录制" },
+  files: { title: "文件管理", path: "小狸 / Download", crumb: "Download", action: "取回到电脑" },
+  shot: { title: "截图", path: "小狸 / 截图集 · 6 张", crumb: "截图", action: "立即截图" },
+  record: { title: "录像", path: "本机 / Recordings · 7 段", crumb: "录像", action: "● 开始录像" },
+  album: { title: "相册", path: "小狸 / DCIM / Camera · 412 张", crumb: "相册", action: "取回所选" },
+  install: { title: "批量安装", path: "安装队列 2 · 1 进行中", crumb: "安装", action: "＋ 选择 APK" },
+  apps: { title: "应用管理", path: "小狸 / 用户应用 63 · 系统应用 41", crumb: "应用", action: "导出清单" },
+  notify: { title: "通知中心", path: "小狸 / 实时镜像 · 2 条未读", crumb: "通知", action: "全部标为已读" },
+  settings: { title: "设置", path: "通用 · 镜像 · 传输 · 隐私", crumb: "设置", action: "导出配置" },
+  help: { title: "帮助中心", path: "快速上手 · 连接 · 传输 · 排查", crumb: "帮助", action: "查看全部" },
+  pro: { title: "Pro / 激活", path: "当前状态：免费版", crumb: "Pro", action: "输入激活码" }
+};
+const B_DEVICE_INFO = {
+  "小狸 · Redmi K40": { model: "M2104K10AC", os: "Android 13", res: "1080 × 2400", storage: "64 / 128 GB", battery: "78%", link: "USB 直连 · 可镜像" },
+  "平板 · 小米平板 5": { model: "M2105K81AC", os: "Android 12", res: "1600 × 2560", storage: "128 / 256 GB", battery: "52%", link: "局域网 ADB · 待授权" },
+  "备用机 · Pixel 6": { model: "Pixel 6", os: "Android 14", res: "1080 × 2400", storage: "—", battery: "31%", link: "等待连接" }
+};
+let currentBView = "home";
+function switchBView(view, device) {
+  if (!VIEW_META[view]) return;
+  currentBView = view;
+  document.querySelectorAll("[data-b-view]").forEach(button => {
+    if (button.dataset.bView === view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  document.querySelectorAll(".b-view").forEach(section => { section.hidden = section.dataset.view !== view; });
+  document.querySelectorAll(".b-context").forEach(section => { section.hidden = section.dataset.bContext !== view; });
+  const meta = VIEW_META[view];
+  document.getElementById("b-view-title").textContent = meta.title;
+  document.getElementById("b-view-path").textContent = meta.path;
+  document.getElementById("b-crumb-text").textContent = meta.crumb;
+  document.getElementById("b-main-action").textContent = meta.action;
+  document.getElementById("b-info-context").textContent = "当前视图：" + meta.title + " · 侧栏常驻、内容区独立滚动，切换视图不丢失设备上下文。";
+  if (device) {
+    document.getElementById("b-current-device").textContent = device;
+    document.getElementById("b-crumb-device").textContent = device.split(" · ")[0];
+    document.getElementById("b-mirror-device").textContent = device;
+    const info = B_DEVICE_INFO[device];
+    if (info) {
+      document.getElementById("b-health-text").innerHTML = "设备状态 " + info.battery + "<br>" + info.link;
+      document.getElementById("b-ring").style.setProperty("--pct", info.battery);
+      document.getElementById("b-ring-num").textContent = info.battery.replace("%", "");
+      document.getElementById("b-info-model").textContent = info.model;
+      document.getElementById("b-info-os").textContent = info.os;
+      document.getElementById("b-info-res").textContent = info.res;
+      document.getElementById("b-info-storage").textContent = info.storage;
+      document.getElementById("b-info-battery").textContent = info.battery;
+    }
+  }
+}
+
+const E_VIEW_META = {
+  home: { title: "设备中心", sub: "11 月 24 日 · 按时间倒序", action: "全部标为已读" },
+  connect: { title: "连接与授权", sub: "USB / 无线 ADB / 扫码配对", action: "＋ 添加设备" },
+  info: { title: "设备信息", sub: "小狸 · 只读信息", action: "复制诊断摘要" },
+  multi: { title: "多端", sub: "设备组 2 · 在线 3", action: "＋ 新建组" },
+  mirror: { title: "镜像控制", sub: "小狸 · 1080 × 2400 · 38 ms", action: "开始镜像" },
+  present: { title: "投屏演示", sub: "产品评审 11-24 · 12 页", action: "开始放映" },
+  keymap: { title: "按键映射", sub: "默认桌面 · 12 条键位", action: "＋ 新建方案" },
+  schedule: { title: "定时录制", sub: "计划任务 2 · 启用 1", action: "＋ 新建计划" },
+  replay: { title: "操作回放", sub: "回放库 2 段 · 默认禁用", action: "＋ 新建录制" },
+  files: { title: "文件传输", sub: "小狸 / Download · 28 项", action: "取回所选" },
+  shot: { title: "截图", sub: "本机截图集 · 6 张", action: "立即截图" },
+  record: { title: "录像", sub: "本机 Recordings · 7 段", action: "● 开始录像" },
+  album: { title: "相册", sub: "小狸 / DCIM / Camera · 412 张", action: "取回所选" },
+  install: { title: "批量安装", sub: "安装队列 2 · 1 等待确认", action: "＋ 选择 APK" },
+  apps: { title: "应用管理", sub: "小狸 · 用户 63 / 系统 41", action: "导出清单" },
+  notify: { title: "通知中心", sub: "2 条未读 · 默认不持久化正文", action: "全部标为已读" },
+  settings: { title: "设置", sub: "通用 · 镜像 · 传输 · 隐私", action: "导出配置" },
+  help: { title: "帮助中心", sub: "12 篇 · 默认折叠", action: "展开全部" },
+  pro: { title: "Pro / 激活", sub: "当前状态 · 免费版", action: "输入激活码" }
+};
+function switchEView(view) {
+  if (!E_VIEW_META[view]) return;
+  document.querySelectorAll(".e-nav button[data-e-view]").forEach(button => {
+    if (button.dataset.eView === view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  document.querySelectorAll(".e-view").forEach(section => { section.hidden = section.dataset.eView !== view; });
+  const meta = E_VIEW_META[view];
+  document.getElementById("e-view-title").textContent = meta.title;
+  document.getElementById("e-view-sub").textContent = meta.sub;
+  document.getElementById("e-view-action").textContent = meta.action;
+}
+const eSearch = document.getElementById("e-search");
+eSearch.addEventListener("input", () => {
+  const query = eSearch.value.trim().toLowerCase();
+  document.querySelectorAll(".e-view:not([hidden]) .e-item").forEach(item => {
+    item.hidden = Boolean(query) && !item.textContent.toLowerCase().includes(query);
+  });
+});
+
+document.addEventListener("click", event => {
+  const aButton = event.target.closest("button[data-a-view]");
+  if (aButton) switchAView(aButton.dataset.aView, aButton.dataset.aDevice || null);
+
+  const action = event.target.closest("[data-toast]");
+  if (action) showToast(action.getAttribute("data-toast"));
+
+  const bButton = event.target.closest("[data-b-view]");
+  if (bButton) switchBView(bButton.dataset.bView);
+
+  const bPick = event.target.closest("[data-b-pick]");
+  if (bPick) {
+    document.querySelectorAll("[data-b-pick]").forEach(button => button.removeAttribute("aria-current"));
+    bPick.setAttribute("aria-current", "page");
+    switchBView(currentBView, bPick.dataset.bPick);
+  }
+
+  const treeButton = event.target.closest(".b-tree button");
+  if (treeButton && !treeButton.dataset.bView && !treeButton.dataset.bPick) {
+    treeButton.closest("ul").querySelectorAll("button").forEach(button => button.removeAttribute("aria-current"));
+    treeButton.setAttribute("aria-current", "page");
+    showToast("原型演示：" + treeButton.textContent.trim().split(/\s+/)[0]);
+  }
+
+  const eButton = event.target.closest("[data-e-view]");
+  if (eButton) switchEView(eButton.dataset.eView);
+
+  const sessionButton = event.target.closest("[data-c-session]");
+  if (sessionButton) document.getElementById("c-session-title").textContent = sessionButton.dataset.cSession;
+
+  const segment = event.target.closest("[data-d-seg]");
+  if (segment) {
+    const mode = segment.dataset.dSeg;
+    document.querySelectorAll("[data-d-seg]").forEach(button => button.setAttribute("aria-pressed", String(button === segment)));
+    document.querySelectorAll(".d-seg-view").forEach(section => { section.hidden = section.dataset.seg !== mode; });
+    const labels = {
+      files: ["手机 / Download", "/sdcard/Download"],
+      apps: ["手机 / 应用列表", "/sdcard/Android/data（只读）"],
+      album: ["手机 / 相册时间线", "/sdcard/DCIM/Camera"]
+    };
+    document.getElementById("d-mode-label").textContent = labels[mode][0];
+    document.getElementById("d-right-path").textContent = labels[mode][1];
+  }
+});
+</script>
+</body>
+</html>

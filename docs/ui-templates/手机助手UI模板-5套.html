@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MirrorDock 手机助手 · 5 套 UI 模板对比</title>
+<style>
+/* ==================== 查看器外壳（不属于任何方案） ==================== */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  color: #1c2430; background: #eceef3;
+  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+}
+body { margin: 0; padding: 24px clamp(16px, 3vw, 40px) 60px; }
+h1, h2, h3, h4, p { margin: 0; }
+button { font: inherit; }
+.viewer-head { max-width: 1440px; margin: 0 auto 18px; }
+.viewer-head h1 { font-size: 22px; letter-spacing: -.02em; margin-bottom: 6px; }
+.viewer-head p { color: #5d6775; font-size: 13px; line-height: 1.6; }
+.viewer-head .meta { color: #8a93a1; font-size: 12px; margin-top: 6px; }
+.switcher {
+  display: flex; flex-wrap: wrap; gap: 8px; max-width: 1440px; margin: 16px auto 20px;
+  padding: 8px; background: #fff; border: 1px solid #dfe3ea; border-radius: 14px;
+  box-shadow: 0 4px 18px rgba(30, 40, 60, .05);
+}
+.switcher button {
+  flex: 1 1 190px; padding: 11px 14px; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: #48535f; cursor: pointer; text-align: left;
+  transition: background .16s ease, color .16s ease, border-color .16s ease;
+}
+.switcher button:hover { background: #f3f6fb; }
+.switcher button[aria-selected="true"] { background: #eaf1ff; border-color: #c5d9ff; color: #1f4fc4; }
+.switcher button b { display: block; font-size: 14px; margin-bottom: 2px; }
+.switcher button small { display: block; font-size: 11px; color: #7b8592; }
+.switcher button[aria-selected="true"] small { color: #5474ab; }
+.panel { display: none; max-width: 1440px; margin: 0 auto; }
+.panel.active { display: block; }
+.panel-note {
+  display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: baseline;
+  margin: 0 0 12px; padding: 12px 16px; background: #fff; border: 1px solid #e2e6ed;
+  border-left: 3px solid #2e6be6; border-radius: 8px; font-size: 12.5px; color: #49545f;
+}
+.panel-note b { color: #1f4fc4; font-size: 13px; }
+.panel-note span { color: #69737f; }
+.compare { max-width: 1440px; margin: 34px auto 0; }
+.compare h2 { font-size: 17px; margin-bottom: 12px; }
+.compare table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dfe3ea; border-radius: 10px; overflow: hidden; font-size: 12.5px; }
+.compare th, .compare td { padding: 11px 13px; text-align: left; border-bottom: 1px solid #edf0f4; vertical-align: top; }
+.compare th { background: #f7f9fc; font-weight: 650; color: #394552; }
+.compare tr:last-child td { border-bottom: 0; }
+.compare td:first-child { font-weight: 650; color: #26313d; white-space: nowrap; }
+.pick { color: #1f4fc4; font-weight: 650; }
+
+/* ==================== 共用应用骨架：变量驱动，结构一致 ==================== */
+.app {
+  --bg: #f4f6fa; --surface: #fff; --surface-2: #f8fafd; --text: #1c2430; --muted: #6d7785;
+  --line: #e6eaf2; --accent: #2e6be6; --accent-ink: #1f4fc4; --accent-soft: #eaf1ff;
+  --ok: #16a34a; --wifi: #2e6be6; --warn: #e08a1e; --off: #9aa4b2;
+  --radius: 14px; --radius-sm: 10px; --shadow: 0 4px 16px rgba(30, 50, 90, .06);
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr) auto;
+  grid-template-areas: "top top" "side main" "side foot";
+  min-height: 720px; border-radius: var(--radius); overflow: hidden;
+  background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px;
+  box-shadow: var(--shadow); border: 1px solid var(--line);
+}
+.app__top { grid-area: top; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.app__side { grid-area: side; padding: 18px 14px; background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto; overscroll-behavior: contain; }
+.app__main { grid-area: main; padding: 20px 22px 8px; min-inline-size: 0; }
+.app__foot { grid-area: foot; padding: 4px 22px 18px; min-inline-size: 0; }
+.icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.icon.sm { width: 15px; height: 15px; }
+.icon.lg { width: 25px; height: 25px; }
+
+/* 顶栏 */
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 750; letter-spacing: -.01em; white-space: nowrap; }
+.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: #fff; font-weight: 800; font-size: 14px; }
+.top-stats { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.top-stats span { padding: 4px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); white-space: nowrap; }
+.top-stats b { color: var(--text); font-weight: 650; }
+.top-spacer { margin-inline-start: auto; }
+.top-actions { display: flex; gap: 6px; align-items: center; }
+.top-actions button, .icon-btn { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); cursor: pointer; position: relative; }
+.top-actions button:hover, .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+.dot-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: #e5484d; color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+
+/* 侧栏 */
+.side-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--muted); margin: 2px 2px 12px; }
+.side-title button { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 650; }
+.device-list { display: grid; gap: 8px; }
+.device {
+  position: relative; display: grid; gap: 3px; padding: 12px 12px 11px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface); cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.device:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.device.is-active { border-color: var(--accent); background: var(--accent-soft); }
+.device.is-active::before { content: ""; position: absolute; inset-inline-start: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.device-head { display: flex; align-items: center; gap: 8px; }
+.device-head h4 { font-size: 13.5px; font-weight: 700; }
+.chip { margin-inline-start: auto; font-size: 10px; font-weight: 650; padding: 2px 6px; border-radius: 5px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.chip.usb { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); background: color-mix(in srgb, var(--ok) 8%, var(--surface)); }
+.chip.wifi { color: var(--wifi); border-color: color-mix(in srgb, var(--wifi) 30%, var(--line)); background: color-mix(in srgb, var(--wifi) 8%, var(--surface)); }
+.chip.off { color: var(--off); }
+.device p { font-size: 11px; color: var(--muted); }
+.device-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.state-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 14%, transparent); }
+.state-dot.wifi { background: var(--wifi); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wifi) 14%, transparent); }
+.state-dot.off { background: var(--off); box-shadow: none; }
+.state-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 14%, transparent); }
+.meter { flex: 1; height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--muted) 18%, transparent); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--ok); }
+.meter.low i { background: var(--warn); }
+.add-device { width: 100%; margin-top: 10px; padding: 9px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: var(--radius-sm); background: transparent; color: var(--accent); font-size: 12px; font-weight: 650; cursor: pointer; }
+.side-sep { height: 1px; background: var(--line); margin: 18px 0; }
+.recent { display: grid; gap: 8px; }
+.recent p { font-size: 11.5px; color: var(--muted); display: flex; gap: 7px; align-items: center; }
+.recent .state-dot { width: 6px; height: 6px; }
+.side-privacy { margin-top: 20px; padding: 10px 11px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--line); font-size: 11px; color: var(--muted); line-height: 1.55; }
+.side-privacy b { color: var(--text); display: block; margin-bottom: 2px; font-size: 11.5px; }
+
+/* 工作区 */
+.dev-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.dev-hero h2 { font-size: 19px; letter-spacing: -.01em; }
+.dev-hero .sub { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.dev-hero .sub i { width: 3px; height: 3px; border-radius: 50%; background: var(--off); }
+.btn-primary, .btn-ghost, .btn-soft {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px;
+  padding: 0 15px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 650; cursor: pointer;
+}
+.btn-primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+.btn-primary:hover { filter: brightness(1.06); }
+.btn-ghost { border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.btn-soft { border: 1px solid var(--accent-soft); background: var(--accent-soft); color: var(--accent-ink); }
+.hero-actions { margin-inline-start: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.section-head { display: flex; align-items: baseline; gap: 9px; margin: 20px 0 12px; }
+.section-head h3 { font-size: 14px; font-weight: 700; }
+.section-head span { font-size: 11px; color: var(--muted); }
+.section-head a { margin-inline-start: auto; font-size: 11.5px; color: var(--accent); text-decoration: none; cursor: pointer; }
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(152px, 1fr)); gap: 10px; }
+.tool {
+  position: relative; display: grid; gap: 6px; align-content: start; min-height: 112px;
+  padding: 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); cursor: pointer; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.tool:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 8px 20px rgba(30, 50, 90, .09); }
+.tool.primary { grid-column: span 2; background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 72%, #101a30)); border-color: transparent; color: #fff; }
+.tool-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-ink); }
+.tool.primary .tool-icon { background: rgba(255,255,255,.18); color: #fff; }
+.tool h4 { font-size: 13px; font-weight: 700; }
+.tool p { font-size: 11px; color: var(--muted); line-height: 1.45; }
+.tool.primary p { color: rgba(255,255,255,.8); }
+.tool .new { position: absolute; top: 10px; right: 10px; font-size: 9px; font-weight: 750; padding: 2px 6px; border-radius: 999px; background: #fff2e6; color: #b45309; letter-spacing: .03em; }
+.foot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.foot-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.foot-card h4 { font-size: 12px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 7px; }
+.foot-card p { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.foot-card p b { color: var(--text); font-weight: 600; }
+.tag { margin-inline-start: auto; font-size: 10px; padding: 2px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-ink); font-weight: 650; }
+
+/* ---------- A 云鲸桌台：柔和浅色、大圆角、柔和阴影 ---------- */
+.tpl-a { --bg: #f5f7fb; --surface: #fff; --surface-2: #f7f9fd; --line: #e6ebf3; --radius: 18px; --radius-sm: 12px; --shadow: 0 14px 40px rgba(43, 71, 130, .10); }
+.tpl-a .app__top { background: linear-gradient(100deg, #fff 0%, #f8faff 100%); }
+.tpl-a .device { padding: 13px; border-radius: 13px; }
+.tpl-a .tool { min-height: 118px; }
+.tpl-a .tool-icon { width: 38px; height: 38px; border-radius: 11px; }
+
+/* ---------- B 深空控制台：深色、紧凑、高对比、数据感 ---------- */
+.tpl-b {
+  --bg: #10151f; --surface: #181f2c; --surface-2: #1e2635; --text: #e8edf5; --muted: #95a1b3;
+  --line: #2a3445; --accent: #5b9dff; --accent-ink: #9dc4ff; --accent-soft: #1b2c46;
+  --ok: #4ade80; --wifi: #5b9dff; --warn: #fbbf24; --off: #6b778a;
+  --radius: 12px; --radius-sm: 8px; --shadow: 0 20px 50px rgba(0,0,0,.35);
+  --font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "PingFang SC", monospace;
+}
+.tpl-b .app { grid-template-columns: 250px minmax(0,1fr); font-size: 13px; }
+.tpl-b .app__top, .tpl-b .app__side, .tpl-b .tool, .tpl-b .foot-card, .tpl-b .device { background: var(--surface); }
+.tpl-b .device-meta, .tpl-b .meter { font-variant-numeric: tabular-nums; }
+.tpl-b .tool { min-height: 104px; }
+.tpl-b .tool.primary { background: linear-gradient(120deg, #2c5fb3, #1c3d78); }
+.tpl-b .device.is-active { box-shadow: inset 3px 0 0 var(--accent); }
+.tpl-b .device.is-active::before { display: none; }
+.tpl-b .state-dot { box-shadow: 0 0 8px currentColor; }
+
+/* ---------- C 彩色磁贴：大色块、活泼、功能图形化 ---------- */
+.tpl-c { --bg: #eef1f7; --surface: #fff; --surface-2: #f6f8fc; --line: #e2e7f0; --radius: 16px; --radius-sm: 12px; --shadow: 0 10px 30px rgba(40, 60, 110, .1); }
+.tpl-c .tool { min-height: 120px; color: #fff; border: 0; }
+.tpl-c .tool p { color: rgba(255,255,255,.82); }
+.tpl-c .tool-icon { background: rgba(255,255,255,.22); color: #fff; }
+.tpl-c .tool.new::after { content: "NEW"; }
+.tpl-c .tool-1 { background: linear-gradient(135deg, #2e6be6, #1f4fc4); }
+.tpl-c .tool-2 { background: linear-gradient(135deg, #10a5a0, #0b7d7a); }
+.tpl-c .tool-3 { background: linear-gradient(135deg, #a855f7, #7c3aed); }
+.tpl-c .tool-4 { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.tpl-c .tool-5 { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+.tpl-c .tool-6 { background: linear-gradient(135deg, #0ea5e9, #0369a1); }
+.tpl-c .tool-7 { background: linear-gradient(135deg, #14b8a6, #0f766e); }
+.tpl-c .tool-8 { background: linear-gradient(135deg, #6366f1, #4338ca); }
+.tpl-c .chip.usb { color: #0b7d5a; background: #e3f7ee; border-color: #bfe9d5; }
+.tpl-c .chip.wifi { color: #1f4fc4; background: #e7efff; border-color: #c8d9fb; }
+
+/* ---------- D 极简留白：细线、无阴影、字重层次 ---------- */
+.tpl-d {
+  --bg: #fff; --surface: #fff; --surface-2: #fafafa; --text: #16181d; --muted: #7c828d;
+  --line: #ececee; --accent: #2e6be6; --accent-ink: #2e6be6; --accent-soft: #f3f6fd;
+  --ok: #2f9e63; --wifi: #2e6be6; --warn: #c57b16; --off: #a8adb6;
+  --radius: 6px; --radius-sm: 6px; --shadow: none;
+}
+.tpl-d .app { border: 1px solid #ececee; grid-template-columns: 214px minmax(0,1fr); }
+.tpl-d .app__top { border-bottom: 1px solid #eee; }
+.tpl-d .device, .tpl-d .tool, .tpl-d .foot-card { border-radius: 6px; box-shadow: none; }
+.tpl-d .device.is-active { border-color: #c9d8f5; background: #fbfcff; }
+.tpl-d .device.is-active::before { width: 2px; background: #2e6be6; }
+.tpl-d .tool { min-height: 96px; padding: 14px 13px; border-color: #eeeeef; }
+.tpl-d .tool-icon { width: 30px; height: 30px; background: #f5f7fb; border-radius: 6px; color: #4c5561; }
+.tpl-d .tool.primary { background: #16181d; border-color: #16181d; }
+.tpl-d .tool.primary .tool-icon { background: rgba(255,255,255,.14); color: #fff; }
+.tpl-d .tool h4 { font-weight: 650; }
+.tpl-d .tool p { font-size: 10.5px; }
+.tpl-d .section-head { margin-top: 28px; }
+.tpl-d .top-stats span { border: 0; background: #fafafa; }
+.tpl-d .side-privacy { background: #fafafa; border: 0; }
+
+/* ---------- E 玻璃 HUD：毛玻璃、渐变光斑、悬浮层次 ---------- */
+.tpl-e {
+  --bg: #dfe7f4; --surface: rgba(255,255,255,.66); --surface-2: rgba(255,255,255,.42);
+  --text: #17233c; --muted: #5b6b86; --line: rgba(255,255,255,.6);
+  --accent: #3b6fe0; --accent-ink: #1f4fc4; --accent-soft: rgba(59,111,224,.12);
+  --radius: 18px; --radius-sm: 12px; --shadow: 0 24px 60px rgba(35, 60, 110, .22);
+}
+.tpl-e .app {
+  background:
+    radial-gradient(900px 460px at 8% -6%, rgba(85,140,255,.42), transparent 62%),
+    radial-gradient(760px 420px at 96% 4%, rgba(160,110,240,.28), transparent 60%),
+    linear-gradient(155deg, #e8eefb 0%, #d6e0f2 52%, #e5e9f6 100%);
+}
+.tpl-e .app__top, .tpl-e .app__side, .tpl-e .tool, .tpl-e .foot-card, .tpl-e .device {
+  backdrop-filter: blur(20px) saturate(1.35); -webkit-backdrop-filter: blur(20px) saturate(1.35);
+  border: 1px solid rgba(255,255,255,.62);
+}
+.tpl-e .app__top { background: rgba(255,255,255,.52); }
+.tpl-e .app__side { background: rgba(255,255,255,.4); }
+.tpl-e .device.is-active { background: rgba(59,111,224,.14); border-color: rgba(59,111,224,.5); }
+.tpl-e .tool { min-height: 116px; background: rgba(255,255,255,.55); }
+.tpl-e .tool.primary { background: linear-gradient(135deg, rgba(59,111,224,.95), rgba(31,79,196,.9)); border-color: rgba(255,255,255,.4); color: #fff; }
+.tpl-e .tool-icon { background: rgba(255,255,255,.62); border: 1px solid rgba(255,255,255,.7); }
+.tpl-e .top-stats span { background: rgba(255,255,255,.5); border: 1px solid rgba(255,255,255,.65); }
+
+/* ==================== 补齐 19 个功能页：沿用各套变量，视觉自动跟随 ==================== */
+[hidden] { display: none !important; }
+.app__side { max-block-size: 100%; }
+.nav-group { margin: 16px 2px 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; }
+.nav-item { display: flex; align-items: center; gap: 8px; inline-size: 100%; padding: 7px 9px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; }
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item.is-active { background: var(--accent-soft); color: var(--accent-ink); font-weight: 700; }
+.nav-item small { margin-inline-start: auto; font-size: 10px; opacity: .72; }
+.view { display: grid; gap: 14px; align-content: start; }
+.page-card { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.page-card > h4 { font-size: 12.5px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 7px; }
+.page-card > p { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.data-table { inline-size: 100%; border-collapse: collapse; font-size: 11.5px; }
+.data-table th { padding: 8px 9px; text-align: left; font-size: 10.5px; font-weight: 650; color: var(--muted); border-bottom: 1px solid var(--line); }
+.data-table td { padding: 9px; border-bottom: 1px solid var(--line); color: var(--text); }
+.data-table tr:last-child td { border-bottom: 0; }
+.data-table b { font-weight: 700; }
+.data-table small { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); }
+.kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 9px; }
+.kv { padding: 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.kv b { display: block; font-size: 12px; }
+.kv span { display: block; margin-top: 4px; font-size: 10.5px; color: var(--muted); line-height: 1.5; }
+.bar { inline-size: 100%; block-size: 5px; margin-top: 8px; border-radius: 5px; background: color-mix(in srgb, var(--muted) 20%, transparent); overflow: hidden; }
+.bar i { display: block; inline-size: var(--p); block-size: 100%; border-radius: inherit; background: var(--accent); }
+.action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.action-row button { min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 11.5px; font-weight: 650; cursor: pointer; }
+.action-row button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.note { padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line)); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; line-height: 1.6; }
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
+.shot { aspect-ratio: 3 / 4; padding: 6px; border-radius: 8px; border: 1px solid var(--line); display: grid; align-content: end; font-size: 9.5px; color: var(--muted); background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 24%, #fff), #f6e4d7); }
+.shot:nth-child(even) { background: linear-gradient(160deg, #d9f2e7, #e9e6ff); }
+.steps { display: grid; gap: 7px; counter-reset: step; }
+.steps p { position: relative; padding-inline-start: 26px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.steps p::before { counter-increment: step; content: counter(step); position: absolute; inset-inline-start: 0; inset-block-start: 0; display: grid; place-items: center; inline-size: 19px; block-size: 19px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-ink); font-size: 9.5px; font-weight: 700; }
+.page-card details { border-bottom: 1px solid var(--line); }
+.page-card details:last-child { border-bottom: 0; }
+.page-card summary { padding: 9px 0; font-size: 12px; font-weight: 650; cursor: pointer; }
+.page-card details p { padding-bottom: 9px; }
+.phone-mock { inline-size: 92px; aspect-ratio: 9 / 16; justify-self: center; padding: 5px; border: 4px solid color-mix(in srgb, var(--muted) 65%, #000); border-radius: 13px; background: linear-gradient(165deg, color-mix(in srgb, var(--accent) 32%, #fff), #f8d9c4); }
+.phone-mock i { display: block; inline-size: 16px; block-size: 3px; margin: 3px auto 5px; border-radius: 3px; background: color-mix(in srgb, var(--muted) 65%, #000); }
+.phone-mock span { display: block; block-size: 11px; margin-block: 4px; border-radius: 4px; background: rgba(255,255,255,.65); }
+/* C：功能页卡片沿用彩色磁贴语义色 */
+.tpl-c .page-card { color: #fff; border: 0; }
+.tpl-c .page-card > p, .tpl-c .page-card details p { color: rgba(255,255,255,.86); }
+.tpl-c .note, .tpl-c .page-card .note { background: rgba(46,107,230,.14); color: #1f4fc4; border-color: rgba(46,107,230,.32); }
+.tpl-c .data-table th, .tpl-c .data-table td, .tpl-c .data-table small { color: rgba(255,255,255,.9); border-color: rgba(255,255,255,.22); }
+.tpl-c .kv { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.25); }
+.tpl-c .kv span { color: rgba(255,255,255,.82); }
+.tpl-c .tone-1 { background: linear-gradient(135deg, #2e6be6, #1f4fc4); }
+.tpl-c .tone-2 { background: linear-gradient(135deg, #10a5a0, #0b7d7a); }
+.tpl-c .tone-3 { background: linear-gradient(135deg, #a855f7, #7c3aed); }
+.tpl-c .tone-4 { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.tpl-c .tone-5 { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+.tpl-c .tone-6 { background: linear-gradient(135deg, #0ea5e9, #0369a1); }
+.tpl-c .tone-7 { background: linear-gradient(135deg, #14b8a6, #0f766e); }
+.tpl-c .tone-8 { background: linear-gradient(135deg, #6366f1, #4338ca); }
+/* E：玻璃卡片 */
+.tpl-e .page-card, .tpl-e .kv { backdrop-filter: blur(20px) saturate(1.35); -webkit-backdrop-filter: blur(20px) saturate(1.35); border: 1px solid rgba(255,255,255,.62); background: var(--surface); }
+/* D：功能页去阴影、细线 */
+.tpl-d .page-card, .tpl-d .kv { box-shadow: none; }
+/* 小屏保护：模板本身是桌面应用 mockup，保持最小宽度并由外层横向滚动 */
+@media (max-width: 900px) { .app { grid-template-columns: 190px minmax(0,1fr); } }
+</style>
+</head>
+<body>
+
+<!-- 共用图标库：内联 SVG symbol，避免外部依赖 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-mirror" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M9 9l3-2 3 2-3 2z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></symbol>
+  <symbol id="i-apps" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6z"/><path d="M10 19h4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-bell-s" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6z"/><path d="M10 19h4"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4M5 20h14"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 6l3 3"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></symbol>
+</svg>
+
+<div class="viewer-head">
+  <h1>MirrorDock 手机助手 · 5 套 UI 模板</h1>
+  <p>5 套视觉皮肤已各自补齐 <b>19 个真实可切功能页</b>（设备中心 / 连接授权 / 镜像 / 截图 / 录像 / 文件 / 应用 / 相册 / 通知 / 设备信息 / 批量安装 / 投屏 / 键位 / 定时 / 回放 / 多端 / 设置 / 帮助 / Pro）。功能骨架相同，仅视觉语言与信息密度不同——请按你预期的用户气质挑一套。</p>
+  <p class="meta">基于《手机助手升级调研报告》F1–F12 功能规划 · 2026-11-24 · 点左侧「功能导航」或首页工具卡可切页 · 本页为设计提案，未改任何产品代码</p>
+</div>
+
+<div class="switcher" role="tablist" aria-label="UI 方案切换">
+  <button role="tab" aria-selected="true" data-tpl="a"><b>A · 云鲸桌台</b><small>柔和浅色 · 稳妥大众化</small></button>
+  <button role="tab" aria-selected="false" data-tpl="b"><b>B · 深空控制台</b><small>深色高对比 · 专业极客</small></button>
+  <button role="tab" aria-selected="false" data-tpl="c"><b>C · 彩色磁贴</b><small>大色块 · 手机助手感最强</small></button>
+  <button role="tab" aria-selected="false" data-tpl="d"><b>D · 极简留白</b><small>细线无阴影 · 高级克制</small></button>
+  <button role="tab" aria-selected="false" data-tpl="e"><b>E · 玻璃 HUD</b><small>毛玻璃光斑 · 视觉冲击</small></button>
+</div>
+
+<main id="panels"><!-- 由脚本注入 5 套完整界面 --></main>
+
+<section class="compare">
+  <h2>怎么选（我的建议）</h2>
+  <table>
+    <thead><tr><th>维度</th><th>A 云鲸桌台</th><th>B 深空控制台</th><th>C 彩色磁贴</th><th>D 极简留白</th><th>E 玻璃 HUD</th></tr></thead>
+    <tbody>
+      <tr><td>气质</td><td>亲和、可信</td><td>专业、效率</td><td>活泼、消费级</td><td>克制、高级</td><td>新潮、鲜明</td></tr>
+      <tr><td>与现有品牌</td><td class="pick">最连贯（#2e6be6 + 白卡）</td><td>需重定深色规范</td><td>主色保留但更花</td><td>主色弱化</td><td>主色保留、需光斑</td></tr>
+      <tr><td>长时使用</td><td>舒适</td><td class="pick">暗环境最舒适</td><td>色彩刺激偏高</td><td>舒适</td><td>一般（背景复杂）</td></tr>
+      <tr><td>实现成本</td><td class="pick">低（现有基础加圆角阴影）</td><td>中（变量化 + 深色校验）</td><td>低（纯 CSS 渐变）</td><td>中（重排信息密度）</td><td>高（模糊层性能/降级）</td></tr>
+      <tr><td>适合谁</td><td>大众用户、ToDesk 心智</td><td>开发者、长时间投屏</td><td>年轻用户、强调"助手"</td><td>追求质感、内容优先</td><td>想要差异化观感</td></tr>
+      <tr><td>主要风险</td><td>辨识度一般</td><td>与现有浅色割裂</td><td>易显廉价</td><td>功能入口不够醒目</td><td>低配机卡顿、可读性</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:12px;font-size:12.5px;color:#5d6775;line-height:1.7">
+    <b style="color:#1f4fc4">推荐 A</b>：它延续现有 #2e6be6 品牌与 ToDesk 式分栏，改动最小、用户学习成本最低，且把"设备中心"这件事讲得最清楚（设备卡与工具宫格层级分明）。
+    若你想强化"专业控制"定位选 B；若目标是让普通用户一眼觉得"这是手机助手"选 C。D 更适合做设置页而非主界面，E 建议只用于启动页/关于页，不做常驻工作台。
+  </p>
+</section>
+
+<script>
+/* ============ 功能数据：19 个真实功能页，5 套视觉皮肤共用 ============ */
+const DEVICES = [
+  { name: "小狸", model: "Redmi K40 · M2104K10AC", os: "Android 13", channel: "USB", cls: "usb", state: "ready", battery: 78, storage: "64 / 128 GB", last: "刚刚镜像过" },
+  { name: "平板", model: "小米平板 5", os: "Android 12", channel: "无线", cls: "wifi", state: "wifi", battery: 52, storage: "128 / 256 GB", last: "2 小时前" },
+  { name: "备用机", model: "Pixel 6", os: "Android 14", channel: "离线", cls: "off", state: "off", battery: 31, storage: "—", last: "昨天" }
+];
+const TOOLS = [
+  { id: "mirror", name: "镜像与控制", desc: "画面 · 键鼠直输 · 画质预设", icon: "i-mirror", primary: true },
+  { id: "shot", name: "截图", desc: "保存到本机，可标注", icon: "i-camera" },
+  { id: "record", name: "录像", desc: "Pro · 手动启停", icon: "i-video" },
+  { id: "files", name: "文件传输", desc: "双向传输 · MirrorDock 目录", icon: "i-folder" },
+  { id: "apps", name: "应用管理", desc: "列表 / 卸载 / 导出清单", icon: "i-apps", isNew: true },
+  { id: "album", name: "相册", desc: "缩略图流 · 批量取回", icon: "i-image", isNew: true },
+  { id: "notify", name: "通知中心", desc: "实时镜像 · 按应用筛选", icon: "i-bell" },
+  { id: "info", name: "设备信息", desc: "只读诊断摘要 · 一键复制", icon: "i-info", isNew: true }
+];
+const NOTES = {
+  a: ["沿用现有 #2e6be6 主色与白卡分栏", "大圆角 + 轻阴影拉开层级", "19 个功能页均可切换"],
+  b: ["深色底 + 亮蓝强调，等宽字体承载数据", "信息密度最高，一屏看清全部状态", "需重做深色模式对比度与品牌规范"],
+  c: ["8 项工具做成彩色大磁贴", "最像『手机助手』，但色彩偏多", "功能页卡片沿用语义色"],
+  d: ["细线分隔、取消阴影、字重分层", "最符合『内容优先、减少噪音』", "功能入口偏弱，适合配合快捷键"],
+  e: ["毛玻璃 + 渐变光斑 + 半透明描边", "观感最鲜明，适合做展示物料", " backdrop-filter 在低配机有性能成本"]
+};
+
+const VIEWS = {
+  home: { title: "设备中心", sub: "3 台设备 · 2 在线 · 刚刚镜像过", action: "＋ 添加设备", sections: [
+    { t: "devices" }, { t: "tools" },
+    { t: "table", title: "最近任务", tone: 2, cols: ["任务", "状态", "时间"], rows: [["AfterServiceApp-v0.3.0.apk 已安装到小狸", "已安装", "10:24"], ["截图_20261124_1432.png 已保存", "已完成", "09:58"], ["DCIM/2026-11 · 12 张照片取回中", "进行中", "09:31"]] },
+    { t: "note", text: "安全边界：无需账号、数据不出本机；镜像、传输、卸载都需设备显式授权。" }
+  ] },
+  connect: { title: "连接与授权", sub: "USB / 无线 ADB / 扫码配对", action: "＋ 添加设备", sections: [
+    { t: "table", title: "连接通道", tone: 2, cols: ["通道", "状态", "适用", "操作"], rows: [["USB 直连", "已授权 · 小狸", "稳定镜像 / 传输", "断开"], ["无线 ADB", "待重新授权 · 平板", "同局域网", "重新授权"], ["扫码配对", "未启用 · Pro", "无同网环境", "查看 Pro"]] },
+    { t: "steps", title: "首次连接步骤", tone: 3, items: ["开启手机开发者选项与 USB 调试。", "用数据线连接，手机上点『始终允许』。", "设备卡显示绿点后即可镜像与传输。"] },
+    { t: "note", text: "授权可随时在手机端撤销；撤销后客户端立即显示离线，不保留静默通道。蓝牙不在支持范围内。" }
+  ] },
+  mirror: { title: "镜像控制", sub: "小狸 · 1080 × 2400 · 60 fps · 38 ms", action: "开始镜像", sections: [
+    { t: "phone", title: "实时画面 · 小狸", tone: 1 },
+    { t: "kv", title: "会话参数", tone: 2, items: [["延迟", "38 ms · USB 直连"], ["画质", "高清 / 流畅 / 演示三档"], ["键鼠直输", "UHID，无需手机输入法"], ["桌面模式", "按设备记忆，插拔后恢复"]] },
+    { t: "actions", tone: 4, items: [{ label: "开始镜像", primary: true }, { label: "暂停" }, { label: "旋转" }, { label: "停止" }] }
+  ] },
+  present: { title: "投屏演示", sub: "产品评审 11-24 · 12 页", action: "开始放映", sections: [
+    { t: "table", title: "演示文稿", tone: 3, cols: ["文稿", "页数", "状态"], rows: [["产品评审 11-24", "12 页", "进行中"], ["客户演示稿", "8 页", "已保存"]] },
+    { t: "actions", tone: 3, items: [{ label: "开始放映", primary: true }, { label: "激光笔" }, { label: "白板标注" }, { label: "下一页" }] },
+    { t: "note", text: "投屏画面只在本机渲染；标注图层可导出为 PNG，不写入手机相册。" }
+  ] },
+  keymap: { title: "按键映射", sub: "默认桌面 · 12 条键位", action: "＋ 新建方案", sections: [
+    { t: "table", title: "键位方案", tone: 6, cols: ["手机操作", "键盘", "方案"], rows: [["返回", "Esc", "全局"], ["主页", "H", "全局"], ["多任务", "Tab", "全局"], ["技能 1", "Q", "游戏 · 射击"]] },
+    { t: "actions", tone: 6, items: [{ label: "新建方案", primary: true }, { label: "导入配置" }, { label: "导出配置" }] }
+  ] },
+  schedule: { title: "定时录制", sub: "计划任务 2 · 启用 1", action: "＋ 新建计划", sections: [
+    { t: "table", title: "计划任务", tone: 4, cols: ["任务", "触发", "动作", "状态"], rows: [["早间录屏", "每天 08:30", "录制 10 分钟", "启用"], ["夜间备份", "每天 23:00", "取回 DCIM", "暂停"]] },
+    { t: "actions", tone: 4, items: [{ label: "新建计划", primary: true }, { label: "执行日志" }] },
+    { t: "note", text: "定时任务需设备在线；手机端仍会弹出授权确认，不会后台静默拉起。" }
+  ] },
+  replay: { title: "操作回放", sub: "回放库 2 段 · 默认禁用", action: "＋ 新建录制", sections: [
+    { t: "table", title: "回放库", tone: 8, cols: ["录制", "设备", "时长", "操作"], rows: [["11-24 安装流程", "小狸", "01:42", "播放"], ["11-22 回归录制", "平板", "03:18", "播放"]] },
+    { t: "note", text: "默认禁用操作回放；开启需二次确认，回放文件只保存在本机，不上传。" }
+  ] },
+  files: { title: "文件传输", sub: "小狸 / Download · 28 项", action: "取回到电脑", sections: [
+    { t: "table", title: "Download", tone: 2, cols: ["名称", "大小", "修改日期", "状态"], rows: [["AfterServiceApp-v0.3.0.apk", "18.4 MB", "11-24 10:20", "可安装"], ["日志截图_1123.png", "2.1 MB", "11-23 18:04", "可取回"], ["MirrorDock（文件夹 · 9 项）", "—", "11-22 09:12", "—"], ["recording_1122.mp4", "86.7 MB", "11-22 21:36", "可取回"]] },
+    { t: "actions", tone: 2, items: [{ label: "取回到电脑", primary: true }, { label: "选择 APK", view: "install" }, { label: "新建文件夹" }] },
+    { t: "note", text: "文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不伪装成『没有文件』。" }
+  ] },
+  shot: { title: "截图", sub: "本机截图集 · 6 张", action: "立即截图", sections: [
+    { t: "shots", title: "最近截图", tone: 5, items: ["11-24 14:12", "11-24 11:37", "11-23 20:15", "11-23 18:04", "11-22 09:12", "11-21 16:48"] },
+    { t: "actions", tone: 5, items: [{ label: "立即截图", primary: true }, { label: "打开目录" }] },
+    { t: "note", text: "截图默认保存到本机 MirrorDock 目录，可标注后复用；不自动上传。" }
+  ] },
+  record: { title: "录像", sub: "本机 Recordings · 7 段", action: "● 开始录像", sections: [
+    { t: "table", title: "录制参数", tone: 5, cols: ["项", "值"], rows: [["保存位置", "本机 MirrorDock / Recordings"], ["最高规格", "1080 × 2400 · 60 fps"], ["默认时长", "不限制 · 手动停止"]] },
+    { t: "actions", tone: 5, items: [{ label: "开始录像", primary: true }, { label: "定时录制", view: "schedule" }] },
+    { t: "note", text: "录像是 Pro 功能；不默认云录制，不读取手机本地录像文件。" }
+  ] },
+  album: { title: "相册", sub: "小狸 / DCIM/Camera · 412 张", action: "取回所选", sections: [
+    { t: "shots", title: "DCIM / Camera · 按日期分组", tone: 7, items: ["11-24 14:02", "11-24 11:37", "11-23 20:15", "11-23 18:04", "11-22 09:12", "11-21 16:48", "11-20 08:21", "11-19 19:05"] },
+    { t: "actions", tone: 7, items: [{ label: "取回所选", primary: true }, { label: "按日期建文件夹" }] }
+  ] },
+  install: { title: "批量安装", sub: "安装队列 2 · 1 等待确认", action: "＋ 选择 APK", sections: [
+    { t: "table", title: "安装队列", tone: 4, cols: ["安装包", "目标设备", "状态", "操作"], rows: [["AfterServiceApp-v0.3.0.apk", "小狸", "已完成 10:24", "结果"], ["companion-v0.4.27.apk", "平板", "等待设备确认", "取消"]] },
+    { t: "actions", tone: 4, items: [{ label: "选择 APK", primary: true }, { label: "批量安装" }] },
+    { t: "note", text: "支持拖拽 APK 到窗口安装；每台设备都需在手机上逐次确认，不做静默安装。" }
+  ] },
+  apps: { title: "应用管理", sub: "用户应用 63 · 系统应用 41", action: "导出清单", sections: [
+    { t: "table", title: "已安装应用（只读）", tone: 1, cols: ["应用", "分区", "占用", "操作"], rows: [["com.mirrordock.companion · MirrorDock 伴侣", "用户", "24.6 MB", "导出"], ["com.tencent.mm · 微信", "用户", "412 MB", "卸载"], ["com.android.chrome · Chrome", "用户", "168 MB", "卸载"]] },
+    { t: "actions", tone: 1, items: [{ label: "导出清单", primary: true }, { label: "安装 APK", view: "install" }] },
+    { t: "note", text: "只读列出已安装应用；卸载需逐次设备端确认，不读取应用数据。" }
+  ] },
+  notify: { title: "通知中心", sub: "2 条未读 · 默认不持久化正文", action: "全部标为已读", sections: [
+    { t: "table", title: "实时镜像通知", tone: 3, cols: ["来源", "内容", "时间"], rows: [["微信", "张工：日志我看到了，晚点同步结论", "14:32"], ["系统更新", "安全补丁可下载", "13:05"], ["MirrorDock", "APK 安装完成", "10:24"]] },
+    { t: "actions", tone: 3, items: [{ label: "全部标为已读", primary: true }, { label: "刷新" }] },
+    { t: "note", text: "通知正文默认不持久化；开启持久化属于显式选择，可在设置里随时关闭。" }
+  ] },
+  info: { title: "设备信息", sub: "小狸 · 只读诊断摘要", action: "复制诊断摘要", sections: [
+    { t: "kv", title: "只读信息", tone: 6, items: [["型号", "M2104K10AC"], ["系统", "Android 13"], ["分辨率", "1080 × 2400"], ["存储", "64 / 128 GB"], ["电量", "78% · USB 直连"]] },
+    { t: "actions", tone: 6, items: [{ label: "复制诊断摘要", primary: true }, { label: "查看 adb 日志" }] }
+  ] },
+  multi: { title: "多端", sub: "设备组 2 · 在线 3", action: "＋ 新建组", sections: [
+    { t: "table", title: "设备组", tone: 8, cols: ["组", "设备", "同步内容"], rows: [["我的设备", "小狸 / 平板 / 备用机", "设置 · 设备分组"], ["演示机组", "4 台（2 在线）", "投屏 · 安装队列"]] },
+    { t: "actions", tone: 8, items: [{ label: "新建组", primary: true }, { label: "批量操作" }] },
+    { t: "note", text: "多端同步只涉及本机配置，不经云端；设备间不互传文件。" }
+  ] },
+  settings: { title: "设置", sub: "通用 · 镜像 · 传输 · 隐私", action: "导出配置", sections: [
+    { t: "table", title: "通用与隐私", tone: 4, cols: ["设置项", "当前值", "说明"], rows: [["开机自启", "开启", "随系统登录"], ["通知持久化", "关闭", "默认关"], ["操作回放", "关闭", "需二次确认"], ["更新检查", "开启", "仅校验签名包"]] },
+    { t: "actions", tone: 4, items: [{ label: "导出配置", primary: true }, { label: "导入配置" }, { label: "恢复默认" }] }
+  ] },
+  help: { title: "帮助中心", sub: "12 篇 · 默认折叠", action: "展开全部", sections: [
+    { t: "details", title: "常见问题", tone: 2, items: [["如何连接第一台设备？", "开启 USB 调试并授权，设备卡变绿即可镜像。"], ["无线 ADB 总是掉线怎么办？", "优先 USB；无线依赖路由器多播与设备休眠策略。"], ["APK 拖拽安装安全吗？", "仅本机解析，推送后仍需手机逐次确认。"], ["开机自启后白屏？", "升级到 0.4.27 或更新版本，客户端会自动修复自启路径。"]] },
+    { t: "note", text: "默认折叠、点击标题展开；不读取短信正文，不做远程清除。" }
+  ] },
+  pro: { title: "Pro / 激活", sub: "当前状态 · 免费版", action: "输入激活码", sections: [
+    { t: "kv", title: "Pro 权益", tone: 3, items: [["录像与定时录制", "本机保存，不云录制"], ["操作回放", "默认禁用，可显式开启"], ["批量安装与扫码配对", "多设备队列 / 无同网环境"]] },
+    { t: "actions", tone: 3, items: [{ label: "输入激活码", primary: true }, { label: "查看全部权益" }] },
+    { t: "note", text: "激活只在本机校验，不需要账号；未激活时核心镜像与传输保持免费可用。" }
+  ] }
+};
+
+const GROUPS = [
+  { name: "设备", ids: ["home", "connect", "info", "multi"] },
+  { name: "镜像与会话", ids: ["mirror", "present", "keymap", "schedule", "replay"] },
+  { name: "内容与传输", ids: ["files", "shot", "record", "album", "install", "apps"] },
+  { name: "系统", ids: ["notify", "settings", "help", "pro"] }
+];
+
+const icon = (id, cls = "") => `<svg class="icon ${cls}" aria-hidden="true"><use href="#${id}"/></svg>`;
+
+function deviceCard(d, active) {
+  return `<article class="device${active ? " is-active" : ""}" data-device="${d.name}" tabindex="0" aria-label="${d.name}，${d.state === "ready" ? "USB 已连接" : d.state === "wifi" ? "无线已连接" : "离线"}">
+    <div class="device-head"><span class="state-dot ${d.state === "ready" ? "" : d.state}"></span><h4>${d.name}</h4><span class="chip ${d.cls}">${d.channel}</span></div>
+    <p>${d.model}</p>
+    <div class="device-meta"><span class="meter${d.battery < 40 ? " low" : ""}"><i style="width:${d.battery}%"></i></span><span>${d.battery}%</span><span>·</span><span>${d.storage}</span></div>
+    <p>${d.last}</p>
+  </article>`;
+}
+
+function toolCard(t, idx) {
+  const cls = ["tool", t.primary ? "primary" : "", "tool-" + (idx + 1)].filter(Boolean).join(" ");
+  return `<article class="${cls}" data-view="${t.id}" tabindex="0" role="button">
+    ${t.isNew ? '<span class="new">新</span>' : ""}
+    <span class="tool-icon">${icon(t.icon, t.primary ? "lg" : "")}</span>
+    <h4>${t.name}</h4><p>${t.desc}</p>
+  </article>`;
+}
+
+function renderSection(section) {
+  const tone = section.tone ? ` tone-${section.tone}` : "";
+  const head = section.title ? `<h4>${section.title}</h4>` : "";
+  if (section.t === "devices") return `<div class="device-list">${DEVICES.map((d, i) => deviceCard(d, i === 0)).join("")}</div>`;
+  if (section.t === "tools") return `<div class="section-head" style="margin:0"><h3>常用工具</h3><span>当前设备可用 · 8 项</span></div><div class="tool-grid">${TOOLS.map((t, i) => toolCard(t, i)).join("")}</div>`;
+  if (section.t === "table") return `<div class="page-card${tone}">${head}<table class="data-table"><thead><tr>${section.cols.map(c => `<th scope="col">${c}</th>`).join("")}</tr></thead><tbody>${section.rows.map(r => `<tr>${r.map((cell, i) => `<td>${i === 0 ? `<b>${cell}</b>` : cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  if (section.t === "kv") return `<div class="page-card${tone}">${head}<div class="kv-grid">${section.items.map(([k, v]) => `<div class="kv"><b>${k}</b><span>${v}</span></div>`).join("")}</div></div>`;
+  if (section.t === "actions") return `<div class="action-row">${section.items.map(a => `<button type="button" class="${a.primary ? "primary" : ""}"${a.view ? ` data-view="${a.view}"` : ` data-toast="原型演示：${a.label}"`}>${a.label}</button>`).join("")}</div>`;
+  if (section.t === "note") return `<p class="note">${section.text}</p>`;
+  if (section.t === "shots") return `<div class="page-card${tone}">${head}<div class="shots">${section.items.map(s => `<i class="shot">${s}</i>`).join("")}</div></div>`;
+  if (section.t === "steps") return `<div class="page-card${tone}">${head}<div class="steps">${section.items.map(s => `<p>${s}</p>`).join("")}</div></div>`;
+  if (section.t === "details") return `<div class="page-card${tone}">${head}${section.items.map(([q, a]) => `<details><summary>${q}</summary><p>${a}</p></details>`).join("")}</div>`;
+  if (section.t === "phone") return `<div class="page-card${tone}">${head}<div class="phone-mock" aria-hidden="true"><i></i><span></span><span></span><span></span></div></div>`;
+  return "";
+}
+
+function navGroups(active) {
+  return GROUPS.map(g => `<p class="nav-group">${g.name}</p>${g.ids.map(id => `<button type="button" class="nav-item${id === active ? " is-active" : ""}" data-view="${id}">${VIEWS[id].title}<small>${id === "home" ? "3" : "→"}</small></button>`).join("")}`).join("");
+}
+
+function viewPages() {
+  return Object.keys(VIEWS).map(id => `<section class="view" data-view="${id}"${id === "home" ? "" : " hidden"}>${VIEWS[id].sections.map(renderSection).join("")}</section>`).join("");
+}
+
+function renderApp(tpl, label) {
+  const note = NOTES[tpl].map(t => `<span>· ${t}</span>`).join("");
+  return `<section class="panel${tpl === "a" ? " active" : ""}" id="tpl-${tpl}" role="tabpanel" aria-label="${label}">
+    <div class="panel-note"><b>${label}</b>${note}</div>
+    <div class="app tpl-${tpl}" data-current-device="小狸">
+      <header class="app__top">
+        <div class="brand"><span class="brand-mark">M</span><span>MirrorDock</span></div>
+        <div class="top-stats"><span><b>3</b> 台设备</span><span><b>2</b> 在线</span><span>USB 优先</span></div>
+        <div class="top-spacer"></div>
+        <div class="top-actions">
+          <button class="icon-btn" aria-label="搜索设备" data-toast="原型演示：搜索">${icon("i-search", "sm")}</button>
+          <button class="icon-btn" aria-label="通知，2 条未读" data-view="notify">${icon("i-bell-s", "sm")}<span class="dot-badge">2</span></button>
+          <button class="icon-btn" aria-label="设置" data-view="settings">${icon("i-set", "sm")}</button>
+        </div>
+      </header>
+
+      <aside class="app__side" aria-label="设备与功能导航">
+        <div class="side-title"><span>我的设备</span><button data-toast="原型演示：添加设备">+ 添加</button></div>
+        <div class="device-list">${DEVICES.map((d, i) => deviceCard(d, i === 0)).join("")}</div>
+        <button class="add-device" data-view="connect">${icon("i-plus", "sm")} 添加设备</button>
+        <div class="side-sep"></div>
+        <div class="side-title"><span>功能导航</span><span>19 页</span></div>
+        ${navGroups("home")}
+        <div class="side-sep"></div>
+        <div class="side-title"><span>最近会话</span></div>
+        <div class="recent">
+          <p><span class="state-dot"></span>小狸 · 2 小时前</p>
+          <p><span class="state-dot wifi"></span>平板 · 昨日</p>
+          <p><span class="state-dot off"></span>备用机 · 3 天前</p>
+        </div>
+        <div class="side-privacy"><b>${icon("i-shield", "sm")} 仅在本机连接</b>无需账号，数据不出本机；镜像与传输均需设备显式授权。</div>
+      </aside>
+
+      <div class="app__main">
+        <div class="dev-hero">
+          <div><h2 class="view-title">设备中心</h2><div class="sub view-sub">3 台设备 · 2 在线 · 刚刚镜像过</div></div>
+          <div class="hero-actions">
+            <button class="btn-ghost" data-view="info">${icon("i-info", "sm")} 设备信息</button>
+            <button class="btn-primary view-action" data-toast="原型演示：添加设备">＋ 添加设备</button>
+          </div>
+        </div>
+        <div class="section-head"><h3>页面内容</h3><span>点击左侧功能导航或工具卡切换</span></div>
+        ${viewPages()}
+      </div>
+
+      <div class="app__foot">
+        <div class="foot-grid">
+          <article class="foot-card">
+            <h4>${icon("i-clock", "sm")} 传输与任务</h4>
+            <p>AfterServiceApp-v0.3.0.apk <span class="tag">已安装</span></p>
+            <p>截图_20261124_1432.png <span class="tag">已完成</span></p>
+          </article>
+          <article class="foot-card">
+            <h4>${icon("i-bell-s", "sm")} 最近通知 <a style="margin-inline-start:auto;font-size:11px;color:var(--accent);text-decoration:none;cursor:pointer" data-view="notify">查看全部 ›</a></h4>
+            <p><b>微信</b> 张工：日志我看到了 <span>14:32</span></p>
+            <p><b>系统更新</b> 安全补丁可下载 <span>13:05</span></p>
+          </article>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
+const LABELS = {
+  a: "方案 A · 云鲸桌台（推荐）",
+  b: "方案 B · 深空控制台",
+  c: "方案 C · 彩色磁贴",
+  d: "方案 D · 极简留白",
+  e: "方案 E · 玻璃 HUD"
+};
+document.getElementById("panels").innerHTML = Object.keys(LABELS).map(k => renderApp(k, LABELS[k])).join("");
+
+/* 切换器：只切换面板可见性，不重建 DOM */
+const tabs = Array.from(document.querySelectorAll(".switcher [role=tab]"));
+const panels = Array.from(document.querySelectorAll(".panel"));
+tabs.forEach(tab => tab.addEventListener("click", () => {
+  const key = tab.dataset.tpl;
+  tabs.forEach(t => t.setAttribute("aria-selected", String(t === tab)));
+  panels.forEach(p => p.classList.toggle("active", p.id === "tpl-" + key));
+}));
+
+const toast = document.createElement("div");
+toast.setAttribute("role", "status");
+toast.style.cssText = "position:fixed;inset-inline:50% auto;inset-block-end:26px;transform:translateX(-50%);padding:10px 16px;border-radius:10px;background:#1c2430;color:#fff;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:99";
+document.body.appendChild(toast);
+let toastTimer;
+function showToast(message) {
+  toast.textContent = message;
+  toast.style.opacity = "1";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.style.opacity = "0"; }, 1800);
+}
+
+function switchView(app, id) {
+  const meta = VIEWS[id];
+  if (!meta) return;
+  app.querySelectorAll(".view").forEach(section => { section.hidden = section.dataset.view !== id; });
+  app.querySelectorAll(".nav-item").forEach(button => button.classList.toggle("is-active", button.dataset.view === id));
+  app.querySelector(".view-title").textContent = meta.title;
+  app.querySelector(".view-sub").textContent = meta.sub;
+  const action = app.querySelector(".view-action");
+  action.textContent = meta.action;
+  action.setAttribute("data-toast", "原型演示：" + meta.action);
+}
+
+document.addEventListener("click", event => {
+  const viewButton = event.target.closest("[data-view]");
+  if (viewButton) switchView(viewButton.closest(".app"), viewButton.dataset.view);
+  const action = event.target.closest("[data-toast]");
+  if (action) showToast(action.getAttribute("data-toast"));
+  const device = event.target.closest("[data-device]");
+  if (device) {
+    const app = device.closest(".app");
+    app.querySelectorAll("[data-device]").forEach(card => card.classList.toggle("is-active", card === device));
+    app.dataset.currentDevice = device.dataset.device;
+    showToast("已切换设备：" + device.dataset.device);
+  }
+});
+
+/* 工具卡用键盘也能打开 */
+document.addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const target = event.target.closest("[data-view][tabindex]");
+  if (target) { event.preventDefault(); switchView(target.closest(".app"), target.dataset.view); }
+});
+</script>
+</body>
+</html>
