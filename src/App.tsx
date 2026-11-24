@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { AppSelect } from "./AppSelect";
+import {
+  ASSISTANT_GROUPS,
+  ASSISTANT_MODULES,
+  ASSISTANT_VIEWS,
+  AssistantViewPage,
+  assistantModuleForView,
+  type AssistantSection,
+  type AssistantViewKey,
+} from "./assistantViews";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -639,13 +648,37 @@ const stateCopy: Record<DeviceState, { label: string; detail: string }> = {
 // 左侧导航（参照 ToDesk / UU 远程的分栏布局）。每个面板都常驻渲染、由 CSS
 // 控制显隐：切换导航不销毁任何状态（输入框内容、上传结果都不丢）。
 type TabKey = "home" | "tools" | "wireless" | "settings" | "help";
-const navItems: { key: TabKey; label: string; icon: ReactElement }[] = [
-  { key: "home", label: "连接", icon: <NavIcon d="M3.5 5.5A2 2 0 0 1 5.5 3.5h13a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Zm5 13h7" /> },
-  { key: "tools", label: "工具", icon: <NavIcon d="M4 20h16M6 20V9.5L12 4l6 5.5V20M10 20v-5h4v5" /> },
-  { key: "wireless", label: "无线", icon: <NavIcon d="M12 19.5h.01M8.5 15.5a5 5 0 0 1 7 0M5 11.5a10 10 0 0 1 14 0M2 7.5a14.5 14.5 0 0 1 20 0" /> },
-  { key: "settings", label: "设置", icon: <NavIcon d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7-3a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.07-.4.1-.8.1-1.2Z" /> },
-  { key: "help", label: "帮助", icon: <NavIcon d="M12 17h.01M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" /> },
-];
+const LEGACY_VIEWS = new Set<AssistantViewKey>(["home", "connect", "settings", "help"]);
+
+function tabForAssistantView(view: AssistantViewKey): TabKey {
+  if (view === "home") return "home";
+  if (view === "connect") return "wireless";
+  if (view === "settings") return "settings";
+  if (view === "help") return "help";
+  return "tools";
+}
+
+const assistantViewIcons: Record<AssistantViewKey, ReactElement> = {
+  home: <NavIcon d="M4 20h16M6 20V9.5L12 4l6 5.5V20M10 20v-5h4v5" />,
+  connect: <NavIcon d="M3.5 5.5A2 2 0 0 1 5.5 3.5h13a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-9Zm5 13h7" />,
+  info: <NavIcon d="M12 11v5M12 8h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />,
+  multi: <NavIcon d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20v-2a5 5 0 0 1 10 0v2Zm10 0v-2a5 5 0 0 1 8-4" />,
+  mirror: <NavIcon d="M8 5l11 7-11 7z" />,
+  present: <NavIcon d="M4 5h16v11H4zM9 20h6M12 16v4" />,
+  keymap: <NavIcon d="M4 7h16v10H4zM7 10h.01M11 10h.01M15 10h.01M7 14h10" />,
+  schedule: <NavIcon d="M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />,
+  replay: <NavIcon d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4M12 8v4l3 2" />,
+  files: <NavIcon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  shot: <NavIcon d="M4 7h3l1.5-2h7L17 7h3v12H4zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />,
+  record: <NavIcon d="M12 19a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z" />,
+  album: <NavIcon d="M3 5h18v14H3zM7 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM4 18l5-5 4 4 3-3 4 4" />,
+  install: <NavIcon d="M12 3v11M8 10l4 4 4-4M5 20h14" />,
+  apps: <NavIcon d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />,
+  notify: <NavIcon d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6zM10 19h4" />,
+  settings: <NavIcon d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7-3a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.07-.4.1-.8.1-1.2Z" />,
+  help: <NavIcon d="M12 17h.01M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />,
+  pro: <NavIcon d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6zM9 12l2 2 4-4" />,
+};
 
 function NavIcon({ d }: { d: string }) {
   return (
@@ -689,7 +722,20 @@ export function groupTransferFiles(names: string[]): TransferGroup[] {
 
 function App() {
   const [tab, setTab] = useState<TabKey>("home");
+  // X10-128：爱思风格原型对齐后，真实导航以 19 个功能视图为准；
+  // tab 只保留给仍使用原有完整面板的「连接 / 设置 / 帮助」等页面。
+  const [view, setView] = useState<AssistantViewKey>("home");
+  const [viewFilter, setViewFilter] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(ASSISTANT_GROUPS.map((group) => [group.name, group.openByDefault])),
+  );
   const [uiTheme, setUiTheme] = useState<UiThemeKey>(() => readUiTheme());
+
+  function openView(next: AssistantViewKey) {
+    setView(next);
+    setViewFilter("");
+    setTab(tabForAssistantView(next));
+  }
 
   // X10-127：主题只影响本机视觉，切换后立即写入 DOM 与 localStorage。
   useEffect(() => {
@@ -2119,12 +2165,12 @@ function App() {
   // 旧实现只在用户点按钮后才有列表，导致"手机发了文件但客户端一直看不到"——
   // 用户不点按钮就永远看不到。现在让"进入页面"本身就完成读取。
   useEffect(() => {
-    if (tab !== "tools") return;
+    if (view !== "files" && tab !== "tools") return;
     if (deviceFiles !== null || transferBusy) return;
     if (!transferDeviceSerial) return;
     void refreshDeviceFiles(transferDeviceSerial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, transferDeviceSerial]);
+  }, [view, tab, transferDeviceSerial]);
 
   // X10-72（修 X10-71 的可见性缺陷）：桌面模式设置的归属设备现在**始终**是一个
   // 真实设备 —— 显式选择 > 会话设备 > 当前就绪设备 > 唯一已配对设备。旧逻辑在
@@ -2390,8 +2436,8 @@ function App() {
   useEffect(() => {
     if (filesChangedHint === null) return;
     setTransferMessage("手机发送区有新文件到达。");
-    // 切到工具页并自动刷新：新文件是用户等着要看的东西，不该要求他先点按钮。
-    setTab("tools");
+    // 切到文件传输页并自动刷新：新文件是用户等着要看的东西，不该要求他先点按钮。
+    openView("files");
     if (transferDeviceSerial && !transferBusy) {
       void refreshDeviceFiles(transferDeviceSerial);
     }
@@ -2509,6 +2555,305 @@ function App() {
           ? "手机需要授权"
           : "未连接手机";
 
+  const isLegacyView = LEGACY_VIEWS.has(view);
+  const currentDeviceLabel = readyDevice
+    ? displayLabels[readyDevice.serial] ?? readyDevice.label
+    : null;
+  const appsTargetSerial = transferDeviceSerial ?? readySerial ?? sessionSerial;
+  const visibleDeviceApps = deviceApps[appsTargetSerial ?? ""] ?? [];
+
+  useEffect(() => {
+    if (view !== "apps" || !appsTargetSerial) return;
+    void ensureDeviceApps(appsTargetSerial);
+  }, [view, appsTargetSerial, ensureDeviceApps]);
+
+  function runViewAction() {
+    switch (view) {
+      case "home":
+      case "connect":
+        openView("connect");
+        break;
+      case "info":
+        void previewDiagnostics();
+        break;
+      case "multi":
+        void refreshDevices();
+        break;
+      case "mirror":
+        if (readyDevice) void startMirroring(readyDevice.serial);
+        else openView("connect");
+        break;
+      case "keymap":
+        if (readySerial) void openKeyboardSettings();
+        else openView("connect");
+        break;
+      case "files":
+        if (transferDeviceSerial) void refreshDeviceFiles(transferDeviceSerial);
+        break;
+      case "shot":
+        if (readyDevice) void captureScreen(readyDevice.serial);
+        else openView("connect");
+        break;
+      case "record":
+        void toggleRecording();
+        break;
+      case "install":
+        void pickApk();
+        break;
+      case "apps":
+        if (appsTargetSerial) void ensureDeviceApps(appsTargetSerial);
+        break;
+      case "notify":
+        setPhoneNotifications([]);
+        break;
+      case "settings":
+        openView("settings");
+        break;
+      case "help":
+        openView("help");
+        break;
+      case "pro":
+        openView("settings");
+        break;
+      default:
+        break;
+    }
+  }
+
+  function assistantSections(current: AssistantViewKey): AssistantSection[] {
+    switch (current) {
+      case "info":
+        return [
+          {
+            kind: "kv",
+            title: "只读设备摘要",
+            tone: 6,
+            items: [
+              ["当前设备", currentDeviceLabel ?? topbarStatus],
+              ["系统", capabilities?.android_release ? `Android ${capabilities.android_release}` : "未知"],
+              ["镜像能力", capabilities ? capabilitySummary(capabilities) : "尚未探测"],
+              ["锁屏 / 屏幕", readyDevice && lockReports[readyDevice.serial] ? lockSummary(lockReports[readyDevice.serial]) : "尚未探测"],
+            ],
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "预览诊断内容", onClick: () => void previewDiagnostics(), disabled: diagnosticsBusy },
+              { label: "导出诊断包", onClick: () => void exportDiagnostics(), disabled: diagnosticsBusy || !diagnostics },
+            ],
+          },
+          ...(diagnostics ? [{ kind: "kv" as const, title: "诊断预览", tone: 6, items: [["版本", diagnostics.app_version], ["系统", diagnostics.system], ["镜像引擎", diagnostics.scrcpy_available ? "可用" : "不可用"], ["最近事件", `${diagnostics.events.length} 条`]] as [string, string][] }] : []),
+          { kind: "note", text: diagnosticsError ?? "诊断内容只在本机生成与导出，不上传；不包含剪贴板、口令或画面帧。" },
+        ];
+      case "multi":
+        return [
+          {
+            kind: "table",
+            title: "当前设备",
+            tone: 8,
+            columns: ["设备", "状态", "通道"],
+            rows: (check?.devices ?? []).map((device) => ({
+              cells: [displayLabels[device.serial] ?? device.label, device.state, connectionLabel(device) || "—"],
+              filterText: `${device.label} ${device.state}`,
+            })),
+            empty: "未检测到设备。插上数据线并授权后，这里会显示真实设备。",
+          },
+          {
+            kind: "table",
+            title: "镜像会话",
+            tone: 8,
+            columns: ["设备", "阶段", "首帧"],
+            rows: activeSessionList.map((item) => ({
+              cells: [item.serial ?? "—", item.phase, item.first_frame === "reached" ? "已到达" : "未确认"],
+              filterText: `${item.serial ?? ""} ${item.phase}`,
+            })),
+            empty: "当前没有镜像会话。",
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "刷新设备", onClick: () => void refreshDevices(), disabled: isChecking },
+              { label: "结束全部", onClick: () => void stopMirroring(), disabled: isStopping || activeSessionCount === 0, danger: true },
+            ],
+          },
+          { kind: "note", text: "多端视图只读本机设备与会话；设备之间不互传文件，也不需要账号或云端。" },
+        ];
+      case "mirror":
+        return [
+          { kind: "phone", title: "镜像会话", tone: 1, children: <div className="assistant-phone-state"><strong>{statusMessage ?? "尚未开始镜像"}</strong><span>{session ? `阶段：${session.phase} · 首帧：${session.first_frame === "reached" ? "已到达" : "未确认"}` : "设备授权后即可开始"}</span></div> },
+          {
+            kind: "kv",
+            title: "会话参数",
+            tone: 2,
+            items: [
+              ["目标设备", currentDeviceLabel ?? "未选择设备"],
+              ["首选通道", readyDevice ? preferredChannelLabel(readyDevice) : "—"],
+              ["画质", options.quality === "smooth" ? "流畅" : options.quality === "sharp" ? "高清" : "均衡"],
+              ["桌面模式", options.desktop_mode ? "开启" : "关闭"],
+              ["视频录制", options.record ? (proEdition ? "已启用" : "专业版未激活") : "未启用"],
+            ],
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "开始镜像", primary: true, onClick: () => readyDevice ? void startMirroring(readyDevice.serial) : openView("connect"), disabled: isLaunching },
+              { label: "结束镜像", onClick: () => void stopMirroring(), disabled: isStopping || activeSessionCount === 0, danger: true },
+              { label: "设备信息", onClick: () => openView("info") },
+            ],
+          },
+          { kind: "note", text: "受保护的支付、密码等页面会由系统限制为黑屏，这不是镜像故障。会话可随时结束。" },
+        ];
+      case "present":
+        return [
+          { kind: "kv", title: "投屏演示能力", tone: 3, items: [["当前实现", "镜像窗口 + 桌面模式"], ["本机渲染", "支持"], ["激光笔 / 白板标注", "尚未实现"], ["演示文稿管理", "尚未实现"]] },
+          { kind: "actions", actions: [{ label: "打开镜像控制", primary: true, onClick: () => openView("mirror") }, { label: "查看桌面模式", onClick: () => openView("settings") }] },
+          { kind: "note", text: "这里只显示真实能力状态，不使用演示数据；未实现的能力不会伪装成可点击功能。" },
+        ];
+      case "keymap":
+        return [
+          {
+            kind: "table",
+            title: "本机全局快捷键",
+            tone: 6,
+            columns: ["动作", "快捷键"],
+            rows: [
+              { cells: ["截图", shortcuts.screenshot], filterText: "截图" },
+              { cells: ["录制开关", shortcuts.record], filterText: "录制" },
+              { cells: ["旋转画面", shortcuts.rotate], filterText: "旋转" },
+            ],
+          },
+          { kind: "actions", actions: [{ label: "打开键盘设置", primary: true, onClick: () => readySerial ? void openKeyboardSettings() : openView("connect") }, { label: "编辑快捷键", onClick: () => openView("settings") }] },
+          { kind: "note", text: "完整按键映射方案尚未实现；当前提供 scrcpy 键鼠直输与可修改的全局快捷键。" },
+        ];
+      case "schedule":
+        return [
+          { kind: "kv", title: "录制状态", tone: 4, items: [["录制", recording?.active ? "进行中" : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["定时计划", "尚未实现"], ["设备授权", "每次录制都由用户手动启停"]] },
+          { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active, danger: true }] },
+          { kind: "note", text: "当前版本不做后台定时拉起，避免绕过设备授权；计划任务能力显示为本机真实状态。" },
+        ];
+      case "replay":
+        return [
+          { kind: "kv", title: "操作回放", tone: 8, items: [["状态", "尚未实现"], ["默认策略", "禁用"], ["文件范围", "仅本机（如未来启用）"], ["云端上传", "不提供"]] },
+          { kind: "actions", actions: [{ label: "查看录像", onClick: () => openView("record") }] },
+          { kind: "note", text: "不会把演示回放当作真实功能；未实现的能力保持明确关闭。" },
+        ];
+      case "files":
+        return [
+          {
+            kind: "table",
+            title: deviceFiles === null ? "手机发送区" : `手机发送区 · ${deviceFiles.length} 项`,
+            tone: 2,
+            columns: ["文件", "状态", "操作"],
+            rows: transferGroups.flatMap((group) => group.files.map((name) => ({
+              cells: [
+                name,
+                fetchedFiles[name] ? "已取回" : fetchErrors[name] ?? "可取回",
+                <span key={name}>
+                  {fetchingName === name ? "正在取回…" : fetchedFiles[name] ? "完成" : fetchErrors[name] ? (
+                    <button type="button" className="assistant-link" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>重试</button>
+                  ) : (
+                    <button type="button" className="assistant-link" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>取回到电脑</button>
+                  )}
+                  {" · "}
+                  <button type="button" className="assistant-link" disabled={fetchingName !== null} onClick={() => void confirmDeleteDeviceFile(name)}>删除</button>
+                </span>,
+              ],
+              filterText: `${name} ${group.label}`,
+            }))),
+            empty: deviceFiles === null ? "尚未读取手机文件，点「刷新文件」查看。" : "当前没有可显示文件。",
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "刷新文件", primary: true, onClick: () => transferDeviceSerial && void refreshDeviceFiles(transferDeviceSerial), disabled: transferBusy },
+              { label: "发送到手机", onClick: () => transferDeviceSerial && void sendFileTo(transferDeviceSerial), disabled: transferBusy },
+              { label: "打开文件夹", onClick: () => void openFetchedFolder() },
+            ],
+          },
+          ...(deviceFiles ? [{
+            kind: "note" as const,
+            text: `共 ${deviceFiles.length} 个文件${fetchedCount > 0 ? `，${fetchedCount} 个已取回` : ""}`,
+          }] : []),
+          {
+            kind: "note",
+            text: [transferError, transferMessage, "文件通道走 ADB，不依赖镜像会话；读取失败会明确报错。"].filter(Boolean).join(" "),
+          },
+        ];
+      case "shot":
+        return [
+          { kind: "kv", title: "最近截图", tone: 5, items: screenshot ? [["文件", screenshot.file_name], ["大小", formatBytes(screenshot.bytes)], ["路径", screenshot.path]] : [["状态", "本机还没有新截图"]] },
+          { kind: "actions", actions: [{ label: "立即截图", primary: true, onClick: () => readyDevice ? void captureScreen(readyDevice.serial) : openView("connect"), disabled: screenshotBusy }, { label: "在文件夹中显示", onClick: () => void revealCapture(), disabled: !screenshot }, { label: "删除这张截图", onClick: () => void undoCapture(), disabled: !screenshot || screenshotBusy, danger: true }] },
+          { kind: "note", text: screenshotError ?? "截图默认保存到本机 MirrorDock 目录；受保护页面会截成黑屏。" },
+        ];
+      case "record":
+        return [
+          { kind: "kv", title: "录像参数", tone: 5, items: [["状态", recording?.active ? `正在录制：${recording.file_name}` : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["保存位置", appSettings.recording_dir ?? "本机视频 / MirrorDock"], ["授权", "手动启停，不重启镜像"]] },
+          { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active }, { label: "在文件夹中显示", onClick: () => void revealRecording(), disabled: !recording }] },
+          { kind: "note", text: recordingError ?? (!proEdition ? "录像是专业版功能；未激活时不会伪装成可用。" : "录像只保存在本机，不默认云录制。") },
+        ];
+      case "album":
+        return [
+          { kind: "kv", title: "相册取回", tone: 7, items: [["相册直读", "尚未实现"], ["文件传输", "可用"], ["取回范围", "手机下载 / MirrorDock 发送区"], ["云端", "不提供"]] },
+          { kind: "actions", actions: [{ label: "前往文件传输", primary: true, onClick: () => openView("files") }] },
+          { kind: "note", text: "不伪装缩略图流；相册能力未实现时明确标注，避免用户误以为能读取整个相册。" },
+        ];
+      case "install":
+        return [
+          { kind: "kv", title: "安装队列", tone: 4, items: [["目标设备", currentDeviceLabel ?? "未选择设备"], ["已选择", apkPath ?? "尚未选择安装包"], ["安装结果", apkReceipt?.summary ?? "—"], ["确认方式", "每次都在手机上确认"]] },
+          { kind: "actions", actions: [{ label: "选择 APK", primary: true, onClick: () => void pickApk(), disabled: apkBusy }, { label: "安装到手机", onClick: () => readyDevice && void installApk(readyDevice.serial), disabled: apkBusy || !apkPath || !readyDevice }] },
+          { kind: "note", text: apkError ?? "支持把 APK 拖进窗口；不会静默安装，也不读取安装包以外的数据。" },
+        ];
+      case "apps":
+        return [
+          {
+            kind: "table",
+            title: visibleDeviceApps.length > 0 ? `已安装应用 · ${visibleDeviceApps.length}` : "已安装应用",
+            tone: 1,
+            columns: ["应用", "包名"],
+            rows: visibleDeviceApps.map((app) => ({ cells: [app.name || app.package, app.package], filterText: `${app.name} ${app.package}` })),
+            empty: "尚未读取应用清单；连接设备后点「刷新清单」。",
+          },
+          { kind: "actions", actions: [{ label: "刷新清单", primary: true, onClick: () => appsTargetSerial && void ensureDeviceApps(appsTargetSerial) }, { label: "安装 APK", onClick: () => openView("install") }] },
+          { kind: "note", text: "应用清单只读；卸载与读取应用数据未提供，避免越权操作。" },
+        ];
+      case "notify":
+        return [
+          {
+            kind: "table",
+            title: phoneNotifications.length > 0 ? `实时通知 · ${phoneNotifications.length}` : "实时通知",
+            tone: 3,
+            columns: ["来源", "内容", "时间"],
+            rows: phoneNotifications.map((item) => ({ cells: [item.app || item.pkg, `${item.title}${item.text ? `：${item.text}` : ""}`, notificationTime(item.posted)], filterText: `${item.app ?? ""} ${item.title} ${item.text ?? ""}` })),
+            empty: "伴侣 App 打开通知镜像并授权后，新通知会实时出现在这里。",
+          },
+          { kind: "actions", actions: [{ label: "清空通知", primary: true, onClick: () => setPhoneNotifications([]), disabled: phoneNotifications.length === 0 }] },
+          { kind: "note", text: "通知正文只在本窗口临时展示，默认不落盘、不上传；持久化需显式开启。" },
+        ];
+      case "pro":
+        return [
+          { kind: "kv", title: "版本与权益", tone: 3, items: [["当前版本", editionLabel(entitlement?.edition)], ["本机校验", "不需要账号"], ["核心功能", "镜像与文件传输保持免费"], ["录像", proEdition ? "已激活" : "专业版功能"]] },
+          {
+            kind: "custom",
+            children: (
+              <section className="assistant-card assistant-tone-3">
+                <h4>激活</h4>
+                <div className="assistant-license">
+                  <input value={licenseInput} onChange={(event) => setLicenseInput(event.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" aria-label="许可证密钥" />
+                  <button type="button" className="assistant-btn primary" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>{licenseBusy ? "激活中…" : "激活"}</button>
+                  <button type="button" className="assistant-btn" disabled={licenseBusy || !proEdition} onClick={() => void deactivateLicense()}>撤销本机授权</button>
+                </div>
+                {licenseMessage && <p className="assistant-note" role="status">{licenseMessage}</p>}
+                {licenseError && <p className="assistant-note" role="alert">{licenseError}</p>}
+              </section>
+            ),
+          },
+          { kind: "note", text: "激活仅在本机校验；不收集设备信息，也不需要联网账号。" },
+        ];
+      default:
+        return [];
+    }
+  }
+
   return (
     <div className="app-shell" data-theme={uiTheme}>
       {/* X10-127 外观层：顶部一级导航 + 工具栏 + 设备树 + 工作区 + 右侧状态栏。
@@ -2517,39 +2862,57 @@ function App() {
         <div className="title-brand">
           <span className="brand-mark" aria-hidden="true">M</span>
           <strong>MirrorDock</strong>
+          <small>ANDROID DEVICE ASSISTANT</small>
         </div>
         <nav className="module-nav" aria-label="一级模块">
-          {navItems.map((item) => (
+          {ASSISTANT_MODULES.map((module) => (
             <button
-              key={item.key}
+              key={module.key}
               type="button"
-              className={tab === item.key ? "module-button active" : "module-button"}
-              aria-label={`一级模块：${item.key}`}
-              aria-current={tab === item.key ? "page" : undefined}
-              onClick={() => setTab(item.key)}
+              className="module-button"
+              aria-label={`一级模块：${module.label}`}
+              aria-current={assistantModuleForView(view) === module.key ? "page" : undefined}
+              onClick={() => openView(module.view)}
             >
-              {item.icon}
-              <span aria-hidden="true">{item.label}</span>
+              <span aria-hidden="true">{assistantViewIcons[module.view]}</span>
+              <span aria-hidden="true">{module.label}</span>
             </button>
           ))}
         </nav>
         <div className="title-right">
+          <label className="assistant-title-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              aria-label="搜索设备、应用或文件"
+              placeholder="搜索功能"
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                const query = event.currentTarget.value.trim().toLowerCase();
+                if (!query) return;
+                const hit = Object.values(ASSISTANT_VIEWS).find((item) => item.title.toLowerCase().includes(query));
+                if (hit) openView(hit.key);
+              }}
+            />
+          </label>
           <span className="theme-chip" title="外观主题仅在设置中调整">主题 · {themeMeta(uiTheme).label}</span>
-          <button className="title-button" type="button" onClick={() => setTab("help")}>帮助</button>
+          <button className="title-button" type="button" aria-label="打开帮助中心" onClick={() => openView("help")}>帮助</button>
         </div>
       </header>
 
       <div className="subbar">
-        <span className="crumb">MirrorDock / <b>{navItems.find((item) => item.key === tab)?.label}</b></span>
+        <span className="crumb">
+          {ASSISTANT_MODULES.find((module) => module.key === assistantModuleForView(view))?.label} / <b>{ASSISTANT_VIEWS[view].title}</b>
+        </span>
         <span className="subbar-status">
           <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
           {topbarStatus}
         </span>
         <div className="subbar-actions">
+          <button className="secondary-button" type="button" onClick={() => openView("connect")}>连接设备</button>
           <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
             {isChecking ? "检查中…" : "重新检查"}
           </button>
-          {/* 单会话时设备卡片上已有唯一的「结束镜像」；顶栏只在多台同停时才出现。 */}
           {activeSessionCount > 1 && (
             <button className="secondary-button" type="button" onClick={() => void stopMirroring()} disabled={isStopping}>
               {isStopping ? "正在结束…" : `结束全部（${activeSessionCount} 台）`}
@@ -2586,24 +2949,41 @@ function App() {
               </ul>
             )}
           </section>
-          <nav className="side-nav" aria-label="功能导航">
-            <h3>功能</h3>
-            {navItems.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={tab === item.key ? "nav-item active" : "nav-item"}
-                aria-current={tab === item.key ? "page" : undefined}
-                onClick={() => setTab(item.key)}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </button>
+          <nav className="side-nav assistant-nav" aria-label="功能导航">
+            {ASSISTANT_GROUPS.map((group) => (
+              <div className="assistant-nav-group" key={group.name}>
+                <button
+                  type="button"
+                  className="assistant-nav-group-head"
+                  aria-expanded={expandedGroups[group.name]}
+                  onClick={() => setExpandedGroups((prev) => ({ ...prev, [group.name]: !prev[group.name] }))}
+                >
+                  <span aria-hidden="true">{expandedGroups[group.name] ? "▾" : "▸"}</span>
+                  {group.name}
+                </button>
+                {expandedGroups[group.name] && (
+                  <div className="assistant-nav-items">
+                    {group.ids.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={view === id ? "nav-item active" : "nav-item"}
+                        aria-current={view === id ? "page" : undefined}
+                        onClick={() => openView(id)}
+                      >
+                        {assistantViewIcons[id]}
+                        <span>{ASSISTANT_VIEWS[id].title}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
           </nav>
           <div className="sidebar-foot">
             <span className="edition-pill">{editionLabel(entitlement?.edition)}</span>
-            <span className="local-pill">仅在本机连接</span>
+            <span className="local-pill">本地优先 · 无需账号</span>
+            <p>镜像、传输、卸载都需设备显式授权；通知正文默认不持久化。</p>
           </div>
         </aside>
 
@@ -2626,7 +3006,26 @@ function App() {
           </div>
         )}
 
+        <div className="assistant-work-head">
+          <h1>{ASSISTANT_VIEWS[view].title}</h1>
+          <span>{ASSISTANT_VIEWS[view].subtitle}</span>
+          <div className="assistant-work-spacer" />
+          <label className="assistant-work-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              aria-label="筛选当前表格"
+              placeholder="筛选当前表格"
+              value={viewFilter}
+              onChange={(event) => setViewFilter(event.target.value)}
+            />
+          </label>
+          <button className="assistant-btn primary sm" type="button" aria-label={`页面操作：${ASSISTANT_VIEWS[view].action}`} onClick={runViewAction}>{ASSISTANT_VIEWS[view].action}</button>
+        </div>
+
         <div className="content">
+          {isLegacyView ? (
+          <>
           {/* -- 连接（主页） ------------------------------------------------ */}
           <section className={`tab-panel ${tab === "home" ? "" : "panel-hidden"}`} aria-label="连接">
             <div className="page-head">
@@ -3901,40 +4300,66 @@ function App() {
               <p>本地优先：数据只经过你的数据线或局域网，不经过任何服务器。</p>
             </aside>
           </section>
+          </>
+          ) : (
+            <AssistantViewPage view={view} sections={assistantSections(view)} filter={viewFilter} />
+          )}
         </div>
         </div>
 
-        <aside className="right-rail" aria-label="设备状态">
+        <aside className="right-rail" aria-label="设备状态与快捷工具">
           <section className="rail-card">
-            <h3>当前设备</h3>
-            <p className="rail-device">{readyDevice ? (displayLabels[readyDevice.serial] ?? readyDevice.label) : topbarStatus}</p>
+            <h3>设备状态</h3>
+            <p className="rail-device">{currentDeviceLabel ?? topbarStatus}</p>
             <dl className="rail-facts">
               <div><dt>连接</dt><dd>{readyDevice ? connectionLabel(readyDevice) || "已授权" : "等待设备"}</dd></div>
               <div><dt>会话</dt><dd>{activeSessionCount > 0 ? `${activeSessionCount} 台进行中` : "未开始"}</dd></div>
               <div><dt>镜像引擎</dt><dd>{scrcpyReady ? "就绪" : "不可用"}</dd></div>
+              <div><dt>版本</dt><dd>{editionLabel(entitlement?.edition)}</dd></div>
             </dl>
           </section>
           <section className="rail-card">
-            <h3>本机优先</h3>
-            <p className="rail-note">画面、文件与通知只经过本机或局域网，不上传服务器。撤销授权后可立即停止会话。</p>
+            <h3>常用工具</h3>
+            <div className="rail-tools">
+              {(["mirror", "shot", "record", "files", "apps", "notify", "info", "settings"] as AssistantViewKey[]).map((key) => (
+                <button key={key} type="button" aria-label={`常用工具：${ASSISTANT_VIEWS[key].title}`} onClick={() => openView(key)}>
+                  <span aria-hidden="true">{assistantViewIcons[key]}</span>
+                  {ASSISTANT_VIEWS[key].title.replace("与控制", "").replace("管理", "")}
+                </button>
+              ))}
+            </div>
           </section>
           <section className="rail-card">
-            <h3>外观</h3>
-            <p className="rail-note">当前为「{themeMeta(uiTheme).label}」。在「设置 → 外观主题」中可随时更换，布局与功能不变。</p>
-            <button className="rail-link" type="button" onClick={() => setTab("settings")}>打开外观设置 →</button>
+            <h3>APK 快速安装</h3>
+            <button type="button" className="rail-dropzone" onClick={() => openView("install")}>把 APK 拖到这里安装<small>仍需在手机上逐次确认</small></button>
+          </section>
+          <section className="rail-card">
+            <h3>最近任务</h3>
+            <div className="rail-tasks">
+              {apkReceipt && <p><strong>{apkReceipt.file_name}</strong><small>已发送到设备 · 等待手机确认</small></p>}
+              {screenshot && <p><strong>{screenshot.file_name}</strong><small>已保存到本机 MirrorDock</small></p>}
+              {recording && <p><strong>{recording.file_name}</strong><small>{recording.active ? "正在录制" : "录制已结束"}</small></p>}
+              {filesChangedHint !== null && <p><strong>手机发送区有新文件</strong><small>{relativeTime(filesChangedHint / 1000)}</small></p>}
+              {!apkReceipt && !screenshot && !recording && filesChangedHint === null && <p className="assistant-muted">暂无最近任务</p>}
+            </div>
+          </section>
+          <section className="rail-card">
+            <h3>安全边界</h3>
+            <p className="rail-note">数据不出本机；不读取短信正文，不做静默安装与远程清除。撤销授权后立即离线。</p>
+            <button className="rail-link" type="button" onClick={() => openView("settings")}>外观主题 · {themeMeta(uiTheme).label} →</button>
           </section>
         </aside>
       </div>
 
         <footer className="statusbar">
           <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
-          <span>{topbarStatus}</span>
+          <span>{currentDeviceLabel ?? topbarStatus}</span>
           <span className="statusbar-sep" aria-hidden="true">|</span>
-          <span>{editionLabel(entitlement?.edition)}</span>
+          <span>scrcpy 4.1 · 固定哈希</span>
           <span className="statusbar-spacer" />
-          <span>版本 {appVersion || "—"}</span>
+          <span>本地连接 · 无云中继</span>
           <span className="statusbar-sep" aria-hidden="true">|</span>
-          <span>本地连接 · 无需账号</span>
+          <span>版本 {appVersion || "—"}</span>
         </footer>
     </div>
   );

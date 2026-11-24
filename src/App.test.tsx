@@ -586,6 +586,22 @@ describe("App rendering", () => {
     expect(screen.getByText("未检测到设备")).toBeInTheDocument();
   });
 
+  it("switches_i4_style_function_views_and_keeps_unimplemented_capabilities_honest", async () => {
+    render(<App />);
+    const functionNav = screen.getByRole("navigation", { name: "功能导航" });
+
+    fireEvent.click(screen.getByRole("button", { name: "一级模块：智能工具" }));
+    expect(await screen.findByRole("heading", { name: "会话参数" })).toBeInTheDocument();
+
+    fireEvent.click(within(functionNav).getByRole("button", { name: "投屏演示" }));
+    expect(await screen.findByRole("heading", { name: "投屏演示能力" })).toBeInTheDocument();
+    expect(screen.getAllByText("尚未实现").length).toBeGreaterThan(0);
+
+    fireEvent.click(within(functionNav).getByRole("button", { name: "相册" }));
+    expect(await screen.findByRole("heading", { name: "相册取回" })).toBeInTheDocument();
+    expect(screen.getAllByText("尚未实现").length).toBeGreaterThan(0);
+  });
+
   // X10-72 回归：用户报告"多设备各自设置桌面模式看起来还是全局设置，找不到按设备
   // 设置的模块"。根因是设备选择器只在 sessionActive && 多会话时渲染。这里锁定：
   // **只有一台设备、且没有会话时**，按设备模块也必须可见，且必须写明归属设备。
@@ -787,7 +803,7 @@ describe("App rendering", () => {
       }
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /工具/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "录像" }));
     const btn = await screen.findByRole("button", { name: "开始录制" });
     // entitlement 轮询是异步的：等 Pro 生效、按钮可点后再触发。
     await waitFor(() => expect(btn).toBeEnabled());
@@ -1132,7 +1148,7 @@ describe("phone → computer file transfer (X10-74)", () => {
 
   async function openToolsTab() {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /工具/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "文件传输" }));
   }
 
   it("loads_the_phone_file_list_on_entering_the_tools_tab_without_any_button_press", async () => {
@@ -1201,7 +1217,7 @@ describe("file transfer presentation (X10-75)", () => {
 
   async function openTools() {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /工具/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "文件传输" }));
   }
 
   it("groups_files_by_purpose_so_users_can_scan_the_list", () => {
@@ -1277,7 +1293,7 @@ describe("file transfer presentation (X10-75)", () => {
     await openTools();
 
     // 列表有两行，按行定位「报告.pdf」那一行的取回按钮。
-    const row = (await screen.findByText("报告.pdf")).closest("li") as HTMLElement;
+    const row = (await screen.findByText("报告.pdf")).closest("tr") as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: "取回到电脑" }));
 
     // 提示必须点名是哪个文件，且给出计数 —— 不能让用户以为全部都存好了。
@@ -1285,7 +1301,7 @@ describe("file transfer presentation (X10-75)", () => {
     expect(notice).toBeInTheDocument();
     expect(await screen.findByText("共 2 个文件，1 个已取回")).toBeInTheDocument();
     // 另一行仍是未取回状态 —— 逐文件独立，不是整体标记。
-    const other = (await screen.findByText("图片.png")).closest("li") as HTMLElement;
+    const other = (await screen.findByText("图片.png")).closest("tr") as HTMLElement;
     expect(within(other).getByRole("button", { name: "取回到电脑" })).toBeInTheDocument();
   });
 
