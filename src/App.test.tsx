@@ -594,8 +594,10 @@ describe("App rendering", () => {
     expect(await screen.findByRole("heading", { name: "会话参数" })).toBeInTheDocument();
 
     fireEvent.click(within(functionNav).getByRole("button", { name: "投屏演示" }));
-    expect(await screen.findByRole("heading", { name: "投屏演示能力" })).toBeInTheDocument();
-    expect(screen.getAllByText("尚未实现").length).toBeGreaterThan(0);
+    // X10-132：投屏演示升级为就绪检查 + 一键演示；未实现的标注/文稿管理仍如实标注。
+    expect(await screen.findByRole("heading", { name: "演示就绪检查" })).toBeInTheDocument();
+    expect(screen.getAllByText(/尚未实现/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/未连接手机/).length).toBeGreaterThan(0);
 
     // X10-129：相册已升级为真实能力（白名单目录浏览 + 取回）。
     // 没有设备时依然诚实：提示尚未读取，不伪造照片列表。

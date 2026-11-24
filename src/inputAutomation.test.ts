@@ -11,10 +11,17 @@ import {
   normalizePhysicalKey,
   physicalKeyLabel,
   readKeymaps,
+  readRecordPlans,
   readReplays,
   validateReplayScript,
   writeKeymaps,
+  writeRecordPlans,
   writeReplays,
+  dateKey,
+  isRecordPlanDue,
+  planTimeMinutes,
+  parseRecordPlans,
+  isValidRecordPlanDuration,
   type KeymapAction,
   type KeymapProfile,
   type ReplayScript,
@@ -180,5 +187,62 @@ describe("local persistence", () => {
   it("generates_unique_ids", () => {
     const ids = new Set(Array.from({ length: 50 }, () => newLocalId()));
     expect(ids.size).toBe(50);
+  });
+});
+
+describe("record plans (X10-131)", () => {
+  const basePlan = { id: "r1", name: "晨会", time: "09:30", durationMin: 15, enabled: true };
+
+  it("parses_and_drops_invalid_plans", () => {
+    const plans = parseRecordPlans([
+      basePlan,
+      { id: "", name: "无 id", time: "09:30", durationMin: 10, enabled: true },
+      { id: "r2", name: "坏时间", time: "25:00", durationMin: 10, enabled: true },
+      { id: "r3", name: "坏时长", time: "09:30", durationMin: 0, enabled: true },
+      { id: "r4", name: "无开关", time: "09:30", durationMin: 10 },
+      "not-an-object",
+    ]);
+    expect(plans).toEqual([basePlan]);
+  });
+
+  it("round_trips_plans_through_local_storage", () => {
+    writeRecordPlans([basePlan, { ...basePlan, id: "r2", name: "下班", time: "18:00", durationMin: 30, enabled: false }]);
+    expect(readRecordPlans()).toEqual([
+      basePlan,
+      { id: "r2", name: "下班", time: "18:00", durationMin: 30, enabled: false },
+    ]);
+    expect(readRecordPlans()).not.toEqual([basePlan]);
+  });
+
+  it("bounds_plan_duration", () => {
+    expect(isValidRecordPlanDuration(1)).toBe(true);
+    expect(isValidRecordPlanDuration(240)).toBe(true);
+    expect(isValidRecordPlanDuration(241)).toBe(false);
+    expect(isValidRecordPlanDuration(0)).toBe(false);
+    expect(isValidRecordPlanDuration(15.5)).toBe(false);
+  });
+
+  it("converts_time_to_minutes", () => {
+    expect(planTimeMinutes("09:30")).toBe(570);
+    expect(planTimeMinutes("00:00")).toBe(0);
+    expect(planTimeMinutes("23:59")).toBe(1439);
+    expect(planTimeMinutes("24:00")).toBeNull();
+  });
+
+  it("triggers_only_within_the_due_window_and_once_per_day", () => {
+    const due = new Date(2026, 10, 24, 9, 31); // 09:31，计划 09:30 → 窗口内
+    expect(isRecordPlanDue(basePlan, due, undefined)).toBe(true);
+    // 同一天已触发过 → 不再触发
+    expect(isRecordPlanDue(basePlan, due, "2026-11-24")).toBe(false);
+    // 窗口外（提前 10 分钟 / 迟到 6 分钟）→ 不触发
+    expect(isRecordPlanDue(basePlan, new Date(2026, 10, 24, 9, 20), undefined)).toBe(false);
+    expect(isRecordPlanDue(basePlan, new Date(2026, 10, 24, 9, 36), undefined)).toBe(false);
+    // 停用的计划永不触发
+    expect(isRecordPlanDue({ ...basePlan, enabled: false }, due, undefined)).toBe(false);
+  });
+
+  it("uses_local_date_keys", () => {
+    expect(dateKey(new Date(2026, 10, 24))).toBe("2026-11-24");
+    expect(dateKey(new Date(2026, 0, 3))).toBe("2026-1-3");
   });
 });

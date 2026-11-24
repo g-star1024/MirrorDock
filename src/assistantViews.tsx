@@ -52,9 +52,9 @@ export const ASSISTANT_VIEWS: Record<AssistantViewKey, AssistantViewMeta> = {
   multi: { key: "multi", title: "多端", subtitle: "当前设备与会话并发状态", action: "刷新设备" },
 
   mirror: { key: "mirror", title: "镜像控制", subtitle: "画面 · 键鼠直输 · 画质预设", action: "开始镜像" },
-  present: { key: "present", title: "投屏演示", subtitle: "演示能力状态 · 本机渲染", action: "查看能力" },
+  present: { key: "present", title: "投屏演示", subtitle: "就绪检查 · 一键开始演示", action: "开始演示" },
   keymap: { key: "keymap", title: "按键映射", subtitle: "键位映射注入方案 · 本机保存", action: "打开键盘设置" },
-  schedule: { key: "schedule", title: "定时录制", subtitle: "计划能力状态 · 需设备授权", action: "查看能力" },
+  schedule: { key: "schedule", title: "定时录制", subtitle: "本机录制计划 · 应用运行时触发", action: "添加计划" },
   replay: { key: "replay", title: "操作回放", subtitle: "动作序列编排与回放 · 本机保存", action: "开始回放" },
 
   files: { key: "files", title: "文件传输", subtitle: "手机发送区与电脑之间互传", action: "刷新文件" },

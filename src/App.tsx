@@ -43,12 +43,17 @@ import {
   normalizePhysicalKey,
   physicalKeyLabel,
   readKeymaps,
+  readRecordPlans,
   readReplays,
   validateReplayScript,
   writeKeymaps,
+  writeRecordPlans,
   writeReplays,
+  dateKey,
+  isRecordPlanDue,
   type KeymapAction,
   type KeymapProfile,
+  type RecordPlan,
   type ReplayScript,
   type ReplayStep,
 } from "./inputAutomation";
@@ -876,6 +881,14 @@ function App() {
   const [replayNotice, setReplayNotice] = useState<string | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
   const replayCancelRef = useRef(false);
+  // X10-131 定时录制计划：计划存本机 localStorage；运行日志只在内存展示。
+  // 触发前提与应用运行一致——不做后台拉起，不绕过设备授权；到点时设备需
+  // 已有显示会话（录制依赖显示会话），失败会如实写进运行日志。
+  const [recordPlans, setRecordPlans] = useState<RecordPlan[]>(() => readRecordPlans());
+  const [planRunLog, setPlanRunLog] = useState<{ at: number; planName: string; text: string; error: boolean }[]>([]);
+  const [draftPlan, setDraftPlan] = useState({ name: "", time: "09:30", duration: "15" });
+  const planLastRunRef = useRef<Record<string, string>>({});
+  const planStopRef = useRef<{ at: number; planId: string } | null>(null);
   // 诊断包：默认不生成、不落盘；预览后由用户显式导出。
   const [diagnostics, setDiagnostics] = useState<DiagnosticsPreviewData | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
@@ -889,10 +902,61 @@ function App() {
   const [companionCrashExpanded, setCompanionCrashExpanded] = useState(false);
   // X10-66 通知镜像：手机转来的通知（最新在前，最多 50 条，仅内存）。
   const [phoneNotifications, setPhoneNotifications] = useState<PhoneNotification[]>([]);
+  // X10-133 本机保留：默认关闭（通知仍只在内存）；开启后通知列表写本机
+  // localStorage，重启应用后恢复。关闭即清除已存记录，不上传。
+  const [notifyKeep, setNotifyKeep] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("mirrordock.notifyKeep") === "1";
+    } catch {
+      return false;
+    }
+  });
   // X10-69 快捷回复：每条通知的草稿与发送状态（按通知 key 索引，仅内存）。
   const [notifReplyDrafts, setNotifReplyDrafts] = useState<Record<string, string>>({});
   const [notifReplyBusy, setNotifReplyBusy] = useState<string | null>(null);
   const [notifReplyNotice, setNotifReplyNotice] = useState<{ key: string; text: string; error: boolean } | null>(null);
+
+  // X10-133：切换「本机保留通知记录」。开启时把当前通知快照写入本机，
+  // 关闭时清除已存记录；通知内容不出本机。
+  function toggleNotifyKeep() {
+    const next = !notifyKeep;
+    setNotifyKeep(next);
+    try {
+      localStorage.setItem("mirrordock.notifyKeep", next ? "1" : "0");
+      if (next) localStorage.setItem("mirrordock.notifyLog", JSON.stringify(phoneNotifications));
+      else localStorage.removeItem("mirrordock.notifyLog");
+    } catch {
+      /* 存储不可用时仅本次会话生效 */
+    }
+  }
+
+  // 通知列表变化时同步写入本机（仅开启保留时）。
+  useEffect(() => {
+    if (!notifyKeep) return;
+    try {
+      localStorage.setItem("mirrordock.notifyLog", JSON.stringify(phoneNotifications));
+    } catch {
+      /* 存储不可用时仅本次会话生效 */
+    }
+  }, [notifyKeep, phoneNotifications]);
+
+  // 启动时恢复上次保留的通知（仅开启保留时）。
+  useEffect(() => {
+    if (!notifyKeep) return;
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem("mirrordock.notifyLog") ?? "[]");
+      if (Array.isArray(raw)) {
+        const restored = raw.filter(
+          (item): item is PhoneNotification =>
+            typeof item === "object" && item !== null && typeof (item as PhoneNotification).pkg === "string",
+        );
+        if (restored.length > 0) setPhoneNotifications(restored.slice(0, 50));
+      }
+    } catch {
+      /* 坏数据直接忽略，按无历史处理 */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 发送快捷回复：经后端命令下发到手机伴侣端（常驻通道），由它填进原通知。
   async function sendNotificationReply(item: PhoneNotification & { key: string }) {
@@ -1773,6 +1837,97 @@ function App() {
       setRecordingError(errorMessage(error, "无法打开录像所在的文件夹。"));
     }
   }
+
+  // ---- X10-131 定时录制计划 ---------------------------------------------
+  // 计划只在本应用运行时触发：到点自动 start_recording，时长到自动 stop。
+  // 录制依赖显示会话，若到点时设备没有会话，adb 会失败并如实写进运行日志。
+
+  function pushPlanLog(planName: string, text: string, error: boolean) {
+    setPlanRunLog((prev) => [{ at: Date.now(), planName, text, error }, ...prev].slice(0, 20));
+  }
+
+  function addRecordPlan() {
+    const name = draftPlan.name.trim() || `计划 ${recordPlans.length + 1}`;
+    const duration = Number(draftPlan.duration);
+    if (!/^\d{2}:\d{2}$/.test(draftPlan.time) || !Number.isInteger(duration) || duration < 1 || duration > 240) {
+      setRecordingError("计划时长需为 1–240 分钟的整数，时间需为 HH:MM。");
+      return;
+    }
+    const plan: RecordPlan = { id: newLocalId(), name, time: draftPlan.time, durationMin: duration, enabled: true };
+    const next = [...recordPlans, plan];
+    setRecordPlans(next);
+    writeRecordPlans(next);
+    setRecordingError(null);
+  }
+
+  function toggleRecordPlan(id: string) {
+    const next = recordPlans.map((plan) => (plan.id === id ? { ...plan, enabled: !plan.enabled } : plan));
+    setRecordPlans(next);
+    writeRecordPlans(next);
+  }
+
+  function removeRecordPlan(id: string) {
+    const next = recordPlans.filter((plan) => plan.id !== id);
+    setRecordPlans(next);
+    writeRecordPlans(next);
+    if (planStopRef.current?.planId === id) planStopRef.current = null;
+    delete planLastRunRef.current[id];
+  }
+
+  async function runPlanRecording(plan: RecordPlan) {
+    if (!proEdition) {
+      pushPlanLog(plan.name, "未执行：录制是专业版功能，激活后计划才会开始。", true);
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    try {
+      const started = await invoke<Recording>("start_recording", { fileName: `mirrordock-record-${stamp}.mp4` });
+      setRecording(started);
+      planStopRef.current = { at: Date.now() + plan.durationMin * 60000, planId: plan.id };
+      pushPlanLog(plan.name, `已按计划开始录制，${plan.durationMin} 分钟后自动结束。`, false);
+    } catch (error) {
+      pushPlanLog(plan.name, errorMessage(error, "计划录制未能开始（到点时设备需要有运行中的镜像会话）。"), true);
+    }
+  }
+
+  async function stopPlanRecording(planId: string) {
+    const plan = recordPlans.find((item) => item.id === planId);
+    const planName = plan?.name ?? "定时计划";
+    try {
+      const stopped = await invoke<Recording | null>("stop_recording", {});
+      setRecording(stopped);
+      pushPlanLog(planName, "计划时长已到，录制已结束。", false);
+    } catch (error) {
+      // 结束失败时后端状态已清（与手动结束同一语义），本地同步复位。
+      setRecording(null);
+      pushPlanLog(planName, errorMessage(error, "计划结束录制时出现问题。"), true);
+    }
+  }
+
+  // 调度循环：每 20 秒检查一次到点计划与到期停止。ref 存放「当天已触发」与
+  // 「计划停止时刻」，避免依赖抖动导致重复触发。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      const pending = planStopRef.current;
+      if (pending && Date.now() >= pending.at) {
+        planStopRef.current = null;
+        void stopPlanRecording(pending.planId);
+        return;
+      }
+      if (pending || recording?.active) return;
+      for (const plan of recordPlans) {
+        const lastRun = planLastRunRef.current[plan.id];
+        if (!isRecordPlanDue(plan, now, lastRun)) continue;
+        planLastRunRef.current[plan.id] = dateKey(now);
+        void runPlanRecording(plan);
+        break;
+      }
+    }, 20000);
+    return () => clearInterval(timer);
+    // recordPlans / recording 变化时重建循环；其余依赖经 ref 读取。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordPlans, recording?.active]);
 
   // 发送文件：由用户通过系统文件选择器明确挑选，MirrorDock 不替用户选。
   // 文件内容直接经 adb 传到手机，不经过前端、不入日志。
@@ -3069,6 +3224,13 @@ function App() {
       case "install":
         void pickApk();
         break;
+      case "present":
+        if (readyDevice) void startMirroring(readyDevice.serial);
+        else openView("connect");
+        break;
+      case "schedule":
+        addRecordPlan();
+        break;
       // X10-129/130：页头快捷按钮与视图内主操作保持同一行为。
       case "album":
         void refreshGallery();
@@ -3128,9 +3290,32 @@ function App() {
             kind: "table",
             title: "当前设备",
             tone: 8,
-            columns: ["设备", "状态", "通道"],
+            columns: ["设备", "状态", "通道", "操作"],
             rows: (check?.devices ?? []).map((device) => ({
-              cells: [displayLabels[device.serial] ?? device.label, device.state, connectionLabel(device) || "—"],
+              cells: [
+                displayLabels[device.serial] ?? device.label,
+                device.state,
+                connectionLabel(device) || "—",
+                // X10-132：逐设备快捷操作，直接复用开始镜像 / 截图的真实命令。
+                <span key={device.serial} className="assistant-row-actions">
+                  <button
+                    type="button"
+                    className="assistant-btn primary sm"
+                    disabled={device.state !== "ready" || isLaunching || launchingSerial === device.serial}
+                    onClick={() => void startMirroring(device.serial)}
+                  >
+                    {launchingSerial === device.serial ? "启动中…" : "镜像"}
+                  </button>
+                  <button
+                    type="button"
+                    className="assistant-btn sm"
+                    disabled={device.state !== "ready" || screenshotBusy}
+                    onClick={() => void captureScreen(device.serial)}
+                  >
+                    截图
+                  </button>
+                </span>,
+              ],
               filterText: `${device.label} ${device.state}`,
             })),
             empty: "未检测到设备。插上数据线并授权后，这里会显示真实设备。",
@@ -3182,9 +3367,26 @@ function App() {
         ];
       case "present":
         return [
-          { kind: "kv", title: "投屏演示能力", tone: 3, items: [["当前实现", "镜像窗口 + 桌面模式"], ["本机渲染", "支持"], ["激光笔 / 白板标注", "尚未实现"], ["演示文稿管理", "尚未实现"]] },
-          { kind: "actions", actions: [{ label: "打开镜像控制", primary: true, onClick: () => openView("mirror") }, { label: "查看桌面模式", onClick: () => openView("settings") }] },
-          { kind: "note", text: "这里只显示真实能力状态，不使用演示数据；未实现的能力不会伪装成可点击功能。" },
+          {
+            kind: "kv",
+            title: "演示就绪检查",
+            tone: 3,
+            items: [
+              ["目标设备", readyDevice ? (displayLabels[readyDevice.serial] ?? readyDevice.label) : "未连接手机"],
+              ["镜像引擎", scrcpyReady ? "就绪" : "不可用"],
+              ["桌面模式", options.desktop_mode ? "开启" : "关闭"],
+              ["活动会话", activeSessionCount > 0 ? `${activeSessionCount} 台进行中` : "未开始"],
+            ],
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "开始演示", primary: true, onClick: () => readyDevice ? void startMirroring(readyDevice.serial) : openView("connect"), disabled: isLaunching || !scrcpyReady },
+              { label: "结束演示", onClick: () => void stopMirroring(), disabled: isStopping || activeSessionCount === 0, danger: true },
+              { label: options.desktop_mode ? "关闭桌面模式" : "开启桌面模式", onClick: () => void applyOptionsUpdate({ ...options, desktop_mode: !options.desktop_mode }), disabled: applyingOptions },
+            ],
+          },
+          { kind: "note", text: "演示 = 按当前画质与桌面模式设置发起真实镜像会话；会话画面在独立镜像窗口呈现，可全屏投到外部显示器。激光笔 / 白板标注、演示文稿管理尚未实现，这里不伪装。" },
         ];
       case "keymap": {
         const profile = activeKeymapProfile;
@@ -3309,9 +3511,42 @@ function App() {
       }
       case "schedule":
         return [
-          { kind: "kv", title: "录制状态", tone: 4, items: [["录制", recording?.active ? "进行中" : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["定时计划", "尚未实现"], ["设备授权", "每次录制都由用户手动启停"]] },
+          { kind: "kv", title: "录制状态", tone: 4, items: [["录制", recording?.active ? "进行中" : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["计划停止", planStopRef.current ? new Date(planStopRef.current.at).toLocaleTimeString() : "无"], ["设备授权", "录制经既有会话，不绕过授权"]] },
+          {
+            kind: "custom",
+            children: (
+              <section className="assistant-card assistant-tone-4">
+                <h4>录制计划</h4>
+                <div className="assistant-chip-row" role="group" aria-label="录制计划">
+                  {recordPlans.map((plan) => (
+                    <span key={plan.id} className={`assistant-plan-chip${plan.enabled ? " active" : ""}`}>
+                      <button type="button" className="assistant-chip-toggle" aria-pressed={plan.enabled} onClick={() => toggleRecordPlan(plan.id)}>{plan.name} · {plan.time} · {plan.durationMin}分钟{plan.enabled ? "" : "（停用）"}</button>
+                      <button type="button" className="assistant-chip-remove" aria-label={`删除计划：${plan.name}`} onClick={() => removeRecordPlan(plan.id)}>×</button>
+                    </span>
+                  ))}
+                  {recordPlans.length === 0 && <p className="assistant-note">还没有录制计划；填写下方表单添加。</p>}
+                </div>
+                <form className="assistant-form-row" aria-label="添加录制计划" onSubmit={(event) => { event.preventDefault(); addRecordPlan(); }}>
+                  <input aria-label="计划名称" placeholder="名称" value={draftPlan.name} onChange={(e) => setDraftPlan({ ...draftPlan, name: e.target.value })} />
+                  <input aria-label="开始时间" type="time" value={draftPlan.time} onChange={(e) => setDraftPlan({ ...draftPlan, time: e.target.value })} />
+                  <input aria-label="时长（分钟）" type="number" min={1} max={240} value={draftPlan.duration} onChange={(e) => setDraftPlan({ ...draftPlan, duration: e.target.value })} />
+                  <button type="submit" className="assistant-btn primary sm">添加计划</button>
+                </form>
+                {planRunLog.length > 0 && (
+                  <ul className="assistant-note-list" aria-label="计划运行日志">
+                    {planRunLog.map((entry, index) => (
+                      <li key={`${entry.at}-${index}`}>
+                        <span className="assistant-muted">{new Date(entry.at).toLocaleTimeString()} · {entry.planName}</span>
+                        <span className={entry.error ? "assistant-error-text" : ""}>{entry.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ),
+          },
           { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active, danger: true }] },
-          { kind: "note", text: "当前版本不做后台定时拉起，避免绕过设备授权；计划任务能力显示为本机真实状态。" },
+          { kind: "note", text: recordingError ?? "计划只在本应用运行时触发：不做开机后台拉起、不绕过设备授权；到点时设备需已有镜像会话（录制依赖显示会话），失败原因会写进运行日志。点击计划可启停，× 可删除。" },
         ];
       case "replay": {
         const script = activeReplay;
@@ -3579,8 +3814,8 @@ function App() {
             rows: phoneNotifications.map((item) => ({ cells: [item.app || item.pkg, `${item.title}${item.text ? `：${item.text}` : ""}`, notificationTime(item.posted)], filterText: `${item.app ?? ""} ${item.title} ${item.text ?? ""}` })),
             empty: "伴侣 App 打开通知镜像并授权后，新通知会实时出现在这里。",
           },
-          { kind: "actions", actions: [{ label: "清空通知", primary: true, onClick: () => setPhoneNotifications([]), disabled: phoneNotifications.length === 0 }] },
-          { kind: "note", text: "通知正文只在本窗口临时展示，默认不落盘、不上传；持久化需显式开启。" },
+          { kind: "actions", actions: [{ label: "清空通知", primary: true, onClick: () => setPhoneNotifications([]), disabled: phoneNotifications.length === 0 }, { label: notifyKeep ? "本机保留：已开启" : "本机保留：已关闭", onClick: toggleNotifyKeep }] },
+          { kind: "note", text: notifyKeep ? "通知已保留在本机（最多 50 条），重启应用后恢复；关闭开关即清除已存记录。内容不出本机。" : "通知正文只在本窗口临时展示，默认不落盘、不上传；点「本机保留」可显式开启本机存储。" },
         ];
       case "pro":
         return [

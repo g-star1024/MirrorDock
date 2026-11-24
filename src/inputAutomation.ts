@@ -324,3 +324,82 @@ export function writeReplays(scripts: ReplayScript[]): void {
 export function newLocalId(): string {
   return `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// ---------------------------------------------------------------------------
+// 定时录制计划（X10-131）
+// ---------------------------------------------------------------------------
+
+/** 一条定时录制计划：到点自动开始录制，`durationMin` 分钟后自动结束。 */
+export type RecordPlan = {
+  id: string;
+  name: string;
+  /** "HH:MM"，24 小时制。 */
+  time: string;
+  /** 1..=240 分钟。 */
+  durationMin: number;
+  enabled: boolean;
+};
+
+export const RECORD_PLANS_STORAGE_KEY = "mirrordock.recordPlans";
+
+/** 触发窗口：到点后 5 分钟内仍可触发（错过整点片刻不算丢计划）。 */
+export const RECORD_PLAN_DUE_WINDOW_MIN = 5;
+
+export const RECORD_PLAN_DURATION_MAX = 240;
+
+function isValidPlanTime(time: unknown): time is string {
+  return typeof time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(time);
+}
+
+export function isValidRecordPlanDuration(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= RECORD_PLAN_DURATION_MAX;
+}
+
+/** 逐条校验并丢弃非法计划；不抛错，坏数据直接跳过。 */
+export function parseRecordPlans(value: unknown): RecordPlan[] {
+  if (!Array.isArray(value)) return [];
+  const plans: RecordPlan[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) continue;
+    const entry = item as Record<string, unknown>;
+    const id = asString(entry.id);
+    const name = asString(entry.name);
+    if (!id || !name || !isValidPlanTime(entry.time)) continue;
+    if (!isValidRecordPlanDuration(entry.durationMin)) continue;
+    if (typeof entry.enabled !== "boolean") continue;
+    plans.push({ id, name, time: entry.time, durationMin: entry.durationMin, enabled: entry.enabled });
+  }
+  return plans;
+}
+
+export function readRecordPlans(): RecordPlan[] {
+  return parseRecordPlans(readJson(RECORD_PLANS_STORAGE_KEY));
+}
+
+export function writeRecordPlans(plans: RecordPlan[]): void {
+  writeJson(RECORD_PLANS_STORAGE_KEY, plans);
+}
+
+/** 计划时间转当天分钟数；非法时间返回 null。 */
+export function planTimeMinutes(time: string): number | null {
+  if (!isValidPlanTime(time)) return null;
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * 计划此刻是否该触发。`lastRunKey` 是该计划最近一次触发的日期键（"YYYY-M-D"），
+ * 同一天不重复触发；触发窗口见 RECORD_PLAN_DUE_WINDOW_MIN。
+ */
+export function isRecordPlanDue(plan: RecordPlan, now: Date, lastRunKey: string | undefined): boolean {
+  if (!plan.enabled || lastRunKey === dateKey(now)) return false;
+  const due = planTimeMinutes(plan.time);
+  if (due === null) return false;
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  return nowMin >= due && nowMin - due < RECORD_PLAN_DUE_WINDOW_MIN;
+}
+
+/** 日期键："2026-11-24" 这类按本地日期的字符串，用于「同一天只触发一次」。 */
+export function dateKey(now: Date): string {
+  return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+}
