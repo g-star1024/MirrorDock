@@ -48,13 +48,16 @@ const MAX_SERIAL_LEN: usize = 128;
 // X10-113：共享核心库。设备发现与结构化错误已迁入 crates/md-core，桌面端与
 // NAS 端共用同一份判据。此处 re-export 让 lib.rs 内所有既有引用路径保持
 // 不变——这是不破坏桌面端的关键：调用方（含测试）一行都不用改。
-pub use md_core::devices::{dedup_devices, device_has_usb, device_shadows_group, endpoint_preference, group_usb_serials, group_wireless_ips, is_wireless_endpoint, mdns_serial_contains_usb, merge_offline_shadows, state_rank, wireless_ip_endpoint, AdbDevice, ConnectionEndpoint, ConnectionKind, DeviceState};
+pub use md_core::devices::{
+    dedup_devices, device_has_usb, device_shadows_group, endpoint_preference, group_usb_serials,
+    group_wireless_ips, is_wireless_endpoint, mdns_serial_contains_usb, merge_offline_shadows,
+    state_rank, wireless_ip_endpoint, AdbDevice, ConnectionEndpoint, ConnectionKind, DeviceState,
+};
 pub use md_core::error::{adb_command_error, adb_missing_error, AppError};
 pub use md_core::{base32_decode, base32_encode};
 
 // 设备与结构化错误
 // ---------------------------------------------------------------------------
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct AdbCheck {
@@ -63,7 +66,6 @@ struct AdbCheck {
     devices: Vec<AdbDevice>,
     diagnostic: Option<String>,
 }
-
 
 // ---------------------------------------------------------------------------
 // 会话状态机
@@ -202,13 +204,7 @@ fn resolve_process_exit(serial: &str, success: bool, scrcpy_output: &str) -> Mir
         if !tail.is_empty() {
             // 只保留尾部若干行：环形缓冲本身有上限，这里再截一次，避免界面被刷爆。
             let lines: Vec<&str> = tail.lines().collect();
-            let excerpt: Vec<&str> = lines
-                .iter()
-                .rev()
-                .take(8)
-                .rev()
-                .copied()
-                .collect();
+            let excerpt: Vec<&str> = lines.iter().rev().take(8).rev().copied().collect();
             recovery.push_str("\n\nscrcpy 输出（末尾）：\n");
             recovery.push_str(&excerpt.join("\n"));
         }
@@ -265,6 +261,19 @@ trait AdbRuntime: Send + Sync {
     /// 发送一个按键码。`keycode` 只允许来自代码内常量（如 `KEYCODE_BACK`），
     /// 绝不接受用户输入——按键注入属于输入类操作，参数必须可审计。
     fn press_key(&self, serial: &str, keycode: &str) -> Result<(), std::io::Error>;
+    /// 通过 `adb shell input` 注入一次用户输入（按键 / 点击 / 滑动）。
+    ///
+    /// 与 `press_key` 不同，这里的参数来自**用户自己编排的映射方案与回放脚本**
+    /// ——这正是按键映射 / 操作回放功能的目的。安全边界由调用方的校验函数保证：
+    /// 按键码只接受 `ANDROID_KEYCODES` 白名单里的完整名字，坐标与时长只接受
+    /// 限定范围内的整数。`args` 形如 `["keyevent", "KEYCODE_BACK"]`、
+    /// `["tap", "120", "240"]`、`["swipe", "10", "20", "300", "400", "250"]`，
+    /// 全部以独立 argv 传入，不做任何 shell 拼接。
+    /// 测试替身默认空实现；需要断言注入调用的替身自行覆盖并记录。
+    fn shell_input(&self, _serial: &str, _args: &[&str]) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+
     /// 截屏探测：返回 `screencap` 输出的字节数。像素内容就地丢弃，不落盘、不回传。
     ///
     /// 密码输入页是安全表面：系统对截屏与镜像同时拒绝输出（实测返回 0 字节，
@@ -606,7 +615,8 @@ impl SessionOptions {
         }
         if let Some(modifier) = &self.shortcut_mod {
             // 白名单校验：不把任意值透传进 scrcpy 参数。
-            if !["lctrl", "rctrl", "lalt", "ralt", "lsuper", "rsuper"].contains(&modifier.as_str()) {
+            if !["lctrl", "rctrl", "lalt", "ralt", "lsuper", "rsuper"].contains(&modifier.as_str())
+            {
                 return Err(AppError::new(
                     "shortcut_mod_invalid",
                     "快捷键修饰键无效。",
@@ -823,7 +833,8 @@ impl SystemAdbRuntime {
     fn output_with_timeout<S: AsRef<std::ffi::OsStr>>(
         args: &[S],
     ) -> Result<std::process::Output, std::io::Error> {
-        let owned: Vec<std::ffi::OsString> = args.iter().map(|a| a.as_ref().to_os_string()).collect();
+        let owned: Vec<std::ffi::OsString> =
+            args.iter().map(|a| a.as_ref().to_os_string()).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = quiet_command(adb_binary())
@@ -947,6 +958,14 @@ impl AdbRuntime for SystemAdbRuntime {
         Self::run(&["-s", serial, "shell", "input", "keyevent", keycode])
     }
 
+    fn shell_input(&self, serial: &str, args: &[&str]) -> Result<(), std::io::Error> {
+        // 参数全部通过调用方白名单校验（键码 / 整数坐标），不含空白与特殊字符，
+        // 作为独立 argv 传入，不做任何 shell 拼接（2026-10-03 argv 纪律）。
+        let mut argv: Vec<&str> = vec!["-s", serial, "shell", "input"];
+        argv.extend_from_slice(args);
+        Self::run(&argv)
+    }
+
     fn screencap_probe_bytes(&self, serial: &str) -> Result<u64, std::io::Error> {
         // 与 screenshot_png 同一条 exec-out 二进制安全通道，但只统计字节数：
         // 屏幕像素就地丢弃，不落盘、不回传、绝不入日志。
@@ -1027,7 +1046,6 @@ impl AdbRuntime for SystemAdbRuntime {
         Self::run_owned(&remove_device_file_argv(serial, remote_path))
     }
 
-
     fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
         // 固定参数直接调用：APK 路径作为单个 argv 传入，不做 shell 拼接或插值，
         // 路径含空格、中文也安全。
@@ -1068,14 +1086,7 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn activity_dumpsys(&self, serial: &str) -> Result<String, std::io::Error> {
         // argv 形式逐个传参，与后端其余 adb 调用一致（不经过设备端 shell 二次分词）。
-        Self::capture(&[
-            "-s",
-            serial,
-            "shell",
-            "dumpsys",
-            "activity",
-            "activities",
-        ])
+        Self::capture(&["-s", serial, "shell", "dumpsys", "activity", "activities"])
     }
 
     fn disconnect(&self, endpoint: &str) -> Result<(), std::io::Error> {
@@ -1122,7 +1133,14 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn disable_usb_debugging(&self, serial: &str) -> Result<(), std::io::Error> {
         Self::run(&[
-            "-s", serial, "shell", "settings", "put", "global", "adb_enabled", "0",
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "adb_enabled",
+            "0",
         ])
     }
 }
@@ -1160,7 +1178,10 @@ impl ScrcpyOutputSink {
     }
 
     fn tail(&self) -> String {
-        self.text.lock().map(|text| text.clone()).unwrap_or_default()
+        self.text
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -1242,7 +1263,11 @@ impl MirrorProcess for SystemMirrorProcess {
             //   的 pre_exec 信号重置，SIGINT 能真正送达，实测约 1.5s 优雅退出。
             // - **显示进程（false）维持 SIGTERM**。scrcpy 4.1 对显示会话本就
             //   不响应 SIGTERM（X10-79 实测），会走下方超时强杀，行为不变。
-            let stop_signal = if self.is_recorder { libc::SIGINT } else { libc::SIGTERM };
+            let stop_signal = if self.is_recorder {
+                libc::SIGINT
+            } else {
+                libc::SIGTERM
+            };
             // SAFETY: kill 只向本子进程的 pid 发信号，不触碰其它进程。
             let sent = unsafe { libc::kill(self.child.id() as libc::pid_t, stop_signal) };
             if sent != 0 {
@@ -1313,14 +1338,11 @@ impl MirrorRuntime for ScrcpyRuntime {
         let launch = macos_mirror_bundle_exec(&scrcpy, &adb).unwrap_or_else(|| scrcpy.clone());
         let mut command = quiet_command(launch);
         command.env("ADB", &adb);
-        command
-            .arg("--serial")
-            .arg(serial)
-            .args(
-                options
-                    .arguments()
-                    .map_err(|_| std::io::Error::other("invalid session options"))?,
-            );
+        command.arg("--serial").arg(serial).args(
+            options
+                .arguments()
+                .map_err(|_| std::io::Error::other("invalid session options"))?,
+        );
         if let Some(path) = record_path {
             // 固定参数直接调用：路径作为单个 argv 传入，不做任何 shell 拼接或插值。
             command
@@ -1364,7 +1386,10 @@ impl ScrcpyRuntime {
     /// Tauri/桌面环境 spawn 的子进程会继承「忽略 SIGINT」，而 scrcpy 的录制收尾
     /// （写 moov 索引）只在收到 SIGINT 走正常退出路径时执行——不重置的话，
     /// 后续 `stop()` 发 SIGINT 会被进程无视，最终只能 SIGKILL，MP4 缺 moov 变砖。
-    fn spawn_scrcpy(mut command: Command, is_recorder: bool) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
+    fn spawn_scrcpy(
+        mut command: Command,
+        is_recorder: bool,
+    ) -> Result<Box<dyn MirrorProcess>, std::io::Error> {
         // X10-79：必须显式 piped。默认情况下子进程继承父进程的 stdio，
         // MirrorDock 是 GUI 应用、没有可用终端，scrcpy 的报错会**直接丢失**——
         // 这正是「用户报白屏、日志里什么都看不到」的原因。接管后既能读到原文，
@@ -1389,7 +1414,11 @@ impl ScrcpyRuntime {
         }
         let mut child = command.spawn()?;
         let output = SystemMirrorProcess::capture_output(&mut child);
-        Ok(Box::new(SystemMirrorProcess { child, output, is_recorder }))
+        Ok(Box::new(SystemMirrorProcess {
+            child,
+            output,
+            is_recorder,
+        }))
     }
 }
 
@@ -1484,17 +1513,18 @@ fn session_entry_mut<'a>(
     map: &'a mut BTreeMap<String, SessionState>,
     serial: &str,
 ) -> &'a mut SessionState {
-    map.entry(serial.to_owned()).or_insert_with(|| SessionState {
-        session: MirrorSession::idle(),
-        process: None,
-        epoch: 0,
-        keep_awake_backup: None,
-        options: SessionOptions::default(),
-        record_path: None,
-        record_process: None,
-        record_resume_count: 0,
-        attached_at: None,
-    })
+    map.entry(serial.to_owned())
+        .or_insert_with(|| SessionState {
+            session: MirrorSession::idle(),
+            process: None,
+            epoch: 0,
+            keep_awake_backup: None,
+            options: SessionOptions::default(),
+            record_path: None,
+            record_process: None,
+            record_resume_count: 0,
+            attached_at: None,
+        })
 }
 
 /// 某台设备的会话是否在进行中。
@@ -1515,10 +1545,7 @@ fn any_session_active(map: &BTreeMap<String, SessionState>) -> bool {
 fn primary_session_serial(map: &BTreeMap<String, SessionState>) -> Option<String> {
     map.iter()
         .find(|(_, state)| state.process.is_some())
-        .or_else(|| {
-            map.iter()
-                .find(|(_, state)| is_session_active(state))
-        })
+        .or_else(|| map.iter().find(|(_, state)| is_session_active(state)))
         .map(|(serial, _)| serial.clone())
         .or_else(|| map.keys().next().cloned())
 }
@@ -1648,13 +1675,11 @@ fn take_all_running_processes(store: &SessionStore) -> Result<Vec<TakenProcess>,
 /// 把该设备从会话表里移除，保持表里只有「有意义」的记录。
 fn prune_idle_entry(store: &SessionStore, serial: &str) {
     if let Ok(mut map) = store.0.lock() {
-        let removable = map
-            .get(serial)
-            .is_some_and(|state| {
-                state.process.is_none()
-                    && state.session.phase == SessionPhase::Idle
-                    && state.keep_awake_backup.is_none()
-            });
+        let removable = map.get(serial).is_some_and(|state| {
+            state.process.is_none()
+                && state.session.phase == SessionPhase::Idle
+                && state.keep_awake_backup.is_none()
+        });
         if removable {
             map.remove(serial);
         }
@@ -1864,7 +1889,11 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
             // 会话走的是无线端点，通道一目了然才能避免再凭感觉归因。
             if let Some(app) = TRAY_APP.get() {
                 if let Some(log) = app.try_state::<DiagnosticsLog>() {
-                    let channel = if is_wireless_serial(&serial) { "无线" } else { "有线" };
+                    let channel = if is_wireless_serial(&serial) {
+                        "无线"
+                    } else {
+                        "有线"
+                    };
                     let uptime = exit_uptime
                         .map(|d| format!("，存活 {}", format_uptime(d)))
                         .unwrap_or_default();
@@ -1879,7 +1908,9 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                                     None => "异常退出（scrcpy 报错）".to_owned(),
                                 }
                             }
-                            MirrorExitKind::WirelessLinkCut => "异常退出（疑似无线链路中断）".to_owned(),
+                            MirrorExitKind::WirelessLinkCut => {
+                                "异常退出（疑似无线链路中断）".to_owned()
+                            }
                             MirrorExitKind::UsbLinkCut => "异常退出（疑似有线连接中断）".to_owned(),
                         };
                         let advice = mirror_exit_advice(&kind);
@@ -1889,16 +1920,29 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                             format!("{label}。{advice}")
                         }
                     };
-                    let reconnect = if reconnect_triggered { "已触发自动重连" } else { "未触发自动重连" };
+                    let reconnect = if reconnect_triggered {
+                        "已触发自动重连"
+                    } else {
+                        "未触发自动重连"
+                    };
                     let tail = exit_scrcpy_tail.trim();
                     let detail = if tail.is_empty() {
                         format!("{outcome}，通道 {channel}{uptime}，{reconnect}。")
                     } else {
                         let lines: Vec<&str> = tail.lines().collect();
-                        let excerpt: Vec<&str> = lines.iter().rev().take(4).rev().copied().collect();
-                        format!("{outcome}，通道 {channel}{uptime}，{reconnect}。scrcpy 末尾：{}", excerpt.join(" | "))
+                        let excerpt: Vec<&str> =
+                            lines.iter().rev().take(4).rev().copied().collect();
+                        format!(
+                            "{outcome}，通道 {channel}{uptime}，{reconnect}。scrcpy 末尾：{}",
+                            excerpt.join(" | ")
+                        )
                     };
-                    log.record("mirror_exit", if exit_success { "ok" } else { "mirror_exited" }, &detail, &[&serial]);
+                    log.record(
+                        "mirror_exit",
+                        if exit_success { "ok" } else { "mirror_exited" },
+                        &detail,
+                        &[&serial],
+                    );
                 }
             }
             return;
@@ -2115,7 +2159,9 @@ fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64,
             // 先查用户意图：会话条目消失（忘记设备/清空）或已被用户重新占用，
             // 都说明用户在自己处理，自动重连立即让位。
             let session_options = {
-                let Ok(map) = sessions.0.lock() else { return; };
+                let Ok(map) = sessions.0.lock() else {
+                    return;
+                };
                 match map.get(&endpoint) {
                     Some(state) => {
                         if state.epoch != epoch || state.process.is_some() {
@@ -2153,15 +2199,18 @@ fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64,
             let (resume_from, resume_count) = {
                 let map = sessions.0.lock().ok();
                 map.and_then(|m| {
-                    m.get(&endpoint).map(|s| {
-                        (s.record_path.clone(), s.record_resume_count)
-                    })
+                    m.get(&endpoint)
+                        .map(|s| (s.record_path.clone(), s.record_resume_count))
                 })
                 .unwrap_or((None, 0))
             };
             let outcome =
                 start_mirroring_with(&runtimes, &sessions, endpoint.clone(), options, None);
-            let status = if outcome.is_ok() { "succeeded" } else { "gave_up" };
+            let status = if outcome.is_ok() {
+                "succeeded"
+            } else {
+                "gave_up"
+            };
             let _ = app.emit(
                 "wireless-reconnect-status",
                 serde_json::json!({ "status": status, "endpoint": endpoint }),
@@ -2170,7 +2219,14 @@ fn spawn_wireless_reconnect(app: &AppHandle, sessions: SessionStore, epoch: u64,
                 refresh_tray_menu(&app);
                 // X10-107：断连自动续录。镜像已恢复，若之前在录制且未达上限则续录一段。
                 if let Some(original_path) = resume_from {
-                    resume_recording_after_reconnect(&app, &runtimes, &sessions, &endpoint, &original_path, resume_count);
+                    resume_recording_after_reconnect(
+                        &app,
+                        &runtimes,
+                        &sessions,
+                        &endpoint,
+                        &original_path,
+                        resume_count,
+                    );
                 }
             }
             return;
@@ -2210,7 +2266,9 @@ fn resume_recording_after_reconnect(
                 "reason": "too_many_disconnects",
             }),
         );
-        eprintln!("[mirrordock] recording resume gave up after {resume_count} resumes for {endpoint}");
+        eprintln!(
+            "[mirrordock] recording resume gave up after {resume_count} resumes for {endpoint}"
+        );
         return;
     }
     let original_name = Path::new(original_path)
@@ -2218,7 +2276,13 @@ fn resume_recording_after_reconnect(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "MirrorDock-recording.mp4".to_owned());
     let segment_name = resume_segment_name(&original_name, next_segment);
-    match start_recording_with(app, runtimes, sessions, Some(endpoint.to_owned()), Some(segment_name)) {
+    match start_recording_with(
+        app,
+        runtimes,
+        sessions,
+        Some(endpoint.to_owned()),
+        Some(segment_name),
+    ) {
         Ok(_) => {
             // 续录成功：写回自增后的计数，并刷新托盘/伴侣端状态。
             if let Ok(mut map) = sessions.0.lock() {
@@ -2236,7 +2300,10 @@ fn resume_recording_after_reconnect(
         Err(error) => {
             // 续录失败（如虚拟屏 id 还没就绪、或设备编码能力不足）：不拖垮刚恢复的
             // 镜像，只提示用户录制未能自动恢复，可手动重开。
-            eprintln!("[mirrordock] recording resume failed for {endpoint}: {}", error.message);
+            eprintln!(
+                "[mirrordock] recording resume failed for {endpoint}: {}",
+                error.message
+            );
             let _ = app.emit(
                 "recording-resume-failed",
                 serde_json::json!({ "serial": endpoint, "reason": "start_failed" }),
@@ -2432,7 +2499,11 @@ struct AppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { hide_dock_icon: false, auto_reconnect: true, recording_dir: None }
+        Self {
+            hide_dock_icon: false,
+            auto_reconnect: true,
+            recording_dir: None,
+        }
     }
 }
 
@@ -2812,9 +2883,9 @@ struct KeepAwakeBackup {
     /// 原 `screen_off_timeout`（毫秒）。
     millis: u64,
     /// 原 `stay_on_while_plugged_in`；`None` 表示没读到，因而也没有改它。
-        #[serde(default)]
-        stay_on_while_plugged_in: Option<u64>,
-    }
+    #[serde(default)]
+    stay_on_while_plugged_in: Option<u64>,
+}
 
 /// 判断序列号是否为无线传输（决定要不要做亮屏补偿）。
 ///
@@ -2841,10 +2912,10 @@ fn enable_wireless_keep_awake(adb: &dyn AdbRuntime, store: &SessionStore, serial
     if !is_wireless_serial(serial) {
         return;
     }
-    let existing = store
-        .lock()
-        .ok()
-        .and_then(|map| map.get(serial).and_then(|state| state.keep_awake_backup.clone()));
+    let existing = store.lock().ok().and_then(|map| {
+        map.get(serial)
+            .and_then(|state| state.keep_awake_backup.clone())
+    });
     if let Some(existing) = existing {
         // 重启：严格按账本记下的「当初改过哪几项」原样重写，读都不读，账本不动。
         let _ = adb.set_screen_off_timeout(serial, WIRELESS_KEEP_AWAKE_TIMEOUT_MS);
@@ -2873,7 +2944,11 @@ fn enable_wireless_keep_awake(adb: &dyn AdbRuntime, store: &SessionStore, serial
     let backup = KeepAwakeBackup {
         serial: serial.to_owned(),
         millis: original_timeout,
-        stay_on_while_plugged_in: if stay_on_armed { original_stay_on } else { None },
+        stay_on_while_plugged_in: if stay_on_armed {
+            original_stay_on
+        } else {
+            None
+        },
     };
     if let Ok(mut map) = store.0.lock() {
         session_entry_mut(&mut map, serial).keep_awake_backup = Some(backup.clone());
@@ -2898,9 +2973,10 @@ fn restore_keep_awake(adb: &dyn AdbRuntime, backup: &KeepAwakeBackup) -> bool {
             .set_stay_on_while_plugged_in(&backup.serial, original)
             .is_ok();
     }
-    restored & adb
-        .set_screen_off_timeout(&backup.serial, backup.millis)
-        .is_ok()
+    restored
+        & adb
+            .set_screen_off_timeout(&backup.serial, backup.millis)
+            .is_ok()
 }
 
 /// 会话结束（正常停止、进程退出、应用退出）时还原**该设备**的全部亮屏补偿。
@@ -2908,10 +2984,10 @@ fn restore_keep_awake(adb: &dyn AdbRuntime, backup: &KeepAwakeBackup) -> bool {
 /// 返回是否已彻底还原。设备离线时还原会失败：账本**保留**在内存与磁盘上，
 /// 交给下次会话开始或下次应用启动重试，绝不悄悄丢弃原值、更不会把「假充电」留下。
 fn disable_wireless_keep_awake(adb: &dyn AdbRuntime, store: &SessionStore, serial: &str) -> bool {
-    let backup = store
-        .lock()
-        .ok()
-        .and_then(|mut map| map.get_mut(serial).and_then(|state| state.keep_awake_backup.take()));
+    let backup = store.lock().ok().and_then(|mut map| {
+        map.get_mut(serial)
+            .and_then(|state| state.keep_awake_backup.take())
+    });
     let Some(backup) = backup else {
         return true;
     };
@@ -2998,7 +3074,9 @@ fn load_keep_awake_ledger(path: &Path) -> Vec<KeepAwakeBackup> {
     if let Ok(ledger) = serde_json::from_slice::<Vec<KeepAwakeBackup>>(&bytes) {
         return ledger;
     }
-    serde_json::from_slice::<KeepAwakeBackup>(&bytes).map(|single| vec![single]).unwrap_or_default()
+    serde_json::from_slice::<KeepAwakeBackup>(&bytes)
+        .map(|single| vec![single])
+        .unwrap_or_default()
 }
 
 /// 把合并后的账本（既有记录 + 本次更新）写回文件。
@@ -3031,16 +3109,32 @@ fn remove_keep_awake_ledger_entry(path: &Path, serial: &str) -> Result<(), AppEr
 
 fn write_keep_awake_ledger(path: &Path, ledger: &[KeepAwakeBackup]) -> Result<(), AppError> {
     let directory = path.parent().ok_or_else(|| {
-        AppError::new("settings_write_failed", "无法保存本机设置。", "请检查本机文件权限。")
+        AppError::new(
+            "settings_write_failed",
+            "无法保存本机设置。",
+            "请检查本机文件权限。",
+        )
     })?;
     fs::create_dir_all(directory).map_err(|_| {
-        AppError::new("settings_write_failed", "无法保存本机设置。", "请检查本机文件权限。")
+        AppError::new(
+            "settings_write_failed",
+            "无法保存本机设置。",
+            "请检查本机文件权限。",
+        )
     })?;
     let serialized = serde_json::to_vec_pretty(ledger).map_err(|_| {
-        AppError::new("settings_write_failed", "无法保存本机设置。", "请检查本机文件权限。")
+        AppError::new(
+            "settings_write_failed",
+            "无法保存本机设置。",
+            "请检查本机文件权限。",
+        )
     })?;
     fs::write(path, serialized).map_err(|_| {
-        AppError::new("settings_write_failed", "无法保存本机设置。", "请检查本机文件权限。")
+        AppError::new(
+            "settings_write_failed",
+            "无法保存本机设置。",
+            "请检查本机文件权限。",
+        )
     })
 }
 
@@ -3115,7 +3209,9 @@ fn maybe_switch_host_input_source(app: &AppHandle) {
     }
     // 账本先落盘再改内存：进程在两者之间被杀，下次启动仍能恢复。
     if let Ok(path) = input_source_backup_path(app) {
-        if let Ok(payload) = serde_json::to_vec(&InputSourceBackupEntry { bundle_id: current.clone() }) {
+        if let Ok(payload) = serde_json::to_vec(&InputSourceBackupEntry {
+            bundle_id: current.clone(),
+        }) {
             let _ = fs::write(path, payload);
         }
     }
@@ -3249,7 +3345,12 @@ fn force_display_cycle(adb: &dyn AdbRuntime, serial: &str) -> bool {
 /// 注入按键有界面副作用（解锁状态下 BACK 会后退界面），所以**只在设备处于
 /// 锁屏时**才允许注入——锁屏上 BACK 无副作用，而用户需要输密码的场景恰恰
 /// 都在锁屏上。设备未锁屏时的 DIM 是正常省电，一碰即恢复，不做处理。
-fn keep_awake_guard_tick(adb: &dyn AdbRuntime, store: &SessionStore, epoch: u64, serial: &str) -> bool {
+fn keep_awake_guard_tick(
+    adb: &dyn AdbRuntime,
+    store: &SessionStore,
+    epoch: u64,
+    serial: &str,
+) -> bool {
     let alive = {
         let Ok(map) = store.0.lock() else {
             return false;
@@ -3375,7 +3476,11 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     let open = MenuItemBuilder::with_id("tray-open", "打开 MirrorDock").build(app)?;
     let connect = MenuItemBuilder::with_id(
         "tray-connect",
-        if active { "断开连接" } else { "连接设备" },
+        if active {
+            "断开连接"
+        } else {
+            "连接设备"
+        },
     )
     .build(app)?;
     let record = MenuItemBuilder::with_id(
@@ -3388,7 +3493,10 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     )
     .build(app)?;
 
-    let mut builder = MenuBuilder::new(app).item(&open).item(&PredefinedMenuItem::separator(app)?).item(&connect);
+    let mut builder = MenuBuilder::new(app)
+        .item(&open)
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&connect);
     if !running.is_empty() {
         // 每个运行中的会话一条「结束镜像」，多设备时逐台可控（X10-27 里程碑 2）。
         for serial in &running {
@@ -3397,8 +3505,11 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
                 .find(|device| &device.serial == serial)
                 .map(|device| device.label.clone())
                 .unwrap_or_else(|| serial.clone());
-            let item = MenuItemBuilder::with_id(format!("tray-stop-{serial}"), format!("结束 {label} 的镜像"))
-                .build(app)?;
+            let item = MenuItemBuilder::with_id(
+                format!("tray-stop-{serial}"),
+                format!("结束 {label} 的镜像"),
+            )
+            .build(app)?;
             builder = builder.item(&item);
         }
     }
@@ -3592,11 +3703,7 @@ fn tray_connect_toggle(app: &AppHandle) {
 /// 桌面模式偏好——与主窗口「开始镜像」同一口径（`composeOptionsWithDesktop`）。
 /// 只覆盖桌面模式相关字段，其余（画质/帧率/快捷键…）托盘路径本来就没有入口，
 /// 沿用后端默认。开桌面模式时强制关摄像头源（与前端互斥逻辑一致）。
-fn tray_session_options(
-    app: &AppHandle,
-    devices: &[AdbDevice],
-    serial: &str,
-) -> SessionOptions {
+fn tray_session_options(app: &AppHandle, devices: &[AdbDevice], serial: &str) -> SessionOptions {
     let mut options = SessionOptions::default();
     if let Some(pref) = desktop_pref_for_serial(app, devices, serial) {
         options.desktop_mode = pref.desktop_mode;
@@ -3613,7 +3720,8 @@ fn tray_session_options(
 }
 
 /// 从（最近设备 × 当前就绪设备）里挑出菜单「连接设备」的目标。
-fn pick_tray_target(recent: &[RecentDevice], devices: &[AdbDevice]) -> Option<(String, String)> {    let target = |device: &AdbDevice| (device.serial.clone(), device.label.clone());
+fn pick_tray_target(recent: &[RecentDevice], devices: &[AdbDevice]) -> Option<(String, String)> {
+    let target = |device: &AdbDevice| (device.serial.clone(), device.label.clone());
     // 最近设备优先：符合「连我刚才用的那台」的直觉。
     for entry in recent {
         if let Some(device) = devices
@@ -3651,7 +3759,13 @@ fn tray_record_toggle(app: &AppHandle) {
                 log.record_outcome("record_stop", None, &[]);
                 refresh_tray_menu(app);
                 notify_companion_recording(app, false);
-                tray_notify_info(app, &format!("已结束屏幕录制：{}（保存在本机视频目录的 MirrorDock 文件夹）。", rec.file_name));
+                tray_notify_info(
+                    app,
+                    &format!(
+                        "已结束屏幕录制：{}（保存在本机视频目录的 MirrorDock 文件夹）。",
+                        rec.file_name
+                    ),
+                );
             }
             Ok(None) => tray_notify_info(app, "当前没有在录制。"),
             Err(error) => tray_notify_error(app, &error.message),
@@ -3669,7 +3783,10 @@ fn tray_record_toggle(app: &AppHandle) {
             log.record_outcome("record_start", None, &[]);
             refresh_tray_menu(app);
             notify_companion_recording(app, true);
-            tray_notify_info(app, &format!("已开始屏幕录制：{}（画面不中断）。", rec.file_name));
+            tray_notify_info(
+                app,
+                &format!("已开始屏幕录制：{}（画面不中断）。", rec.file_name),
+            );
         }
         Err(error) => tray_notify_error(app, &error.message),
     }
@@ -3894,10 +4011,7 @@ fn describe_lock_state(
     }
 }
 
-fn lock_report_with(
-    runtimes: &AppRuntimes,
-    serial: String,
-) -> Result<DeviceLockReport, AppError> {
+fn lock_report_with(runtimes: &AppRuntimes, serial: String) -> Result<DeviceLockReport, AppError> {
     let serial = validate_serial(&serial)?;
 
     if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
@@ -3968,7 +4082,10 @@ fn pin_pad_probe_with(runtimes: &AppRuntimes, serial: String) -> Result<PinPadPr
         .map(|dump| parse_keyguard_state(&dump))
         .unwrap_or((KeyguardState::Unknown, None));
     if keyguard != KeyguardState::Locked {
-        return Ok(PinPadProbe { active: false, detail: "keyguard_not_showing" });
+        return Ok(PinPadProbe {
+            active: false,
+            detail: "keyguard_not_showing",
+        });
     }
     let screen = runtimes
         .adb
@@ -3976,7 +4093,10 @@ fn pin_pad_probe_with(runtimes: &AppRuntimes, serial: String) -> Result<PinPadPr
         .map(|dump| parse_screen_state(&dump))
         .unwrap_or(ScreenState::Unknown);
     if screen != ScreenState::Awake {
-        return Ok(PinPadProbe { active: false, detail: "screen_not_awake" });
+        return Ok(PinPadProbe {
+            active: false,
+            detail: "screen_not_awake",
+        });
     }
     // 截屏探测本身不保存、不回传任何像素——只看字节数。
     match runtimes.adb.screencap_probe_bytes(&serial) {
@@ -3984,9 +4104,15 @@ fn pin_pad_probe_with(runtimes: &AppRuntimes, serial: String) -> Result<PinPadPr
             active: true,
             detail: "secure_surface_blocked_capture",
         }),
-        Ok(_) => Ok(PinPadProbe { active: false, detail: "capture_ok" }),
+        Ok(_) => Ok(PinPadProbe {
+            active: false,
+            detail: "capture_ok",
+        }),
         // 探测失败不等于密码页激活：宁可少提示，不可误报。
-        Err(_) => Ok(PinPadProbe { active: false, detail: "capture_failed" }),
+        Err(_) => Ok(PinPadProbe {
+            active: false,
+            detail: "capture_failed",
+        }),
     }
 }
 
@@ -4050,11 +4176,7 @@ fn normalize_device_identity_key(key: &str) -> String {
         if let Some(head) = rest.strip_suffix("._adb-tls-connect._tcp") {
             // 形如 `<physical>-<随机>`：物理 id 自身不含 `-`（ro.serialno 是字母数字）。
             if let Some((physical, _random)) = head.split_once('-') {
-                if !physical.is_empty()
-                    && physical
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric())
-                {
+                if !physical.is_empty() && physical.chars().all(|c| c.is_ascii_alphanumeric()) {
                     return physical.to_ascii_lowercase();
                 }
             }
@@ -4070,8 +4192,7 @@ fn desktop_pref_key_for(devices: &[AdbDevice], serial: &str) -> String {
     devices
         .iter()
         .find(|device| {
-            device.serial == serial
-                || device.connections.iter().any(|c| c.serial == serial)
+            device.serial == serial || device.connections.iter().any(|c| c.serial == serial)
         })
         .and_then(|device| device.physical_serial.clone())
         .unwrap_or_else(|| normalize_device_identity_key(serial))
@@ -4276,7 +4397,10 @@ fn validate_media_name(name: &str, extension: &str) -> Result<String, AppError> 
     if !allowed || name.starts_with('.') || name.contains("..") {
         return Err(media_name_invalid_error());
     }
-    if !name.to_ascii_lowercase().ends_with(&format!(".{extension}")) {
+    if !name
+        .to_ascii_lowercase()
+        .ends_with(&format!(".{extension}"))
+    {
         return Err(media_name_invalid_error());
     }
     Ok(name.to_owned())
@@ -4541,10 +4665,7 @@ fn send_file_to_device_with(
 }
 
 /// 列出设备传输目录里的文件名。
-fn list_device_files_with(
-    runtimes: &AppRuntimes,
-    serial: String,
-) -> Result<Vec<String>, AppError> {
+fn list_device_files_with(runtimes: &AppRuntimes, serial: String) -> Result<Vec<String>, AppError> {
     let serial = validate_serial(&serial)?;
 
     if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
@@ -4686,6 +4807,282 @@ fn delete_device_file_with(
                 "请确认连接仍然有效，然后重试。",
             )
         })
+}
+
+// ---------------------------------------------------------------------------
+// 相册：浏览固定白名单目录并把照片 / 视频取回到本机（X10-129）
+// ---------------------------------------------------------------------------
+
+/// 相册可浏览的根目录白名单（固定集合，不接受任意路径）。
+///
+/// 相册是手机上最私人的数据类别之一：这里刻意**不给**自由路径输入，只允许
+/// 在这几个公开媒体目录里浏览。 /sdcard/Download/MirrorDock（发送区）走文件
+/// 传输页，不重复提供。
+const GALLERY_ROOTS: &[&str] = &[
+    "/sdcard/DCIM",
+    "/sdcard/DCIM/Camera",
+    "/sdcard/Pictures",
+    "/sdcard/Pictures/Screenshots",
+];
+
+/// 相册列表里显示的媒体扩展名（小写、含点）。其它文件（如 `.nomedia`、
+/// 缓存目录产物）不进入列表，避免把非媒体内容当照片展示。
+const GALLERY_MEDIA_EXTENSIONS: &[&str] = &[
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".dng", ".mp4", ".mov", ".webm",
+    ".m4v", ".3gp", ".avi",
+];
+
+fn gallery_dir_invalid_error() -> AppError {
+    AppError::new(
+        "gallery_dir_invalid",
+        "这个目录不在相册浏览范围内。",
+        "相册只提供 DCIM、相机、Pictures 与截图等固定目录；其他位置请用文件传输。",
+    )
+}
+
+/// 校验相册目录：必须等于白名单根，或是「根 + / + 不含 `..` 的子路径」。
+/// 根之外的任何路径（`/sdcard/data`、`/data`、`..` 逃逸）在拼路径前就被拒绝。
+fn validate_gallery_dir(dir: &str) -> Result<String, AppError> {
+    let dir = dir.trim();
+    if dir.contains('\\') || dir.contains("..") {
+        return Err(gallery_dir_invalid_error());
+    }
+    let allowed = GALLERY_ROOTS.iter().any(|root| {
+        dir == *root
+            || (dir.len() > root.len()
+                && dir.starts_with(root)
+                && dir[root.len()..].starts_with('/'))
+    });
+    if !allowed {
+        return Err(gallery_dir_invalid_error());
+    }
+    Ok(dir.to_owned())
+}
+
+fn is_gallery_media(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    GALLERY_MEDIA_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// 列出手机相册白名单目录里的媒体文件名。
+fn list_device_gallery_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    dir: String,
+) -> Result<Vec<String>, AppError> {
+    let serial = validate_serial(&serial)?;
+    let dir = validate_gallery_dir(&dir)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    // 目录不存在时 adb ls 会失败：如实报错，而不是伪装成「空相册」。
+    let raw = runtimes.adb.list_directory(&serial, &dir).map_err(|_| {
+        AppError::new(
+            "gallery_list_failed",
+            "无法读取这个相册目录。",
+            "请确认连接仍然有效；这个目录可能不存在于这台手机上，换一个目录试试。",
+        )
+    })?;
+    Ok(parse_device_listing(&raw)
+        .into_iter()
+        .filter(|name| is_gallery_media(name))
+        .collect())
+}
+
+/// 把相册中的一个媒体文件取回到本机指定目录（下载 / MirrorDock / 相册）。
+fn fetch_device_gallery_file_with(
+    runtimes: &AppRuntimes,
+    directory: &Path,
+    serial: String,
+    dir: String,
+    file_name: String,
+) -> Result<TransferReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+    let dir = validate_gallery_dir(&dir)?;
+    let file_name = validate_transfer_name(&file_name)?;
+
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+
+    fs::create_dir_all(directory).map_err(|_| transfer_dir_unavailable_error())?;
+    let local = unique_file_path(directory, &file_name);
+    // dir 与 file_name 都已通过校验，拼接结果不可能逃出白名单目录。
+    // pull 不经过设备端 shell，含空格的文件名原样传 argv 即可。
+    let remote = format!("{dir}/{file_name}");
+    runtimes
+        .adb
+        .pull_file(&serial, &remote, &local)
+        .map_err(|_| {
+            AppError::new(
+                "gallery_fetch_failed",
+                "文件没有从手机取回来。",
+                "请确认手机上这个文件还在、存储可用，然后重试。",
+            )
+        })?;
+    let bytes = fs::metadata(&local)
+        .map(|metadata| metadata.len())
+        .map_err(|_| transfer_dir_unavailable_error())?;
+
+    Ok(TransferReceipt {
+        file_name: local
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| file_name.clone()),
+        path: local.to_string_lossy().into_owned(),
+        bytes,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 输入注入：按键映射与操作回放的执行底座（X10-130）
+// ---------------------------------------------------------------------------
+
+/// 可注入的 Android 按键码白名单（`adb shell input keyevent` 接受的名字）。
+///
+/// 逐个枚举而不是用前缀 / 正则匹配：注入内容永远可审计，白名单外的一切
+/// （包括空格、分号、反引号等任何 shell 相关字符）在进 adb 之前就被拒绝。
+const ANDROID_KEYCODES: &[&str] = &[
+    "KEYCODE_BACK",
+    "KEYCODE_HOME",
+    "KEYCODE_MENU",
+    "KEYCODE_APP_SWITCH",
+    "KEYCODE_ENTER",
+    "KEYCODE_DEL",
+    "KEYCODE_SPACE",
+    "KEYCODE_TAB",
+    "KEYCODE_ESCAPE",
+    "KEYCODE_VOLUME_UP",
+    "KEYCODE_VOLUME_DOWN",
+    "KEYCODE_POWER",
+    "KEYCODE_WAKEUP",
+    "KEYCODE_SLEEP",
+    "KEYCODE_DPAD_UP",
+    "KEYCODE_DPAD_DOWN",
+    "KEYCODE_DPAD_LEFT",
+    "KEYCODE_DPAD_RIGHT",
+    "KEYCODE_DPAD_CENTER",
+    "KEYCODE_HEADSETHOOK",
+    "KEYCODE_MEDIA_PLAY_PAUSE",
+    "KEYCODE_CAMERA",
+];
+
+fn keycode_invalid_error() -> AppError {
+    AppError::new(
+        "input_keycode_invalid",
+        "这个按键码不在可注入范围内。",
+        "只允许注入白名单内的 Android 按键码；如需输入文字，请在镜像窗口直接打字。",
+    )
+}
+
+/// 校验按键码：只接受白名单里的完整名字（大写）。
+fn validate_android_keycode(keycode: &str) -> Result<String, AppError> {
+    let keycode = keycode.trim();
+    if ANDROID_KEYCODES.contains(&keycode) {
+        Ok(keycode.to_owned())
+    } else {
+        Err(keycode_invalid_error())
+    }
+}
+
+/// 校验注入坐标：0..=9999 的整数。常见手机分辨率最长边都在这个范围内；
+/// 超范围只可能是前端传错，宁可拒绝也不往设备上送。
+fn validate_inject_coord(value: i64) -> Result<i64, AppError> {
+    if (0..=9999).contains(&value) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "input_coord_invalid",
+            "坐标超出可用范围。",
+            "坐标必须是 0 到 9999 之间的整数，以当前设备的屏幕分辨率为准。",
+        ))
+    }
+}
+
+/// 校验滑动时长：50..=60000 毫秒。太快设备感知不到，太长会一直占着通道。
+fn validate_inject_duration(value: i64) -> Result<i64, AppError> {
+    if (50..=60000).contains(&value) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "input_duration_invalid",
+            "滑动时长超出可用范围。",
+            "滑动时长必须是 50 到 60000 毫秒之间的整数。",
+        ))
+    }
+}
+
+fn inject_device_input(
+    runtimes: &AppRuntimes,
+    serial: &str,
+    args: &[&str],
+) -> Result<(), AppError> {
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, serial)) {
+        return Err(error);
+    }
+    runtimes.adb.shell_input(serial, args).map_err(|_| {
+        AppError::new(
+            "input_inject_failed",
+            "输入没有送达手机。",
+            "请确认连接仍然有效，然后重试。",
+        )
+    })
+}
+
+fn inject_device_key_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    keycode: String,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let keycode = validate_android_keycode(&keycode)?;
+    inject_device_input(runtimes, &serial, &["keyevent", &keycode])
+}
+
+fn inject_device_tap_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    x: i64,
+    y: i64,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let x = validate_inject_coord(x)?;
+    let y = validate_inject_coord(y)?;
+    let (x, y) = (x.to_string(), y.to_string());
+    inject_device_input(runtimes, &serial, &["tap", &x, &y])
+}
+
+fn inject_device_swipe_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    x1: i64,
+    y1: i64,
+    x2: i64,
+    y2: i64,
+    duration_ms: i64,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let x1 = validate_inject_coord(x1)?;
+    let y1 = validate_inject_coord(y1)?;
+    let x2 = validate_inject_coord(x2)?;
+    let y2 = validate_inject_coord(y2)?;
+    let duration_ms = validate_inject_duration(duration_ms)?;
+    let (x1, y1, x2, y2, duration_ms) = (
+        x1.to_string(),
+        y1.to_string(),
+        x2.to_string(),
+        y2.to_string(),
+        duration_ms.to_string(),
+    );
+    inject_device_input(
+        runtimes,
+        &serial,
+        &["swipe", &x1, &y1, &x2, &y2, &duration_ms],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -4987,7 +5384,10 @@ fn start_recording_with(
         None
     };
     // 录制是 Pro 功能（与既有 ensure_edition_allows 同一闸门）。
-    let record_opts = SessionOptions { record: true, ..options.clone() };
+    let record_opts = SessionOptions {
+        record: true,
+        ..options.clone()
+    };
     ensure_edition_allows(app, &record_opts)?;
     let record_path = prepare_recording_path(app, true, file_name.as_deref())?
         .ok_or_else(|| AppError::new("recording_path", "无法准备录制文件路径。", "请重试。"))?;
@@ -5020,7 +5420,11 @@ fn start_recording_with(
         state.record_path = Some(path_string.clone());
         state.record_process = Some(process);
     }
-    Ok(Recording { file_name: file, path: path_string, active: true })
+    Ok(Recording {
+        file_name: file,
+        path: path_string,
+        active: true,
+    })
 }
 
 /// X10-92：结束录制（双通道）。优雅停掉独立录制进程（写 moov 索引定型 MP4），
@@ -5089,7 +5493,11 @@ fn stop_recording_with(
         .file_name()
         .map(|v| v.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.clone());
-    Ok(Some(Recording { file_name: file, path, active: false }))
+    Ok(Some(Recording {
+        file_name: file,
+        path,
+        active: false,
+    }))
 }
 
 fn current_recording_with(store: &SessionStore) -> Result<Option<Recording>, AppError> {
@@ -5196,8 +5604,13 @@ fn select_scrcpy_binary(
 
     // 发行模式优先使用随包分发的 scrcpy（A1-08），找不到再退回 PATH。
     if let Some(exe_dir) = exe_dir {
-        let binary = if cfg!(windows) { "scrcpy.exe" } else { "scrcpy" };
-        if let Some(found) = bundled_binary(&bundled_runtime_dir_candidates(exe_dir), "scrcpy", binary)
+        let binary = if cfg!(windows) {
+            "scrcpy.exe"
+        } else {
+            "scrcpy"
+        };
+        if let Some(found) =
+            bundled_binary(&bundled_runtime_dir_candidates(exe_dir), "scrcpy", binary)
         {
             return found;
         }
@@ -5224,7 +5637,12 @@ fn bundled_runtime_dir_candidates(exe_dir: &Path) -> Vec<PathBuf> {
     if let Some(parent) = exe_dir.parent() {
         candidates.push(parent.join("Resources").join("resources"));
         candidates.push(parent.join("Resources").join("_up_").join("resources"));
-        candidates.push(parent.join("lib").join("com.mirrordock.desktop").join("resources"));
+        candidates.push(
+            parent
+                .join("lib")
+                .join("com.mirrordock.desktop")
+                .join("resources"),
+        );
     }
     candidates
 }
@@ -5330,7 +5748,9 @@ fn app_icon_icns() -> Option<PathBuf> {
             }
         }
     }
-    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("icons").join("icon.icns");
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("icons")
+        .join("icon.icns");
     dev.is_file().then_some(dev)
 }
 
@@ -5373,7 +5793,6 @@ fn is_scrcpy_available() -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
-
 
 // ---------------------------------------------------------------------------
 // X10-110：镜像异常退出的死因分类（写进 mirror_exit 诊断事件）
@@ -5484,16 +5903,6 @@ fn parse_adb_devices(output: &str) -> Vec<AdbDevice> {
         })
         .collect()
 }
-
-
-
-
-
-
-
-
-
-
 
 fn endpoint_is_ready(devices: &[AdbDevice], endpoint: &str) -> bool {
     devices.iter().any(|device| {
@@ -5764,7 +6173,9 @@ fn check_adb_devices_sync(
                 adb_available: false,
                 scrcpy_available,
                 devices: Vec::new(),
-                diagnostic: Some("未找到 Android 平台工具。请重新安装 MirrorDock 或联系支持人员。".into()),
+                diagnostic: Some(
+                    "未找到 Android 平台工具。请重新安装 MirrorDock 或联系支持人员。".into(),
+                ),
             };
         }
         Err(_) => {
@@ -5853,7 +6264,11 @@ fn check_adb_devices_sync(
     if silent != Some(true) {
         log.record(
             "device_check",
-            if check.adb_available { "ok" } else { "adb_missing" },
+            if check.adb_available {
+                "ok"
+            } else {
+                "adb_missing"
+            },
             &detail,
             &[],
         );
@@ -6090,7 +6505,10 @@ fn launch_into_reserved_session(
         return Err(error);
     }
 
-    let process = match runtimes.mirror.start(&serial, &options, record_path.as_deref()) {
+    let process = match runtimes
+        .mirror
+        .start(&serial, &options, record_path.as_deref())
+    {
         Ok(process) => process,
         Err(_) => {
             return Err(fail_session(
@@ -6349,10 +6767,7 @@ fn stop_mirroring(
     result
 }
 
-fn stop_mirroring_with(
-    store: &SessionStore,
-    serial: Option<String>,
-) -> Result<(), AppError> {
+fn stop_mirroring_with(store: &SessionStore, serial: Option<String>) -> Result<(), AppError> {
     let target = match serial {
         Some(serial) => serial,
         None => {
@@ -6421,7 +6836,10 @@ fn update_session_options(
     // 不重启显示）。应用窗口设置时忽略 record 字段——它与显示参数无关，绝不应触发
     // 「为开/关录制而重启镜像」。若其它显示参数变化导致窗口重启，运行中的独立录制
     // 通道不受影响（它挂在 record_process 上，不随显示进程重启）。
-    let options = SessionOptions { record: false, ..options };
+    let options = SessionOptions {
+        record: false,
+        ..options
+    };
     let result = apply_session_options_with(&runtimes, &sessions, options, None, serial);
     log.record_outcome("session_update", result.as_ref().err(), &[]);
     if result.is_ok() {
@@ -6571,7 +6989,10 @@ struct QrPairingState {
 
 impl QrPairingStore {
     fn insert(&self, service_name: &str) {
-        self.0.lock().unwrap().insert(service_name.to_owned(), QrPairingState::default());
+        self.0
+            .lock()
+            .unwrap()
+            .insert(service_name.to_owned(), QrPairingState::default());
     }
     fn mark_paired(&self, service_name: &str, paired_ip: Option<String>) {
         if let Some(state) = self.0.lock().unwrap().get_mut(service_name) {
@@ -6580,10 +7001,19 @@ impl QrPairingStore {
         }
     }
     fn is_paired(&self, service_name: &str) -> bool {
-        self.0.lock().unwrap().get(service_name).map(|s| s.paired).unwrap_or(false)
+        self.0
+            .lock()
+            .unwrap()
+            .get(service_name)
+            .map(|s| s.paired)
+            .unwrap_or(false)
     }
     fn paired_ip(&self, service_name: &str) -> Option<String> {
-        self.0.lock().unwrap().get(service_name).and_then(|s| s.paired_ip.clone())
+        self.0
+            .lock()
+            .unwrap()
+            .get(service_name)
+            .and_then(|s| s.paired_ip.clone())
     }
     fn remove(&self, service_name: &str) {
         self.0.lock().unwrap().remove(service_name);
@@ -6594,7 +7024,10 @@ fn random_service_name() -> String {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
     let mut bytes = [0u8; 6];
     getrandom::getrandom(&mut bytes).expect("系统熵源不可用");
-    let suffix: String = bytes.iter().map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char).collect();
+    let suffix: String = bytes
+        .iter()
+        .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
+        .collect();
     format!("mirrordock-{suffix}")
 }
 
@@ -6643,7 +7076,9 @@ fn qr_pairing_progress(
     pairing_code: String,
 ) -> Result<QrPairingProgress, AppError> {
     if service_name.is_empty()
-        || !service_name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || !service_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
         || validate_pairing_code(&pairing_code).is_err()
     {
         return Err(AppError::new(
@@ -6653,7 +7088,10 @@ fn qr_pairing_progress(
         ));
     }
     if !store.0.lock().unwrap().contains_key(&service_name) {
-        return Ok(QrPairingProgress { stage: "ended".into(), detail: None });
+        return Ok(QrPairingProgress {
+            stage: "ended".into(),
+            detail: None,
+        });
     }
     let raw = runtimes.adb.mdns_services().map_err(|error| {
         adb_command_error(
@@ -6665,11 +7103,13 @@ fn qr_pairing_progress(
     })?;
     let entries = parse_mdns_entries(&raw);
     if !store.is_paired(&service_name) {
-        let Some(entry) = entries
-            .iter()
-            .find(|entry| entry.service == "_adb-tls-pairing._tcp" && entry.instance == service_name)
-        else {
-            return Ok(QrPairingProgress { stage: "waiting".into(), detail: None });
+        let Some(entry) = entries.iter().find(|entry| {
+            entry.service == "_adb-tls-pairing._tcp" && entry.instance == service_name
+        }) else {
+            return Ok(QrPairingProgress {
+                stage: "waiting".into(),
+                detail: None,
+            });
         };
         runtimes
             .adb
@@ -6684,9 +7124,15 @@ fn qr_pairing_progress(
             })?;
         store.mark_paired(
             &service_name,
-            entry.endpoint.rsplit_once(':').map(|(host, _)| host.to_owned()),
+            entry
+                .endpoint
+                .rsplit_once(':')
+                .map(|(host, _)| host.to_owned()),
         );
-        return Ok(QrPairingProgress { stage: "paired".into(), detail: None });
+        return Ok(QrPairingProgress {
+            stage: "paired".into(),
+            detail: None,
+        });
     }
     // 配对已完成：只连接「源 IP 与 pairing 阶段 adb pair 命中的那台手机相同」的
     // _adb-tls-connect 条目（X10-91）。pairing 与 connect 是同一台手机先后广播的
@@ -6705,7 +7151,10 @@ fn qr_pairing_progress(
         match runtimes.adb.connect(&entry.endpoint) {
             Ok(()) => {
                 store.remove(&service_name);
-                return Ok(QrPairingProgress { stage: "done".into(), detail: Some(entry.endpoint.clone()) });
+                return Ok(QrPairingProgress {
+                    stage: "done".into(),
+                    detail: Some(entry.endpoint.clone()),
+                });
             }
             Err(_) => {
                 return Ok(QrPairingProgress {
@@ -6737,17 +7186,24 @@ fn pair_wireless_device(
     let result = (|| {
         let endpoint = validate_endpoint(&endpoint)?;
         let pairing_code = validate_pairing_code(&pairing_code)?;
-        runtimes.adb.pair(&endpoint, &pairing_code).map_err(|error| {
-            adb_command_error(
-                error,
-                "pairing_failed",
-                "配对未完成。",
-                "请确认手机与电脑在同一 Wi-Fi，且配对地址、端口和 6 位配对码仍在有效期内。",
-            )
-        })
+        runtimes
+            .adb
+            .pair(&endpoint, &pairing_code)
+            .map_err(|error| {
+                adb_command_error(
+                    error,
+                    "pairing_failed",
+                    "配对未完成。",
+                    "请确认手机与电脑在同一 Wi-Fi，且配对地址、端口和 6 位配对码仍在有效期内。",
+                )
+            })
     })();
     // 配对码与端点都不进诊断日志；详情只来自用户可见文案。
-    log.record_outcome("wireless_pair", result.as_ref().err(), &[&pairing_code, &endpoint]);
+    log.record_outcome(
+        "wireless_pair",
+        result.as_ref().err(),
+        &[&pairing_code, &endpoint],
+    );
     result
 }
 
@@ -6803,9 +7259,7 @@ fn connect_wireless_device(
 }
 
 #[tauri::command]
-fn list_trusted_wireless_devices(
-    app: AppHandle,
-) -> Result<Vec<TrustedWirelessDevice>, AppError> {
+fn list_trusted_wireless_devices(app: AppHandle) -> Result<Vec<TrustedWirelessDevice>, AppError> {
     load_trusted_devices(&trusted_devices_path(&app)?)
 }
 
@@ -6877,10 +7331,7 @@ fn device_endpoints_for(devices: &[AdbDevice], serial: &str) -> Option<Vec<Strin
     Some(endpoints)
 }
 
-fn revoke_device_access_with(
-    runtimes: &AppRuntimes,
-    endpoints: &[String],
-) -> RevokeReceipt {
+fn revoke_device_access_with(runtimes: &AppRuntimes, endpoints: &[String]) -> RevokeReceipt {
     let mut steps = Vec::new();
     // 回执面向非技术用户：失败只说「设备当前无响应或未授权」，
     // 不透出 adb 原始英文报错（X10-35）；细节仍留在诊断日志。
@@ -6950,9 +7401,7 @@ fn revoke_device_access(
             is_session_active(state)
                 && (endpoints.iter().any(|endpoint| endpoint == session_serial)
                     || device_endpoints_for(&devices, session_serial)
-                        .is_some_and(|own| {
-                            own.iter().any(|endpoint| endpoints.contains(endpoint))
-                        }))
+                        .is_some_and(|own| own.iter().any(|endpoint| endpoints.contains(endpoint))))
         }) {
             return Err(AppError::new(
                 "session_active",
@@ -6985,15 +7434,9 @@ fn revoke_device_access(
         }
     }
     // 诊断日志只记事件，不记序列号与端点。
-    log.record(
-        "revoke_device",
-        "ok",
-        "已执行客户端侧取消授权流程",
-        &[],
-    );
+    log.record("revoke_device", "ok", "已执行客户端侧取消授权流程", &[]);
     Ok(receipt)
 }
-
 
 #[tauri::command]
 fn wake_device(runtimes: State<AppRuntimes>, serial: String) -> Result<(), AppError> {
@@ -7084,9 +7527,7 @@ fn clear_recent_devices(app: AppHandle) -> Result<(), AppError> {
 /// 读取全部桌面模式偏好（X10-90）。供前端启动/设备变化时拉取；键为稳定
 /// physical_serial，与后端解析口径一致。解析失败返回空表（前端容错兜底）。
 #[tauri::command]
-fn get_desktop_prefs(
-    app: AppHandle,
-) -> std::collections::HashMap<String, DesktopPrefEntry> {
+fn get_desktop_prefs(app: AppHandle) -> std::collections::HashMap<String, DesktopPrefEntry> {
     let Ok(path) = desktop_prefs_path(&app) else {
         return std::collections::HashMap::new();
     };
@@ -7174,7 +7615,10 @@ fn list_device_apps(
     list_device_apps_with(&runtimes, serial)
 }
 
-fn list_device_apps_with(runtimes: &AppRuntimes, serial: String) -> Result<Vec<DeviceApp>, AppError> {
+fn list_device_apps_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<Vec<DeviceApp>, AppError> {
     list_device_apps_scoped(runtimes, serial, run_scrcpy_list_apps)
 }
 
@@ -7265,7 +7709,11 @@ fn run_scrcpy_list_apps(serial: &str) -> Option<String> {
         return None;
     }
     let text = reader.join().unwrap_or_default();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// 解析 `scrcpy --list-apps` 输出里的应用条目（X10-71）。
@@ -7356,7 +7804,8 @@ fn fetch_file_from_device(
     file_name: String,
 ) -> Result<TransferReceipt, AppError> {
     let directory = transfer_download_dir(&app)?;
-    let result = fetch_file_from_device_into(&runtimes, &directory, serial.clone(), file_name.clone());
+    let result =
+        fetch_file_from_device_into(&runtimes, &directory, serial.clone(), file_name.clone());
     log.record_outcome("file_fetch", result.as_ref().err(), &[&serial, &file_name]);
     result
 }
@@ -7371,6 +7820,84 @@ fn delete_device_file(
 ) -> Result<(), AppError> {
     let result = delete_device_file_with(&runtimes, serial.clone(), file_name.clone());
     log.record_outcome("file_delete", result.as_ref().err(), &[&serial, &file_name]);
+    result
+}
+
+/// 列出手机相册白名单目录里的媒体文件（X10-129）。
+///
+/// 目录只接受 `GALLERY_ROOTS` 白名单内的路径；文件名列表是设备上的真实输出，
+/// 不做任何演示数据填充。这里记录的密钥位只有 serial（目录本身是固定白名单）。
+#[tauri::command]
+fn list_device_gallery(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    dir: String,
+) -> Result<Vec<String>, AppError> {
+    list_device_gallery_with(&runtimes, serial, dir)
+}
+
+/// 取回相册中的一个媒体文件，保存到本机「下载 / MirrorDock / 相册」。
+#[tauri::command]
+fn fetch_device_gallery_file(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    dir: String,
+    file_name: String,
+) -> Result<TransferReceipt, AppError> {
+    let mut directory = transfer_download_dir(&app)?;
+    directory.push("相册");
+    let result =
+        fetch_device_gallery_file_with(&runtimes, &directory, serial.clone(), dir, file_name);
+    log.record_outcome("gallery_fetch", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 注入一次按键（按键映射 / 测试面板，X10-130）。按键码只接受白名单。
+#[tauri::command]
+fn inject_device_key(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    keycode: String,
+) -> Result<(), AppError> {
+    let result = inject_device_key_with(&runtimes, serial.clone(), keycode);
+    // 只记录 serial 与结果；注入的具体键码 / 坐标是用户的输入编排，不入日志。
+    log.record_outcome("input_inject", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 注入一次点击（按键映射 / 操作回放，X10-130）。坐标限 0..=9999。
+#[tauri::command]
+fn inject_device_tap(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    x: i64,
+    y: i64,
+) -> Result<(), AppError> {
+    let result = inject_device_tap_with(&runtimes, serial.clone(), x, y);
+    log.record_outcome("input_inject", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 注入一次滑动（操作回放，X10-130）。坐标限 0..=9999，时长限 50..=60000ms。
+/// Tauri 命令参数必须保持扁平以便前端 invoke，因此 8 个参数是结构下限。
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn inject_device_swipe(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    x1: i64,
+    y1: i64,
+    x2: i64,
+    y2: i64,
+    duration_ms: i64,
+) -> Result<(), AppError> {
+    let result = inject_device_swipe_with(&runtimes, serial.clone(), x1, y1, x2, y2, duration_ms);
+    log.record_outcome("input_inject", result.as_ref().err(), &[&serial]);
     result
 }
 
@@ -7556,8 +8083,8 @@ pub mod licensing {
             return Err(LicenseError::Malformed);
         }
         let payload_json = &raw[2..2 + payload_len];
-        let sig = Signature::from_slice(&raw[2 + payload_len..])
-            .map_err(|_| LicenseError::Malformed)?;
+        let sig =
+            Signature::from_slice(&raw[2 + payload_len..]).map_err(|_| LicenseError::Malformed)?;
         verifying
             .verify(payload_json, &sig)
             .map_err(|_| LicenseError::BadSignature)?;
@@ -7691,12 +8218,13 @@ fn unix_now() -> u64 {
 }
 
 fn embedded_verifying_key() -> Result<ed25519_dalek::VerifyingKey, AppError> {
-    ed25519_dalek::VerifyingKey::from_bytes(&LICENSE_VERIFYING_KEY).map_err(|_| {
-        AppError::new("license_malformed", "许可证公钥异常。", "请联系支持人员。")
-    })
+    ed25519_dalek::VerifyingKey::from_bytes(&LICENSE_VERIFYING_KEY)
+        .map_err(|_| AppError::new("license_malformed", "许可证公钥异常。", "请联系支持人员。"))
 }
 
-fn stored_license_payload(dir: &std::path::Path) -> Result<Option<licensing::LicensePayload>, AppError> {
+fn stored_license_payload(
+    dir: &std::path::Path,
+) -> Result<Option<licensing::LicensePayload>, AppError> {
     let text = std::fs::read_to_string(dir.join(licensing::ENTITLEMENT_FILE)).map_err(|_| {
         AppError::new(
             "entitlement_io_failed",
@@ -7753,7 +8281,11 @@ fn entitlement_activate(
 ) -> Result<EntitlementView, AppError> {
     let result = entitlement_activate_impl(&app, &license_key);
     // 原始密钥串声明进机密列表：激活失败的诊断记录绝不回显用户输入的密钥。
-    log.record_outcome("license_activate", result.as_ref().err(), &[license_key.as_str()]);
+    log.record_outcome(
+        "license_activate",
+        result.as_ref().err(),
+        &[license_key.as_str()],
+    );
     result
 }
 
@@ -7857,7 +8389,9 @@ fn companion_bridge_events(adb: &dyn AdbRuntime, peer_ip: &str) -> Vec<String> {
         .iter()
         .map(|endpoint| match adb.connect(endpoint) {
             Ok(()) => format!("已自动连接镜像通道 {endpoint}，设备几秒内会出现在连接列表。"),
-            Err(error) => format!("自动连接镜像通道 {endpoint} 失败：{error}。请在手机上确认无线调试已开启。"),
+            Err(error) => {
+                format!("自动连接镜像通道 {endpoint} 失败：{error}。请在手机上确认无线调试已开启。")
+            }
         })
         .collect()
 }
@@ -7979,7 +8513,11 @@ fn notify_companion_recording(app: &AppHandle, active: bool) {
                 log.record(
                     "companion_notify_recording",
                     "ok",
-                    if active { "已推送录制开始" } else { "已推送录制结束" },
+                    if active {
+                        "已推送录制开始"
+                    } else {
+                        "已推送录制结束"
+                    },
                     &[],
                 );
             }
@@ -7989,7 +8527,9 @@ fn notify_companion_recording(app: &AppHandle, active: bool) {
 
 /// 已配对的伴侣设备列表（M4-1 互信台账）。
 #[tauri::command]
-fn companion_paired_devices(app: AppHandle) -> Result<Vec<companion_pairing::PairedCompanion>, AppError> {
+fn companion_paired_devices(
+    app: AppHandle,
+) -> Result<Vec<companion_pairing::PairedCompanion>, AppError> {
     let dir = companion_data_dir(&app)?;
     Ok(companion_pairing::PairedStore::new(&dir).load())
 }
@@ -8183,6 +8723,11 @@ pub fn run() {
             fetch_file_from_device,
             delete_device_file,
             install_apk_to_device,
+            list_device_gallery,
+            fetch_device_gallery_file,
+            inject_device_key,
+            inject_device_tap,
+            inject_device_swipe,
             current_recording,
             start_recording,
             stop_recording,
@@ -8251,56 +8796,56 @@ pub fn run() {
         });
 }
 
+// -- shell_quote（X10-77）------------------------------------------------
+//
+// 回归测试：2026-10-03 真机发现「删除含空格的文件」静默失败 ——
+// `adb shell rm -f -- <含空格路径>` 把路径拆成多个词，rm -f 对不存在的
+// 路径返回 0，于是文件没删掉、后端却报成功，UI 提示"已删除"但列表不变。
+#[test]
+fn shell_quote_protects_paths_from_adb_shell_resplitting() {
+    // 基本情形：包起来就够。
+    assert_eq!(shell_quote("/sdcard/Dir/a.txt"), "'/sdcard/Dir/a.txt'");
+    // 关键回归：含空格。远端 shell 必须把它当**一个**词。
+    assert_eq!(
+        shell_quote("/sdcard/Download/MirrorDock/has space.txt"),
+        "'/sdcard/Download/MirrorDock/has space.txt'"
+    );
+    // 中文文件名（真实数据里就有 `MirrorDock 传输 冒烟.txt`）。
+    assert_eq!(
+        shell_quote("/sdcard/Download/MirrorDock/MirrorDock 传输 冒烟.txt"),
+        "'/sdcard/Download/MirrorDock/MirrorDock 传输 冒烟.txt'"
+    );
+    // 最恶劣情况：内嵌单引号。用 POSIX 的闭合-转义-重开，不能直接套。
+    assert_eq!(shell_quote("it's.txt"), r#"'it'"'"'s.txt'"#);
+    // shell 元字符在单引号内是字面量 —— 顺带消除注入面。
+    assert_eq!(shell_quote("a;rm -rf /"), "'a;rm -rf /'");
+    assert_eq!(shell_quote("$(whoami)"), "'$(whoami)'");
+    assert_eq!(shell_quote("`id`"), "'`id`'");
+}
 
-    // -- shell_quote（X10-77）------------------------------------------------
-    //
-    // 回归测试：2026-10-03 真机发现「删除含空格的文件」静默失败 ——
-    // `adb shell rm -f -- <含空格路径>` 把路径拆成多个词，rm -f 对不存在的
-    // 路径返回 0，于是文件没删掉、后端却报成功，UI 提示"已删除"但列表不变。
-    #[test]
-    fn shell_quote_protects_paths_from_adb_shell_resplitting() {
-        // 基本情形：包起来就够。
-        assert_eq!(shell_quote("/sdcard/Dir/a.txt"), "'/sdcard/Dir/a.txt'");
-        // 关键回归：含空格。远端 shell 必须把它当**一个**词。
-        assert_eq!(
-            shell_quote("/sdcard/Download/MirrorDock/has space.txt"),
-            "'/sdcard/Download/MirrorDock/has space.txt'"
-        );
-        // 中文文件名（真实数据里就有 `MirrorDock 传输 冒烟.txt`）。
-        assert_eq!(
-            shell_quote("/sdcard/Download/MirrorDock/MirrorDock 传输 冒烟.txt"),
-            "'/sdcard/Download/MirrorDock/MirrorDock 传输 冒烟.txt'"
-        );
-        // 最恶劣情况：内嵌单引号。用 POSIX 的闭合-转义-重开，不能直接套。
-        assert_eq!(shell_quote("it's.txt"), r#"'it'"'"'s.txt'"#);
-        // shell 元字符在单引号内是字面量 —— 顺带消除注入面。
-        assert_eq!(shell_quote("a;rm -rf /"), "'a;rm -rf /'");
-        assert_eq!(shell_quote("$(whoami)"), "'$(whoami)'");
-        assert_eq!(shell_quote("`id`"), "'`id`'");
-    }
-
-    // 接线测试：断言 `adb rm` 的 argv **真的带上了引号**。
-    //
-    // 为什么单独一条：只测 `shell_quote` 这个纯函数是不够的 —— 2026-10-03
-    // 我先写了纯函数测试，**反向验证时把 `shell_quote(remote_path)` 改回
-    // `remote_path`，测试依然全绿**，因为纯函数本身没变、只是没人调用它了。
-    // 这类「只测实现、不测接线」的盲区与 v0.4.7 那次同源。
-    #[test]
-    fn remove_device_file_argv_actually_quotes_the_path() {
-        let argv = remove_device_file_argv("phone", "/sdcard/D/MirrorDock 传输 冒烟.txt");
-        // 前 6 段是固定前缀。
-        assert_eq!(&argv[..6], &[
-            "-s", "phone", "shell", "rm", "-f", "--"
-        ].map(String::from));
-        // 关键：最后一段必须是**带引号的完整路径**，不能是裸路径。
-        let last = argv.last().expect("argv 非空");
-        assert_eq!(last, "'/sdcard/D/MirrorDock 传输 冒烟.txt'");
-        // 反向断言：裸路径形态（修复前的 bug）必须不等于引号形态。
-        assert_ne!(last, &"/sdcard/D/MirrorDock 传输 冒烟.txt".to_string());
-        // 引号内不含未转义的单引号 —— 否则远端 shell 会报 no closing quote。
-        let inner = last.trim_matches('\'');
-        assert!(!inner.contains('\''), "引号内出现未转义单引号: {inner}");
-    }
+// 接线测试：断言 `adb rm` 的 argv **真的带上了引号**。
+//
+// 为什么单独一条：只测 `shell_quote` 这个纯函数是不够的 —— 2026-10-03
+// 我先写了纯函数测试，**反向验证时把 `shell_quote(remote_path)` 改回
+// `remote_path`，测试依然全绿**，因为纯函数本身没变、只是没人调用它了。
+// 这类「只测实现、不测接线」的盲区与 v0.4.7 那次同源。
+#[test]
+fn remove_device_file_argv_actually_quotes_the_path() {
+    let argv = remove_device_file_argv("phone", "/sdcard/D/MirrorDock 传输 冒烟.txt");
+    // 前 6 段是固定前缀。
+    assert_eq!(
+        &argv[..6],
+        &["-s", "phone", "shell", "rm", "-f", "--"].map(String::from)
+    );
+    // 关键：最后一段必须是**带引号的完整路径**，不能是裸路径。
+    let last = argv.last().expect("argv 非空");
+    assert_eq!(last, "'/sdcard/D/MirrorDock 传输 冒烟.txt'");
+    // 反向断言：裸路径形态（修复前的 bug）必须不等于引号形态。
+    assert_ne!(last, &"/sdcard/D/MirrorDock 传输 冒烟.txt".to_string());
+    // 引号内不含未转义的单引号 —— 否则远端 shell 会报 no closing quote。
+    let inner = last.trim_matches('\'');
+    assert!(!inner.contains('\''), "引号内出现未转义单引号: {inner}");
+}
 
 #[cfg(test)]
 mod tests {
@@ -8382,11 +8927,7 @@ mod tests {
             }
         }
 
-        fn with_lock_state(
-            devices: Vec<AdbDevice>,
-            window_policy: &str,
-            power: &str,
-        ) -> Self {
+        fn with_lock_state(devices: Vec<AdbDevice>, window_policy: &str, power: &str) -> Self {
             Self {
                 devices,
                 window_policy_dump: Some(window_policy.to_owned()),
@@ -8578,6 +9119,18 @@ mod tests {
             Ok(())
         }
 
+        fn shell_input(&self, serial: &str, args: &[&str]) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("input {} {serial}", args.join(" ")));
+            if *self.device_writes_fail.lock().unwrap() {
+                Err(std::io::Error::other("device offline"))
+            } else {
+                Ok(())
+            }
+        }
+
         fn screenshot_png(&self, serial: &str) -> Result<Vec<u8>, std::io::Error> {
             self.calls
                 .lock()
@@ -8590,10 +9143,7 @@ mod tests {
         }
 
         fn screencap_probe_bytes(&self, serial: &str) -> Result<u64, std::io::Error> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("probe {serial}"));
+            self.calls.lock().unwrap().push(format!("probe {serial}"));
             match self.probe_bytes {
                 Some(bytes) => Ok(bytes),
                 None => Err(std::io::Error::other("probe unavailable")),
@@ -8659,11 +9209,16 @@ mod tests {
             } else {
                 &self.pulled_contents
             };
-            fs::write(local, contents).map_err(|_| std::io::Error::other("cannot write pulled file"))?;
+            fs::write(local, contents)
+                .map_err(|_| std::io::Error::other("cannot write pulled file"))?;
             Ok("1 file pulled".to_owned())
         }
 
-        fn remove_device_file(&self, serial: &str, remote_path: &str) -> Result<(), std::io::Error> {
+        fn remove_device_file(
+            &self,
+            serial: &str,
+            remote_path: &str,
+        ) -> Result<(), std::io::Error> {
             self.calls
                 .lock()
                 .unwrap()
@@ -8676,10 +9231,10 @@ mod tests {
         }
 
         fn install_apk(&self, serial: &str, apk: &Path) -> Result<String, std::io::Error> {
-            self.calls.lock().unwrap().push(format!(
-                "install {serial} {}",
-                apk.to_string_lossy()
-            ));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("install {serial} {}", apk.to_string_lossy()));
             match &self.install_output {
                 Some(raw) => Ok(raw.clone()),
                 // 进程本身没跑起来（如 adb 缺失）：与真实实现一致，返回 Err。
@@ -8695,7 +9250,10 @@ mod tests {
             Ok(())
         }
         fn connect(&self, endpoint: &str) -> Result<(), std::io::Error> {
-            self.calls.lock().unwrap().push(format!("connect {endpoint}"));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("connect {endpoint}"));
             if self.connect_fails {
                 Err(std::io::Error::other("failed to connect to endpoint"))
             } else {
@@ -8796,7 +9354,12 @@ mod tests {
     impl ControlledProcess {
         fn running() -> (Self, Arc<Mutex<Option<bool>>>) {
             let exit = Arc::new(Mutex::new(None));
-            (Self { exit: Arc::clone(&exit) }, exit)
+            (
+                Self {
+                    exit: Arc::clone(&exit),
+                },
+                exit,
+            )
         }
     }
 
@@ -9003,8 +9566,11 @@ mod tests {
 
     #[test]
     fn notification_reply_validation_accepts_normal_input() {
-        let (key, text) =
-            validate_notification_reply(" 0|com.example.chat|0|1234567|null|1234 ", " 你好，稍后回复 ").unwrap();
+        let (key, text) = validate_notification_reply(
+            " 0|com.example.chat|0|1234567|null|1234 ",
+            " 你好，稍后回复 ",
+        )
+        .unwrap();
         assert_eq!(key, "0|com.example.chat|0|1234567|null|1234");
         assert_eq!(text, "你好，稍后回复");
     }
@@ -9138,7 +9704,10 @@ mod tests {
         };
         let events = companion_bridge_events(&adb, "192.168.2.224");
         assert_eq!(events.len(), 1);
-        assert!(events[0].contains("已自动连接镜像通道 192.168.2.224:46289"), "{events:?}");
+        assert!(
+            events[0].contains("已自动连接镜像通道 192.168.2.224:46289"),
+            "{events:?}"
+        );
         // 只对匹配来源 IP 的端点发起 connect，别的设备不受影响。
         let calls = adb.calls.lock().unwrap().clone();
         assert_eq!(calls, vec!["connect 192.168.2.224:46289".to_string()]);
@@ -9150,14 +9719,18 @@ mod tests {
         let events = companion_bridge_events(&adb, "192.168.2.224");
         assert!(events[0].contains("没有发现"), "{events:?}");
         assert!(events[0].contains("两条独立通道"), "{events:?}");
-        assert!(adb.calls.lock().unwrap().is_empty(), "未发现服务时不得发起 connect");
+        assert!(
+            adb.calls.lock().unwrap().is_empty(),
+            "未发现服务时不得发起 connect"
+        );
     }
 
     #[test]
     fn companion_bridge_does_not_match_other_devices_ip() {
         let adb = FakeAdb {
             mdns_output: Some(
-                "adb-abc-rQ._adb-tls-connect._tcp.\t_adb-tls-connect._tcp.\t192.168.2.9:40001\n".into(),
+                "adb-abc-rQ._adb-tls-connect._tcp.\t_adb-tls-connect._tcp.\t192.168.2.9:40001\n"
+                    .into(),
             ),
             ..FakeAdb::default()
         };
@@ -9170,12 +9743,16 @@ mod tests {
     fn companion_bridge_reports_connect_failure_honestly() {
         let adb = FakeAdb {
             mdns_output: Some(
-                "adb-abc-rQ._adb-tls-connect._tcp.\t_adb-tls-connect._tcp.\t192.168.2.224:46289\n".into(),
+                "adb-abc-rQ._adb-tls-connect._tcp.\t_adb-tls-connect._tcp.\t192.168.2.224:46289\n"
+                    .into(),
             ),
             ..FakeAdb::with_connect_failure()
         };
         let events = companion_bridge_events(&adb, "192.168.2.224");
-        assert!(events[0].contains("自动连接镜像通道 192.168.2.224:46289 失败"), "{events:?}");
+        assert!(
+            events[0].contains("自动连接镜像通道 192.168.2.224:46289 失败"),
+            "{events:?}"
+        );
     }
 
     // 客户端侧取消授权（X10-32）。
@@ -9184,11 +9761,14 @@ mod tests {
     fn revoke_runs_every_step_and_reports_honestly() {
         let adb = FakeAdb::with_devices(vec![device("79j7kn9tkjt8rwss", DeviceState::Ready)]);
         let endpoints = vec!["79j7kn9tkjt8rwss".to_string()];
-        let receipt = revoke_device_access_with(&AppRuntimes {
-            adb: Arc::new(adb),
-            mirror: Box::new(FakeMirror::running()),
-            serial_cache: Mutex::new(HashMap::new()),
-        }, &endpoints);
+        let receipt = revoke_device_access_with(
+            &AppRuntimes {
+                adb: Arc::new(adb),
+                mirror: Box::new(FakeMirror::running()),
+                serial_cache: Mutex::new(HashMap::new()),
+            },
+            &endpoints,
+        );
         let joined = receipt.steps.join("\n");
         assert!(joined.contains("已在手机上打开「开发者选项」"), "{joined}");
         assert!(joined.contains("已关闭手机上的「无线调试」"), "{joined}");
@@ -9228,31 +9808,114 @@ mod tests {
         // 无线端点的设置写入失败时，用 USB 端点兜底完成。
         struct WirelessOnlyFails;
         impl AdbRuntime for WirelessOnlyFails {
-            fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error> { Ok(Vec::new()) }
-            fn device_properties(&self, _serial: &str) -> Result<String, std::io::Error> { Err(std::io::Error::other("x")) }
-            fn physical_serial(&self, _serial: &str) -> Result<Option<String>, std::io::Error> { Ok(None) }
-            fn wake_screen(&self, _serial: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn screen_off_timeout(&self, _serial: &str) -> Result<Option<u64>, std::io::Error> { Ok(None) }
-            fn set_screen_off_timeout(&self, _serial: &str, _millis: u64) -> Result<(), std::io::Error> { Ok(()) }
-            fn stay_on_while_plugged_in(&self, _serial: &str) -> Result<Option<u64>, std::io::Error> { Ok(None) }
-            fn set_stay_on_while_plugged_in(&self, _serial: &str, _bits: u64) -> Result<(), std::io::Error> { Ok(()) }
-            fn window_policy(&self, _serial: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn power_state(&self, _serial: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn display_state(&self, _serial: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn press_key(&self, _serial: &str, _keycode: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn screencap_probe_bytes(&self, _serial: &str) -> Result<u64, std::io::Error> { Ok(0) }
-            fn screenshot_png(&self, _serial: &str) -> Result<Vec<u8>, std::io::Error> { Ok(Vec::new()) }
-            fn make_directory(&self, _serial: &str, _remote_dir: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn list_directory(&self, _serial: &str, _remote_dir: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn push_file(&self, _serial: &str, _local: &Path, _remote_dir: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn pull_file(&self, _serial: &str, _remote_path: &str, _local: &Path) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn remove_device_file(&self, _serial: &str, _remote_path: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn install_apk(&self, _serial: &str, _apk: &Path) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn pair(&self, _endpoint: &str, _pairing_code: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn connect(&self, _endpoint: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn disconnect(&self, _endpoint: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn open_developer_settings(&self, _serial: &str) -> Result<(), std::io::Error> { Ok(()) }
-            fn open_keyboard_layout_settings(&self, _serial: &str) -> Result<(), std::io::Error> { Ok(()) }
+            fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error> {
+                Ok(Vec::new())
+            }
+            fn device_properties(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Err(std::io::Error::other("x"))
+            }
+            fn physical_serial(&self, _serial: &str) -> Result<Option<String>, std::io::Error> {
+                Ok(None)
+            }
+            fn wake_screen(&self, _serial: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn screen_off_timeout(&self, _serial: &str) -> Result<Option<u64>, std::io::Error> {
+                Ok(None)
+            }
+            fn set_screen_off_timeout(
+                &self,
+                _serial: &str,
+                _millis: u64,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn stay_on_while_plugged_in(
+                &self,
+                _serial: &str,
+            ) -> Result<Option<u64>, std::io::Error> {
+                Ok(None)
+            }
+            fn set_stay_on_while_plugged_in(
+                &self,
+                _serial: &str,
+                _bits: u64,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn window_policy(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn power_state(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn display_state(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn press_key(&self, _serial: &str, _keycode: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn screencap_probe_bytes(&self, _serial: &str) -> Result<u64, std::io::Error> {
+                Ok(0)
+            }
+            fn screenshot_png(&self, _serial: &str) -> Result<Vec<u8>, std::io::Error> {
+                Ok(Vec::new())
+            }
+            fn make_directory(
+                &self,
+                _serial: &str,
+                _remote_dir: &str,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn list_directory(
+                &self,
+                _serial: &str,
+                _remote_dir: &str,
+            ) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn push_file(
+                &self,
+                _serial: &str,
+                _local: &Path,
+                _remote_dir: &str,
+            ) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn pull_file(
+                &self,
+                _serial: &str,
+                _remote_path: &str,
+                _local: &Path,
+            ) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn remove_device_file(
+                &self,
+                _serial: &str,
+                _remote_path: &str,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn install_apk(&self, _serial: &str, _apk: &Path) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn pair(&self, _endpoint: &str, _pairing_code: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn connect(&self, _endpoint: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn disconnect(&self, _endpoint: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn open_developer_settings(&self, _serial: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
+            fn open_keyboard_layout_settings(&self, _serial: &str) -> Result<(), std::io::Error> {
+                Ok(())
+            }
             fn disable_wireless_debugging(&self, serial: &str) -> Result<(), std::io::Error> {
                 if serial.contains(':') {
                     Err(std::io::Error::other("wireless transport dead"))
@@ -9267,8 +9930,12 @@ mod tests {
                     Ok(())
                 }
             }
-            fn mdns_services(&self) -> Result<String, std::io::Error> { Ok(String::new()) }
-            fn list_device_apps(&self, _serial: &str) -> Result<String, std::io::Error> { Ok(String::new()) }
+            fn mdns_services(&self) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn list_device_apps(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
         }
         let runtimes = AppRuntimes {
             adb: Arc::new(WirelessOnlyFails),
@@ -9281,7 +9948,10 @@ mod tests {
         ];
         let receipt = revoke_device_access_with(&runtimes, &endpoints);
         let joined = receipt.steps.join("\n");
-        assert!(joined.contains("已关闭手机上的「无线调试」"), "USB 兜底应成功：{joined}");
+        assert!(
+            joined.contains("已关闭手机上的「无线调试」"),
+            "USB 兜底应成功：{joined}"
+        );
         assert!(joined.contains("已关闭手机上的「USB 调试」"), "{joined}");
     }
 
@@ -9291,14 +9961,20 @@ mod tests {
         // 不得透出 adb 原始英文报错（X10-35 用户截图场景）。
         let adb = FakeAdb::with_device_write_failure();
         let endpoints = vec!["79j7kn9tkjt8rwss".to_string()];
-        let receipt = revoke_device_access_with(&AppRuntimes {
-            adb: Arc::new(adb),
-            mirror: Box::new(FakeMirror::running()),
-            serial_cache: Mutex::new(HashMap::new()),
-        }, &endpoints);
+        let receipt = revoke_device_access_with(
+            &AppRuntimes {
+                adb: Arc::new(adb),
+                mirror: Box::new(FakeMirror::running()),
+                serial_cache: Mutex::new(HashMap::new()),
+            },
+            &endpoints,
+        );
         let joined = receipt.steps.join("\n");
         assert!(joined.contains("设备当前无响应"), "{joined}");
-        assert!(!joined.contains("device offline"), "不得透出原始报错：{joined}");
+        assert!(
+            !joined.contains("device offline"),
+            "不得透出原始报错：{joined}"
+        );
         assert!(!joined.contains("adb"), "不得透出 adb 字样：{joined}");
     }
 
@@ -9392,7 +10068,10 @@ mod tests {
         ];
         let merged = dedup_devices(devices);
         assert_eq!(merged.len(), 1, "三条通道应合并为一条");
-        assert_eq!(merged[0].serial, "79j7kn9tkjt8rwss", "首选必须是 USB，不是无线");
+        assert_eq!(
+            merged[0].serial, "79j7kn9tkjt8rwss",
+            "首选必须是 USB，不是无线"
+        );
         assert_eq!(merged[0].connections.len(), 3);
     }
 
@@ -9427,9 +10106,15 @@ mod tests {
         ];
         let merged = dedup_devices(usb_offline);
         // 无线 ready 卡 + USB 离线残影。首选（可镜像的）是无线。
-        let ready: Vec<_> = merged.iter().filter(|d| d.state == DeviceState::Ready).collect();
+        let ready: Vec<_> = merged
+            .iter()
+            .filter(|d| d.state == DeviceState::Ready)
+            .collect();
         assert_eq!(ready.len(), 1);
-        assert_eq!(ready[0].serial, "192.168.2.90:41901", "USB 未就绪时只能走无线");
+        assert_eq!(
+            ready[0].serial, "192.168.2.90:41901",
+            "USB 未就绪时只能走无线"
+        );
     }
 
     #[test]
@@ -9471,8 +10156,16 @@ mod tests {
             state: DeviceState::Ready,
             physical_serial: Some("PHYS-XYZ".into()),
             connections: vec![
-                ConnectionEndpoint { serial: "ABC123".into(), kind: ConnectionKind::Usb, state: DeviceState::Ready },
-                ConnectionEndpoint { serial: "192.168.1.5:4321".into(), kind: ConnectionKind::Wireless, state: DeviceState::Ready },
+                ConnectionEndpoint {
+                    serial: "ABC123".into(),
+                    kind: ConnectionKind::Usb,
+                    state: DeviceState::Ready,
+                },
+                ConnectionEndpoint {
+                    serial: "192.168.1.5:4321".into(),
+                    kind: ConnectionKind::Wireless,
+                    state: DeviceState::Ready,
+                },
             ],
         }];
         assert!(endpoint_is_ready(&devices, "ABC123"));
@@ -9617,27 +10310,30 @@ mod tests {
     #[test]
     fn offline_phone_collapses_usb_and_mdns_ghosts_into_one_card() {
         // 整台手机离线：USB 残影 + 它的 mDNS 残影 → 归并成一张离线卡。
-        let devices = vec![AdbDevice {
-            serial: "79j7kn9tkjt8rwss".into(),
-            label: "M2104K10AC".into(),
-            state: DeviceState::Offline,
-            physical_serial: None,
-            connections: vec![ConnectionEndpoint {
+        let devices = vec![
+            AdbDevice {
                 serial: "79j7kn9tkjt8rwss".into(),
-                kind: ConnectionKind::Usb,
+                label: "M2104K10AC".into(),
                 state: DeviceState::Offline,
-            }],
-        }, AdbDevice {
-            serial: "adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp".into(),
-            label: "M2104K10AC".into(),
-            state: DeviceState::Offline,
-            physical_serial: None,
-            connections: vec![ConnectionEndpoint {
+                physical_serial: None,
+                connections: vec![ConnectionEndpoint {
+                    serial: "79j7kn9tkjt8rwss".into(),
+                    kind: ConnectionKind::Usb,
+                    state: DeviceState::Offline,
+                }],
+            },
+            AdbDevice {
                 serial: "adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp".into(),
-                kind: ConnectionKind::Wireless,
+                label: "M2104K10AC".into(),
                 state: DeviceState::Offline,
-            }],
-        }];
+                physical_serial: None,
+                connections: vec![ConnectionEndpoint {
+                    serial: "adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp".into(),
+                    kind: ConnectionKind::Wireless,
+                    state: DeviceState::Offline,
+                }],
+            },
+        ];
         let merged = dedup_devices(devices);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].state, DeviceState::Offline);
@@ -9818,10 +10514,18 @@ mod tests {
         let options = SessionOptions::default();
         assert_eq!(options.rotation, 0);
         let args = options.arguments().unwrap();
-        assert!(!args.iter().any(|arg| arg.starts_with("--display-orientation")));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.starts_with("--display-orientation")));
         // 显式选择其它角度时仍然锁定。
-        let rotated = SessionOptions { rotation: 270, ..Default::default() };
-        assert!(rotated.arguments().unwrap().contains(&"--display-orientation=270".into()));
+        let rotated = SessionOptions {
+            rotation: 270,
+            ..Default::default()
+        };
+        assert!(rotated
+            .arguments()
+            .unwrap()
+            .contains(&"--display-orientation=270".into()));
     }
 
     /// mDNS 解析（B-开发者中心配对）：只认配对与连接两类服务，端点必须是 ip:port。
@@ -9844,7 +10548,9 @@ mod tests {
         let entries = parse_mdns_entries(raw);
         let found = entries
             .iter()
-            .find(|entry| entry.service == "_adb-tls-pairing._tcp" && entry.instance == "mirrordock-abc234")
+            .find(|entry| {
+                entry.service == "_adb-tls-pairing._tcp" && entry.instance == "mirrordock-abc234"
+            })
             .map(|entry| entry.endpoint.clone());
         assert_eq!(found, Some("192.168.1.20:37002".to_owned()));
     }
@@ -9891,21 +10597,24 @@ mod tests {
         let paired_ip = store.paired_ip(service);
         let chosen = entries.iter().find(|entry| {
             entry.service == "_adb-tls-connect._tcp"
-                && paired_ip
-                    .as_deref()
-                    .is_some_and(|ip| entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip))
+                && paired_ip.as_deref().is_some_and(|ip| {
+                    entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip)
+                })
         });
         // 必须选中同 IP 的那台（用户手机），而不是第一台/别的手机。
-        assert_eq!(chosen.map(|e| e.endpoint.as_str()), Some("192.168.1.20:41002"));
+        assert_eq!(
+            chosen.map(|e| e.endpoint.as_str()),
+            Some("192.168.1.20:41002")
+        );
 
         // 若配对 IP 不在广播里（手机还没回主页面），不得连接任何设备。
         store.mark_paired(service, Some("192.168.1.99".to_owned()));
         let paired_ip = store.paired_ip(service);
         let chosen = entries.iter().find(|entry| {
             entry.service == "_adb-tls-connect._tcp"
-                && paired_ip
-                    .as_deref()
-                    .is_some_and(|ip| entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip))
+                && paired_ip.as_deref().is_some_and(|ip| {
+                    entry.endpoint.rsplit_once(':').map(|(host, _)| host) == Some(ip)
+                })
         });
         assert!(chosen.is_none());
     }
@@ -9985,9 +10694,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        let error =
-            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-                .unwrap_err();
+        let error = start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(error.code, "device_unauthorized");
         let session = snapshot(&store);
@@ -10007,9 +10721,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        let error =
-            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-                .unwrap_err();
+        let error = start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(error.code, "device_offline");
         assert_eq!(snapshot(&store).phase, SessionPhase::Offline);
@@ -10031,9 +10750,14 @@ mod tests {
         assert_eq!(error.code, "adb_unavailable");
 
         let empty = runtimes(FakeAdb::with_devices(Vec::new()), FakeMirror::running());
-        let error =
-            start_mirroring_with(&empty, &store, "phone".into(), SessionOptions::default(), None)
-                .unwrap_err();
+        let error = start_mirroring_with(
+            &empty,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(error.code, "device_not_connected");
     }
 
@@ -10045,9 +10769,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        let error =
-            start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-                .unwrap_err();
+        let error = start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap_err();
 
         assert_eq!(error.code, "mirror_runtime_missing");
         assert_eq!(snapshot(&store).phase, SessionPhase::Failed);
@@ -10061,7 +10790,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
 
         let session = snapshot(&store);
         assert_eq!(session.phase, SessionPhase::Streaming);
@@ -10083,13 +10819,22 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
         stop_mirroring_with(&store, Some("phone".into())).unwrap();
 
         assert!(*killed.lock().unwrap());
         assert_eq!(snapshot(&store).phase, SessionPhase::Idle);
         assert_eq!(
-            stop_mirroring_with(&store, Some("phone".into())).unwrap_err().code,
+            stop_mirroring_with(&store, Some("phone".into()))
+                .unwrap_err()
+                .code,
             "session_not_running"
         );
     }
@@ -10131,7 +10876,9 @@ mod tests {
         // 等处理器的注册完成：SIGTERM 若在注册前送达，python 会被默认处置杀死，
         // 测的就不再是兜底路径。
         let mut ready = String::new();
-        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
         assert!(ready.contains("ready"), "子进程未就绪：{ready}");
         let mut process = SystemMirrorProcess {
             child,
@@ -10164,8 +10911,8 @@ mod tests {
             .arg("-c")
             .arg(concat!(
                 "import signal, time, sys;",
-                "signal.signal(signal.SIGTERM, signal.SIG_IGN);",  // 若发 SIGTERM 会卡住
-                "signal.signal(signal.SIGINT, lambda s,f: sys.exit(0));",  // SIGINT 才退出
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN);", // 若发 SIGTERM 会卡住
+                "signal.signal(signal.SIGINT, lambda s,f: sys.exit(0));", // SIGINT 才退出
                 "print('ready', flush=True);",
                 "time.sleep(30)"
             ))
@@ -10173,7 +10920,9 @@ mod tests {
             .spawn()
             .unwrap();
         let mut ready = String::new();
-        std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
         assert!(ready.contains("ready"), "探针未就绪：{ready}");
         let mut process = SystemMirrorProcess {
             child,
@@ -10212,7 +10961,14 @@ mod tests {
             mirror,
         );
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
         StartedSession {
             runtimes,
             store,
@@ -10251,10 +11007,7 @@ mod tests {
         let live = snapshot(&session.store);
         assert_eq!(live.phase, SessionPhase::Streaming);
         assert_eq!(live.serial.as_deref(), Some("phone"));
-        assert_eq!(
-            update.session, live,
-            "返回的会话状态必须与轮询到的状态一致"
-        );
+        assert_eq!(update.session, live, "返回的会话状态必须与轮询到的状态一致");
     }
 
     #[test]
@@ -10317,8 +11070,9 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        let error = apply_session_options_with(&runtimes, &store, SessionOptions::default(), None, None)
-            .unwrap_err();
+        let error =
+            apply_session_options_with(&runtimes, &store, SessionOptions::default(), None, None)
+                .unwrap_err();
         assert_eq!(error.code, "session_not_running");
         assert!(
             error.recovery.contains("下次开始镜像"),
@@ -10382,7 +11136,14 @@ mod tests {
         let mirror = FakeMirror::running();
         let runtimes = runtimes(adb, mirror);
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
 
         // 重启过程中手机掉线：必须落到设备状态，而不是笼统的“重启失败”。
         *live.lock().unwrap() = vec![device("phone", DeviceState::Offline)];
@@ -10438,7 +11199,9 @@ mod tests {
 
         // 没有进程时不得改写会话状态。
         let idle = SessionStore::default();
-        assert!(begin_session_restart(&idle, "phone".into()).unwrap().is_none());
+        assert!(begin_session_restart(&idle, "phone".into())
+            .unwrap()
+            .is_none());
         assert_eq!(snapshot(&idle).phase, SessionPhase::Idle);
     }
 
@@ -10472,7 +11235,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(wait_until_idle_or_failed(&store).phase, SessionPhase::Idle);
     }
@@ -10485,7 +11255,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None).unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
 
         let session = wait_until_idle_or_failed(&store);
         assert_eq!(session.phase, SessionPhase::Failed);
@@ -10505,7 +11282,9 @@ mod tests {
         assert!(!is_wireless_serial("emulator-5554"));
         // 无线：ip:port 与 mDNS 派生序列号。
         assert!(is_wireless_serial("192.168.1.9:33739"));
-        assert!(is_wireless_serial("adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp"));
+        assert!(is_wireless_serial(
+            "adb-79j7kn9tkjt8rwss-rF7qH8._adb-tls-connect._tcp"
+        ));
         // 边界：空串与畸形输入按 USB 处理（不做补偿）。
         assert!(!is_wireless_serial(""));
     }
@@ -10533,7 +11312,10 @@ mod tests {
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
         // 设备侧被写成延长值；内存备份保存的是原值 30000。
-        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
+        assert_eq!(
+            *adb.screen_timeout.lock().unwrap(),
+            Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS)
+        );
         let backup = keep_awake_backup_of(&store, "192.168.1.9:33739").expect("backup must exist");
         assert_eq!(backup.serial, "192.168.1.9:33739");
         assert_eq!(backup.millis, 30000);
@@ -10552,14 +11334,24 @@ mod tests {
 
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
-        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
-        assert_eq!(*adb.stay_on_bits.lock().unwrap(), Some(STAY_ON_WHILE_PLUGGED_IN_ALL));
+        assert_eq!(
+            *adb.screen_timeout.lock().unwrap(),
+            Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS)
+        );
+        assert_eq!(
+            *adb.stay_on_bits.lock().unwrap(),
+            Some(STAY_ON_WHILE_PLUGGED_IN_ALL)
+        );
         let backup = keep_awake_backup_of(&store, "192.168.1.9:33739").expect("backup must exist");
         assert_eq!(backup.millis, 30000);
         assert_eq!(backup.stay_on_while_plugged_in, Some(0));
         // 不得伪造充电：设备侧不得出现 set_charging 调用。
         assert!(
-            !adb.calls.lock().unwrap().iter().any(|call| call.starts_with("set_charging")),
+            !adb.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.starts_with("set_charging")),
             "{:?}",
             adb.calls.lock().unwrap()
         );
@@ -10576,11 +11368,20 @@ mod tests {
 
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
-        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
+        assert_eq!(
+            *adb.screen_timeout.lock().unwrap(),
+            Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS)
+        );
         assert_eq!(*adb.stay_on_bits.lock().unwrap(), None);
         let calls = adb.calls.lock().unwrap().clone();
-        assert!(!calls.iter().any(|call| call.starts_with("set_stay_on")), "{calls:?}");
-        assert!(!calls.iter().any(|call| call.starts_with("set_charging")), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| call.starts_with("set_stay_on")),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("set_charging")),
+            "{calls:?}"
+        );
         let backup = keep_awake_backup_of(&store, "192.168.1.9:33739").unwrap();
         assert_eq!(backup.stay_on_while_plugged_in, None);
     }
@@ -10596,7 +11397,11 @@ mod tests {
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
         adb.calls.lock().unwrap().clear();
 
-        assert!(disable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739"));
+        assert!(disable_wireless_keep_awake(
+            &adb,
+            &store,
+            "192.168.1.9:33739"
+        ));
 
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(30000));
         assert_eq!(*adb.stay_on_bits.lock().unwrap(), Some(0));
@@ -10631,10 +11436,17 @@ mod tests {
 
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
-        assert_eq!(*adb.stay_on_bits.lock().unwrap(), Some(STAY_ON_WHILE_PLUGGED_IN_ALL));
+        assert_eq!(
+            *adb.stay_on_bits.lock().unwrap(),
+            Some(STAY_ON_WHILE_PLUGGED_IN_ALL)
+        );
         let backup = keep_awake_backup_of(&store, "192.168.1.9:33739").unwrap();
         assert_eq!(backup.millis, 30000, "重启不得覆盖原值账本");
-        assert_eq!(backup.stay_on_while_plugged_in, Some(0), "重启不得覆盖原值账本");
+        assert_eq!(
+            backup.stay_on_while_plugged_in,
+            Some(0),
+            "重启不得覆盖原值账本"
+        );
         let calls = adb.calls.lock().unwrap().clone();
         let restarted = &calls[before..];
         assert!(
@@ -10660,8 +11472,14 @@ mod tests {
 
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(15000));
         let calls = adb.calls.lock().unwrap().clone();
-        assert!(!calls.iter().any(|call| call.starts_with("set_stay_on")), "{calls:?}");
-        assert!(!calls.iter().any(|call| call.starts_with("set_charging")), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| call.starts_with("set_stay_on")),
+            "{calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("set_charging")),
+            "{calls:?}"
+        );
         assert!(!path.exists(), "还原成功后账本文件必须删除");
     }
 
@@ -10697,11 +11515,17 @@ mod tests {
 
         let backup = keep_awake_backup_of(&store, "192.168.1.9:33739").unwrap();
         assert_eq!(backup.millis, 30000, "重启不得覆盖原值备份");
-        assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
+        assert_eq!(
+            *adb.screen_timeout.lock().unwrap(),
+            Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS)
+        );
         // 第二次启用只写不读。
         let calls = adb.calls.lock().unwrap().clone();
         assert_eq!(
-            calls.iter().filter(|call| call.starts_with("get_timeout")).count(),
+            calls
+                .iter()
+                .filter(|call| call.starts_with("get_timeout"))
+                .count(),
             1,
             "只有第一次启用需要读原值：{calls:?}"
         );
@@ -10717,7 +11541,12 @@ mod tests {
 
         assert!(keep_awake_backup_of(&store, "192.168.1.9:33739").is_none());
         // 读不到原值就不写：绝不瞎猜一个"默认值"当原值。
-        assert!(adb.calls.lock().unwrap().iter().all(|call| !call.starts_with("set_timeout")));
+        assert!(adb
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|call| !call.starts_with("set_timeout")));
     }
 
     #[test]
@@ -10729,7 +11558,11 @@ mod tests {
         let store = SessionStore::default();
         enable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739");
 
-        assert!(disable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739"));
+        assert!(disable_wireless_keep_awake(
+            &adb,
+            &store,
+            "192.168.1.9:33739"
+        ));
 
         assert_eq!(*adb.screen_timeout.lock().unwrap(), Some(30000));
         assert!(keep_awake_backup_of(&store, "192.168.1.9:33739").is_none());
@@ -10746,7 +11579,11 @@ mod tests {
 
         // 补偿成功后设备离线：写入原值必然失败。
         *adb.device_writes_fail.lock().unwrap() = true;
-        assert!(!disable_wireless_keep_awake(&adb, &store, "192.168.1.9:33739"));
+        assert!(!disable_wireless_keep_awake(
+            &adb,
+            &store,
+            "192.168.1.9:33739"
+        ));
         // 设备离线导致还原失败：备份必须保留，等下次会话或下次启动重试。
         assert!(keep_awake_backup_of(&store, "192.168.1.9:33739").is_some());
     }
@@ -10773,8 +11610,14 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(*device_timeout.lock().unwrap(), Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS));
-        assert_eq!(*device_stay_on.lock().unwrap(), Some(STAY_ON_WHILE_PLUGGED_IN_ALL));
+        assert_eq!(
+            *device_timeout.lock().unwrap(),
+            Some(WIRELESS_KEEP_AWAKE_TIMEOUT_MS)
+        );
+        assert_eq!(
+            *device_stay_on.lock().unwrap(),
+            Some(STAY_ON_WHILE_PLUGGED_IN_ALL)
+        );
 
         stop_mirroring_with(&store, Some("192.168.1.9:33739".into())).unwrap();
         disable_wireless_keep_awake(runtimes.adb.as_ref(), &store, "192.168.1.9:33739");
@@ -10792,7 +11635,10 @@ mod tests {
         assert_eq!(session.phase, SessionPhase::Paired);
         assert_eq!(session.serial.as_deref(), Some("192.168.1.20:41839"));
 
-        mark_session(&store, MirrorSession::streaming("192.168.1.20:41839".into()));
+        mark_session(
+            &store,
+            MirrorSession::streaming("192.168.1.20:41839".into()),
+        );
         mark_paired_if_idle(&store, "192.168.1.20:5555".into());
         assert_eq!(
             snapshot(&store).phase,
@@ -10826,12 +11672,29 @@ mod tests {
         ];
         let mut tags: Vec<String> = phases
             .iter()
-            .map(|phase| serde_json::to_value(phase).unwrap().as_str().unwrap().to_owned())
+            .map(|phase| {
+                serde_json::to_value(phase)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
             .collect();
         let total = tags.len();
         tags.sort();
         tags.dedup();
-        assert_eq!(tags, ["connecting", "failed", "idle", "offline", "paired", "streaming", "unauthorized"]);
+        assert_eq!(
+            tags,
+            [
+                "connecting",
+                "failed",
+                "idle",
+                "offline",
+                "paired",
+                "streaming",
+                "unauthorized"
+            ]
+        );
         assert_eq!(tags.len(), total);
     }
 
@@ -10963,7 +11826,10 @@ mod tests {
                 ),
                 "device_offline",
             ),
-            (runtimes(FakeAdb::unavailable(), FakeMirror::running()), "adb_unavailable"),
+            (
+                runtimes(FakeAdb::unavailable(), FakeMirror::running()),
+                "adb_unavailable",
+            ),
             (
                 runtimes(FakeAdb::with_devices(Vec::new()), FakeMirror::running()),
                 "device_not_connected",
@@ -11202,7 +12068,8 @@ mod tests {
                 "  mWakefulness=Asleep\n",
             )
         };
-        let report = pin_pad_probe_with(&runtimes(asleep, FakeMirror::running()), "phone".into()).unwrap();
+        let report =
+            pin_pad_probe_with(&runtimes(asleep, FakeMirror::running()), "phone".into()).unwrap();
         assert!(!report.active);
         assert_eq!(report.detail, "screen_not_awake");
 
@@ -11211,7 +12078,8 @@ mod tests {
             probe_bytes: Some(0),
             ..FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)])
         };
-        let report = pin_pad_probe_with(&runtimes(unknown, FakeMirror::running()), "phone".into()).unwrap();
+        let report =
+            pin_pad_probe_with(&runtimes(unknown, FakeMirror::running()), "phone".into()).unwrap();
         assert!(!report.active);
         assert_eq!(report.detail, "keyguard_not_showing");
 
@@ -11223,7 +12091,8 @@ mod tests {
                 "  mWakefulness=Awake\n",
             )
         };
-        let report = pin_pad_probe_with(&runtimes(broken, FakeMirror::running()), "phone".into()).unwrap();
+        let report =
+            pin_pad_probe_with(&runtimes(broken, FakeMirror::running()), "phone".into()).unwrap();
         assert!(!report.active);
         assert_eq!(report.detail, "capture_failed");
     }
@@ -11240,7 +12109,9 @@ mod tests {
         );
 
         assert_eq!(
-            lock_report_with(&runtimes, "phone".into()).unwrap_err().code,
+            lock_report_with(&runtimes, "phone".into())
+                .unwrap_err()
+                .code,
             "device_unauthorized"
         );
         assert_eq!(
@@ -11302,9 +12173,18 @@ mod tests {
 
     #[test]
     fn display_policy_parser_maps_bright_dim_and_missing() {
-        assert_eq!(parse_display_policy("  mPowerRequest=policy=BRIGHT"), DisplayPolicy::Bright);
-        assert_eq!(parse_display_policy("  mPowerRequest=policy=DIM, x"), DisplayPolicy::Dim);
-        assert_eq!(parse_display_policy("  mPowerRequest=policy=OFF"), DisplayPolicy::Other);
+        assert_eq!(
+            parse_display_policy("  mPowerRequest=policy=BRIGHT"),
+            DisplayPolicy::Bright
+        );
+        assert_eq!(
+            parse_display_policy("  mPowerRequest=policy=DIM, x"),
+            DisplayPolicy::Dim
+        );
+        assert_eq!(
+            parse_display_policy("  mPowerRequest=policy=OFF"),
+            DisplayPolicy::Other
+        );
         assert_eq!(parse_display_policy("no such field"), DisplayPolicy::Other);
     }
 
@@ -11396,8 +12276,14 @@ mod tests {
             FakeMirror::running(),
         );
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-            .unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
         let epoch = store.lock().unwrap()["phone"].epoch;
 
         // 用带状态的 adb 直调 tick（线程循环即逐次调用 tick）。
@@ -11428,8 +12314,14 @@ mod tests {
             FakeMirror::running(),
         );
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-            .unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
         let epoch = store.lock().unwrap()["phone"].epoch;
 
         assert!(keep_awake_guard_tick(&probe, &store, epoch, "phone"));
@@ -11455,8 +12347,14 @@ mod tests {
             FakeMirror::running(),
         );
         let store = SessionStore::default();
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-            .unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
 
         // 用过期的 epoch 调用：守护应当退出（返回 false），不注入任何按键。
         assert!(!keep_awake_guard_tick(&probe, &store, 9999, "phone"));
@@ -11482,7 +12380,10 @@ mod tests {
             "192.168.1.5:42137"
         );
         // 短物理 id / USB serial 原样返回。
-        assert_eq!(normalize_device_identity_key("qc8d8tonbmmzm7qs"), "qc8d8tonbmmzm7qs");
+        assert_eq!(
+            normalize_device_identity_key("qc8d8tonbmmzm7qs"),
+            "qc8d8tonbmmzm7qs"
+        );
     }
 
     #[test]
@@ -11496,7 +12397,10 @@ mod tests {
         let devices = vec![device];
         // 设备在线：反查 physical_serial（稳定，重连不变）。
         assert_eq!(
-            desktop_pref_key_for(&devices, "adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp"),
+            desktop_pref_key_for(
+                &devices,
+                "adb-qc8d8tonbmmzm7qs-rQWqVr._adb-tls-connect._tcp"
+            ),
             "qc8d8tonbmmzm7qs"
         );
         // 设备离线/查不到：归一化兜底，仍能命中同一台手机的 pref。
@@ -11585,7 +12489,10 @@ mod tests {
         );
         save_desktop_prefs(&path, &prefs).expect("写入应成功");
         let loaded = load_desktop_prefs(&path);
-        assert_eq!(loaded.get("qc8d8tonbmmzm7qs"), prefs.get("qc8d8tonbmmzm7qs"));
+        assert_eq!(
+            loaded.get("qc8d8tonbmmzm7qs"),
+            prefs.get("qc8d8tonbmmzm7qs")
+        );
         // 文件被手改坏 → 返回空表而非 panic/报错（与前端容错策略一致）。
         fs::write(&path, b"not json").unwrap();
         assert!(load_desktop_prefs(&path).is_empty());
@@ -11679,10 +12586,8 @@ mod tests {
 
     #[test]
     fn a_recent_device_record_is_removable_from_disk() {
-        let directory = std::env::temp_dir().join(format!(
-            "mirrordock-recent-test-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("mirrordock-recent-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         let path = directory.join("recent-devices.json");
 
@@ -11719,8 +12624,16 @@ mod tests {
         save_recent_devices(
             &path,
             &[
-                RecentDevice { serial: "usb-a".into(), label: "A".into(), last_used_at: 7 },
-                RecentDevice { serial: "192.168.1.20:37123".into(), label: "B".into(), last_used_at: 8 },
+                RecentDevice {
+                    serial: "usb-a".into(),
+                    label: "A".into(),
+                    last_used_at: 7,
+                },
+                RecentDevice {
+                    serial: "192.168.1.20:37123".into(),
+                    label: "B".into(),
+                    last_used_at: 8,
+                },
             ],
         )
         .unwrap();
@@ -11745,10 +12658,9 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_default_when_missing_or_corrupt() {        let directory = std::env::temp_dir().join(format!(
-            "mirrordock-settings-test-{}",
-            std::process::id()
-        ));
+    fn app_settings_default_when_missing_or_corrupt() {
+        let directory =
+            std::env::temp_dir().join(format!("mirrordock-settings-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         let path = directory.join("nested").join("app-settings.json");
 
@@ -11776,7 +12688,11 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
         let path = directory.join("app-settings.json");
 
-        let enabled = AppSettings { hide_dock_icon: true, auto_reconnect: true, recording_dir: None };
+        let enabled = AppSettings {
+            hide_dock_icon: true,
+            auto_reconnect: true,
+            recording_dir: None,
+        };
         save_app_settings(&path, &enabled).unwrap();
         assert_eq!(load_app_settings(&path), enabled);
 
@@ -11810,9 +12726,7 @@ mod tests {
     fn clipboard_autosync_is_on_by_default_and_only_sends_the_disable_flag_when_turned_off() {
         // 默认不传任何剪贴板参数：自动同步是 scrcpy 的默认行为，MirrorDock 不画蛇添足。
         let args = SessionOptions::default().arguments().unwrap();
-        assert!(!args
-            .iter()
-            .any(|argument| argument.contains("clipboard")));
+        assert!(!args.iter().any(|argument| argument.contains("clipboard")));
 
         let off = SessionOptions {
             clipboard_autosync: false,
@@ -11851,7 +12765,9 @@ mod tests {
     fn shortcut_modifier_is_whitelisted_and_off_by_default() {
         // 默认不传参数：沿用 scrcpy 默认修饰键（左 Alt / 左 Super）。
         let args = SessionOptions::default().arguments().unwrap();
-        assert!(!args.iter().any(|argument| argument.contains("shortcut-mod")));
+        assert!(!args
+            .iter()
+            .any(|argument| argument.contains("shortcut-mod")));
 
         // 白名单内的值原样透传为固定参数。
         let custom = SessionOptions {
@@ -11878,7 +12794,9 @@ mod tests {
     fn show_touches_and_read_only_are_off_by_default_and_send_fixed_flags() {
         // 两个演示相关开关默认关闭，不传任何参数。
         let args = SessionOptions::default().arguments().unwrap();
-        assert!(!args.iter().any(|argument| argument.contains("show-touches")));
+        assert!(!args
+            .iter()
+            .any(|argument| argument.contains("show-touches")));
         assert!(!args.iter().any(|argument| argument.contains("no-control")));
 
         let demo = SessionOptions {
@@ -11919,19 +12837,34 @@ mod tests {
             devices: vec![device(endpoint, DeviceState::Ready)],
             ..FakeAdb::default()
         };
-        assert_eq!(classify_reconnect_probe(&ready, endpoint), ReconnectProbe::Ready);
+        assert_eq!(
+            classify_reconnect_probe(&ready, endpoint),
+            ReconnectProbe::Ready
+        );
         // 设备在表里但未授权 → 继续等。
         let unauthorized = FakeAdb {
             devices: vec![device(endpoint, DeviceState::Unauthorized)],
             ..FakeAdb::default()
         };
-        assert_eq!(classify_reconnect_probe(&unauthorized, endpoint), ReconnectProbe::NotReady);
+        assert_eq!(
+            classify_reconnect_probe(&unauthorized, endpoint),
+            ReconnectProbe::NotReady
+        );
         // 设备还没回来 → 继续等。
         let absent = FakeAdb::default();
-        assert_eq!(classify_reconnect_probe(&absent, endpoint), ReconnectProbe::NotReady);
+        assert_eq!(
+            classify_reconnect_probe(&absent, endpoint),
+            ReconnectProbe::NotReady
+        );
         // adb 服务不可用 → 继续等（服务可能正在重启）。
-        let down = FakeAdb { unavailable: true, ..FakeAdb::default() };
-        assert_eq!(classify_reconnect_probe(&down, endpoint), ReconnectProbe::Unavailable);
+        let down = FakeAdb {
+            unavailable: true,
+            ..FakeAdb::default()
+        };
+        assert_eq!(
+            classify_reconnect_probe(&down, endpoint),
+            ReconnectProbe::Unavailable
+        );
     }
 
     #[test]
@@ -11946,7 +12879,10 @@ mod tests {
                 max_fps: Some(fps),
                 ..Default::default()
             };
-            assert!(limited.arguments().unwrap().contains(&format!("--max-fps={fps}")));
+            assert!(limited
+                .arguments()
+                .unwrap()
+                .contains(&format!("--max-fps={fps}")));
         }
 
         // 白名单外一律拒绝，不透传任意数字。
@@ -11973,7 +12909,10 @@ mod tests {
             desktop_mode: true,
             ..Default::default()
         };
-        assert!(desktop.arguments().unwrap().contains(&"--new-display".into()));
+        assert!(desktop
+            .arguments()
+            .unwrap()
+            .contains(&"--new-display".into()));
 
         // 摄像头源：--video-source=camera，且强制 --no-audio（不采集麦克风）。
         let camera = SessionOptions {
@@ -12020,7 +12959,11 @@ mod tests {
             desktop_mode: true,
             ..Default::default()
         };
-        assert!(!no_app.arguments().unwrap().iter().any(|a| a.contains("start-app")));
+        assert!(!no_app
+            .arguments()
+            .unwrap()
+            .iter()
+            .any(|a| a.contains("start-app")));
 
         // 非法字符（空格/斜杠/冒号/中文）一律拒绝。
         for hostile in ["com evil app", "com/evil", "com:8080", "应用"] {
@@ -12042,7 +12985,10 @@ mod tests {
             desktop_app: Some("a.".repeat(80)),
             ..Default::default()
         };
-        assert_eq!(too_long.arguments().unwrap_err().code, "desktop_app_invalid");
+        assert_eq!(
+            too_long.arguments().unwrap_err().code,
+            "desktop_app_invalid"
+        );
 
         // 摄像头源模式下忽略 desktop_app（不传 --start-app）。
         let camera = SessionOptions {
@@ -12050,15 +12996,28 @@ mod tests {
             desktop_app: Some("com.android.browser".into()),
             ..Default::default()
         };
-        assert!(!camera.arguments().unwrap().iter().any(|a| a.contains("start-app")));
+        assert!(!camera
+            .arguments()
+            .unwrap()
+            .iter()
+            .any(|a| a.contains("start-app")));
 
         // X10-79：异常退出时把 scrcpy 输出尾部附进恢复建议，用户能看到原文。
-        let exited = resolve_process_exit("phone", false, "ERROR: Could not open icon image\n[server] INFO: Cleaning up");
+        let exited = resolve_process_exit(
+            "phone",
+            false,
+            "ERROR: Could not open icon image\n[server] INFO: Cleaning up",
+        );
         let error = exited.error.expect("异常退出必须是失败态");
-        assert!(error.recovery.contains("scrcpy 输出"), "恢复建议应带上 scrcpy 原文");
+        assert!(
+            error.recovery.contains("scrcpy 输出"),
+            "恢复建议应带上 scrcpy 原文"
+        );
         assert!(error.recovery.contains("Could not open icon image"));
         // 正常退出与空输出都不附加。
-        assert!(resolve_process_exit("phone", true, "whatever").error.is_none());
+        assert!(resolve_process_exit("phone", true, "whatever")
+            .error
+            .is_none());
         assert!(!resolve_process_exit("phone", false, "  \n ")
             .error
             .unwrap()
@@ -12073,10 +13032,18 @@ mod tests {
         // X10-80：落地判定——真机失败案例的形状：虚拟屏分段里没有该应用的记录。
         let dumpsys = "Display #84 (activities from top to bottom):\n  * Task{... type=standard A=1000:com.android.settings.root ...}\n    packageName=com.android.settings\nDisplay #0 (activities from top to bottom):\n    packageName=com.netease.dhxy.qihoo\n";
         // 应用在别的屏（#0）不算落地 —— 正是真机上「游戏跑到主屏之外消失」的形状。
-        assert!(!desktop_app_landed(dumpsys, Some(84), "com.netease.dhxy.qihoo"));
+        assert!(!desktop_app_landed(
+            dumpsys,
+            Some(84),
+            "com.netease.dhxy.qihoo"
+        ));
         // 在指定屏上有记录才算落地。
         let landed = "Display #84 (activities from top to bottom):\n    packageName=com.netease.dhxy.qihoo\n";
-        assert!(desktop_app_landed(landed, Some(84), "com.netease.dhxy.qihoo"));
+        assert!(desktop_app_landed(
+            landed,
+            Some(84),
+            "com.netease.dhxy.qihoo"
+        ));
         // 解析不出分段时退化为全局查找（宁可不报，不误报）。
         assert!(desktop_app_landed(dumpsys, None, "com.netease.dhxy.qihoo"));
 
@@ -12095,9 +13062,18 @@ mod tests {
             ..Default::default()
         };
         let args = desktop.record_arguments(Some(105)).unwrap();
-        assert!(args.contains(&"--display-id=105".into()), "应捕获指定虚拟屏：{args:?}");
-        assert!(!args.iter().any(|a| a.contains("new-display")), "录制不建第二块屏：{args:?}");
-        assert!(!args.iter().any(|a| a.contains("start-app")), "录制不重复拉起应用：{args:?}");
+        assert!(
+            args.contains(&"--display-id=105".into()),
+            "应捕获指定虚拟屏：{args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("new-display")),
+            "录制不建第二块屏：{args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("start-app")),
+            "录制不重复拉起应用：{args:?}"
+        );
 
         // 拿不到显示通道虚拟屏 id 时拒绝启动（而非静默录空屏）。
         let err = desktop.record_arguments(None).unwrap_err();
@@ -12141,7 +13117,11 @@ mod tests {
                 },
             ]
         );
-        assert!(calls.lock().unwrap().iter().any(|c| c.contains("list_device_apps")));
+        assert!(calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("list_device_apps")));
 
         // 未就绪设备拒绝（与文件传输同一套就绪门槛）。
         let offline = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
@@ -12213,7 +13193,11 @@ mod tests {
         .unwrap();
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].name, "浏览器");
-        assert!(!calls.lock().unwrap().iter().any(|c| c.contains("list_device_apps")));
+        assert!(!calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("list_device_apps")));
 
         // scrcpy 失败：回退 pm list，应用名退化为包名。
         let runtimes = screenshot_runtimes(make());
@@ -12259,10 +13243,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn mirror_bundle_wraps_scrcpy_with_icon_and_plist() {
-        let directory = std::env::temp_dir().join(format!(
-            "mirrordock-bundle-test-{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("mirrordock-bundle-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         let runtime = directory.join("runtime");
         std::fs::create_dir_all(&runtime).unwrap();
@@ -12324,8 +13306,9 @@ mod tests {
             TINY_PNG.to_vec(),
         ));
 
-        let saved = capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
-            .unwrap();
+        let saved =
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "shot.png".into())
+                .unwrap();
 
         assert_eq!(saved.file_name, "shot.png");
         assert_eq!(saved.bytes, TINY_PNG.len());
@@ -12638,8 +13621,8 @@ mod tests {
         .unwrap();
         attach_test_recording(&store, "phone", &live);
 
-        let error =
-            remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store).unwrap_err();
+        let error = remove_recording_file(&directory, "MirrorDock-20260928-171825.mp4", &store)
+            .unwrap_err();
         assert_eq!(error.code, "recording_in_progress");
         assert!(live.exists(), "正在写的录像文件不得被删掉");
 
@@ -12755,7 +13738,8 @@ mod tests {
     /// 反向验证：输出一旦含 (tcpip)，同 serial 即翻转为 wireless_link_cut（见上）。
     #[test]
     fn classify_usb_zero_error_exit_as_link_cut() {
-        let tail = "INFO: --> (usb) device M2104K10AC\nINFO: Renderer: metal\nINFO: Texture: 848x1920";
+        let tail =
+            "INFO: --> (usb) device M2104K10AC\nINFO: Renderer: metal\nINFO: Texture: 848x1920";
         assert_eq!(
             classify_mirror_exit("79j7kn9tkjt8rwss", tail),
             MirrorExitKind::UsbLinkCut
@@ -12942,10 +13926,17 @@ mod tests {
         let calls = Arc::clone(&adb.calls);
         let runtimes = screenshot_runtimes(adb);
 
-        let receipt = send_file_to_device_with(&runtimes, "phone".into(), local.to_string_lossy().into_owned())
-            .unwrap();
+        let receipt = send_file_to_device_with(
+            &runtimes,
+            "phone".into(),
+            local.to_string_lossy().into_owned(),
+        )
+        .unwrap();
 
-        assert_eq!(receipt.file_name, "相册 导出.jpg", "中文与空格的文件名必须原样保留");
+        assert_eq!(
+            receipt.file_name, "相册 导出.jpg",
+            "中文与空格的文件名必须原样保留"
+        );
         assert_eq!(receipt.path, "/sdcard/Download/MirrorDock/相册 导出.jpg");
         assert_eq!(receipt.bytes, contents.len() as u64);
         let calls = calls.lock().unwrap().clone();
@@ -12953,10 +13944,13 @@ mod tests {
             calls.contains(&format!("mkdir phone {DEVICE_TRANSFER_DIR}")),
             "发送前必须先确保接收目录存在，实际调用：{calls:?}"
         );
-        assert!(calls
-            .iter()
-            .any(|call| call.starts_with(&format!("push phone {} {DEVICE_TRANSFER_DIR}", local.to_string_lossy()))),
-            "推送必须直达传输目录，实际调用：{calls:?}");
+        assert!(
+            calls.iter().any(|call| call.starts_with(&format!(
+                "push phone {} {DEVICE_TRANSFER_DIR}",
+                local.to_string_lossy()
+            ))),
+            "推送必须直达传输目录，实际调用：{calls:?}"
+        );
 
         let _ = fs::remove_dir_all(&local_dir);
     }
@@ -12984,7 +13978,10 @@ mod tests {
             local_dir.to_string_lossy().into_owned(),
         )
         .unwrap_err();
-        assert_eq!(directory.code, "transfer_local_missing", "目录不能当作文件发送");
+        assert_eq!(
+            directory.code, "transfer_local_missing",
+            "目录不能当作文件发送"
+        );
 
         assert!(
             !calls
@@ -13029,10 +14026,7 @@ mod tests {
             "",
             "   ",
         ] {
-            assert!(
-                validate_transfer_name(name).is_err(),
-                "“{name}”必须被拒绝"
-            );
+            assert!(validate_transfer_name(name).is_err(), "“{name}”必须被拒绝");
         }
         assert!(validate_transfer_name(&"a".repeat(MAX_TRANSFER_NAME_LEN + 1)).is_err());
 
@@ -13090,11 +14084,14 @@ mod tests {
             "取回的文件必须真实落盘"
         );
         let calls = calls.lock().unwrap().clone();
-        assert!(calls
-            .iter()
-            .any(|call| call == &format!("pull phone {DEVICE_TRANSFER_DIR}/导出.csv {}",
-                directory.join("导出.csv").to_string_lossy())),
-            "拉取必须指向传输目录内的同名文件，实际调用：{calls:?}");
+        assert!(
+            calls.iter().any(|call| call
+                == &format!(
+                    "pull phone {DEVICE_TRANSFER_DIR}/导出.csv {}",
+                    directory.join("导出.csv").to_string_lossy()
+                )),
+            "拉取必须指向传输目录内的同名文件，实际调用：{calls:?}"
+        );
 
         let _ = fs::remove_dir_all(&directory);
     }
@@ -13112,9 +14109,10 @@ mod tests {
         delete_device_file_with(&runtimes, "phone".into(), "发送的 报表.csv".into()).unwrap();
 
         let calls = calls.lock().unwrap().clone();
-        assert!(calls.contains(&format!(
-            "rm phone {DEVICE_TRANSFER_DIR}/发送的 报表.csv"
-        )), "删除必须指向传输目录内的同名文件，实际调用：{calls:?}");
+        assert!(
+            calls.contains(&format!("rm phone {DEVICE_TRANSFER_DIR}/发送的 报表.csv")),
+            "删除必须指向传输目录内的同名文件，实际调用：{calls:?}"
+        );
 
         // 名单外的一律拒绝：逃逸路径在拼路径之前就被拦下。
         for hostile in ["../escape.txt", "sub/dir.txt", ".hidden", ""] {
@@ -13129,7 +14127,11 @@ mod tests {
                 "“{hostile}”必须被拒绝"
             );
             assert!(
-                calls.lock().unwrap().iter().all(|call| !call.starts_with("rm")),
+                calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|call| !call.starts_with("rm")),
                 "非法文件名不得发起任何 rm 调用"
             );
         }
@@ -13143,7 +14145,11 @@ mod tests {
         let runtimes = screenshot_runtimes(adb);
         assert!(delete_device_file_with(&runtimes, "phone".into(), "a.txt".into()).is_err());
         assert!(
-            calls.lock().unwrap().iter().all(|call| !call.starts_with("rm")),
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|call| !call.starts_with("rm")),
             "未授权设备不得发起删除"
         );
     }
@@ -13173,7 +14179,9 @@ mod tests {
             "transfer_push_failed"
         );
         assert_eq!(
-            list_device_files_with(&runtimes, "phone".into()).unwrap_err().code,
+            list_device_files_with(&runtimes, "phone".into())
+                .unwrap_err()
+                .code,
             "transfer_list_failed"
         );
         let pull_error =
@@ -13187,6 +14195,225 @@ mod tests {
 
         let _ = fs::remove_dir_all(&directory);
         let _ = fs::remove_dir_all(&local_dir);
+    }
+
+    // -- 相册（X10-129）--
+
+    #[test]
+    fn gallery_dirs_are_accepted_only_inside_the_whitelist() {
+        // 白名单根与根内子目录都可用。
+        for dir in [
+            "/sdcard/DCIM",
+            "/sdcard/DCIM/Camera",
+            "/sdcard/DCIM/Private",
+        ] {
+            assert_eq!(validate_gallery_dir(dir).unwrap(), dir, "“{dir}”应当可用");
+        }
+        // 逃逸与白名单外路径一律拒绝，且模式统一。
+        for hostile in [
+            "/sdcard/data",
+            "/data",
+            "../sdcard",
+            "/sdcard/DCIM/../data",
+            "C:\\DCIM",
+            "",
+        ] {
+            let error = validate_gallery_dir(hostile).unwrap_err();
+            assert_eq!(error.code, "gallery_dir_invalid", "“{hostile}”必须被拒绝");
+        }
+    }
+
+    #[test]
+    fn a_gallery_listing_keeps_media_files_only() {
+        // 媒体扩展名白名单过滤：.nomedia、目录产物、无后缀文件都不进列表。
+        assert!(is_gallery_media("IMG_2026.jpg"));
+        assert!(is_gallery_media("VID_0001.MP4"));
+        assert!(is_gallery_media("相册 报表.png"));
+        assert!(!is_gallery_media(".nomedia"));
+        assert!(!is_gallery_media("notes.txt"));
+        assert!(!is_gallery_media("noext"));
+
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            device_listing: Some("IMG_1.jpg\r\n.nomedia\n notes.txt\nVID_1.mp4\n".to_owned()),
+            ..FakeAdb::default()
+        };
+        let runtimes = screenshot_runtimes(adb);
+
+        let names =
+            list_device_gallery_with(&runtimes, "phone".into(), "/sdcard/DCIM/Camera".into())
+                .unwrap();
+        assert_eq!(names, vec!["IMG_1.jpg", "VID_1.mp4"]);
+
+        // 白名单外的目录在发起任何调用之前就被拒绝。
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        assert_eq!(
+            list_device_gallery_with(&runtimes, "phone".into(), "/sdcard/data".into())
+                .unwrap_err()
+                .code,
+            "gallery_dir_invalid"
+        );
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|call| !call.starts_with("ls")),
+            "白名单外目录不得发起任何列表调用"
+        );
+    }
+
+    #[test]
+    fn a_gallery_file_falls_back_to_the_whitelisted_directory_and_lands_locally() {
+        let directory = scratch_dir("gallery-fetch");
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            transfer_fails: false,
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        let receipt = fetch_device_gallery_file_with(
+            &runtimes,
+            &directory,
+            "phone".into(),
+            "/sdcard/DCIM/Camera".into(),
+            "IMG 2026.jpg".into(),
+        )
+        .unwrap();
+        assert!(receipt.path.ends_with("IMG 2026.jpg"));
+        let remote = "/sdcard/DCIM/Camera/IMG 2026.jpg";
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.contains(remote)),
+            "拉取必须指向白名单目录内的同名文件，实际调用：{calls:?}"
+        );
+
+        // 白名单外目录与非法文件名都拒绝。
+        assert_eq!(
+            fetch_device_gallery_file_with(
+                &runtimes,
+                &directory,
+                "phone".into(),
+                "/sdcard/data".into(),
+                "IMG.jpg".into()
+            )
+            .unwrap_err()
+            .code,
+            "gallery_dir_invalid"
+        );
+        assert_eq!(
+            fetch_device_gallery_file_with(
+                &runtimes,
+                &directory,
+                "phone".into(),
+                "/sdcard/DCIM".into(),
+                "../escape.jpg".into()
+            )
+            .unwrap_err()
+            .code,
+            "transfer_name_invalid"
+        );
+
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    // -- 输入注入（X10-130）--
+
+    #[test]
+    fn injected_input_reaches_the_device_with_validated_args_only() {
+        // 合法按键 / 点击 / 滑动 → 以独立 argv 形式发出 input 调用。
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+
+        inject_device_key_with(&runtimes, "phone".into(), "KEYCODE_BACK".into()).unwrap();
+        inject_device_tap_with(&runtimes, "phone".into(), 120, 240).unwrap();
+        inject_device_swipe_with(&runtimes, "phone".into(), 10, 20, 300, 400, 250).unwrap();
+
+        let calls = calls.lock().unwrap().clone();
+        assert!(
+            calls.contains(&"input keyevent KEYCODE_BACK phone".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"input tap 120 240 phone".to_string()),
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"input swipe 10 20 300 400 250 phone".to_string()),
+            "{calls:?}"
+        );
+
+        // 白名单外按键码、越界坐标 / 时长：在进 adb 之前就被拒绝。
+        for hostile in ["rm -rf", "KEYCODE_BACK; shutdown", "keycode_back", ""] {
+            let error =
+                inject_device_key_with(&runtimes, "phone".into(), hostile.to_owned()).unwrap_err();
+            assert_eq!(error.code, "input_keycode_invalid", "“{hostile}”必须被拒绝");
+        }
+        assert_eq!(
+            inject_device_tap_with(&runtimes, "phone".into(), -1, 0)
+                .unwrap_err()
+                .code,
+            "input_coord_invalid"
+        );
+        assert_eq!(
+            inject_device_tap_with(&runtimes, "phone".into(), 0, 10_000)
+                .unwrap_err()
+                .code,
+            "input_coord_invalid"
+        );
+        assert_eq!(
+            inject_device_swipe_with(&runtimes, "phone".into(), 0, 0, 100, 100, 10)
+                .unwrap_err()
+                .code,
+            "input_duration_invalid"
+        );
+    }
+
+    #[test]
+    fn injected_input_requires_a_ready_device_and_reports_failures_honestly() {
+        // 未授权设备：不发起任何注入。
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Unauthorized)],
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        assert!(inject_device_key_with(&runtimes, "phone".into(), "KEYCODE_BACK".into()).is_err());
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|call| !call.starts_with("input")),
+            "未授权设备不得发起注入"
+        );
+
+        // 设备离线（写入失败）：错误如实上抛，不伪装成注入成功。
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            ..FakeAdb::with_device_write_failure()
+        };
+        let runtimes = screenshot_runtimes(adb);
+        assert_eq!(
+            inject_device_tap_with(&runtimes, "phone".into(), 1, 2)
+                .unwrap_err()
+                .code,
+            "input_inject_failed"
+        );
     }
 
     // -- APK 安装 --
@@ -13206,9 +14433,12 @@ mod tests {
         let calls = Arc::clone(&adb.calls);
         let runtimes = screenshot_runtimes(adb);
 
-        let receipt =
-            install_apk_with(&runtimes, "phone".into(), apk.to_string_lossy().into_owned())
-                .unwrap();
+        let receipt = install_apk_with(
+            &runtimes,
+            "phone".into(),
+            apk.to_string_lossy().into_owned(),
+        )
+        .unwrap();
 
         assert_eq!(receipt.file_name, "MirrorDock-伴侣.apk");
         assert_eq!(receipt.bytes, 9);
@@ -13238,13 +14468,20 @@ mod tests {
         let calls = Arc::clone(&adb.calls);
         let runtimes = screenshot_runtimes(adb);
 
-        let error =
-            install_apk_with(&runtimes, "phone".into(), not_apk.to_string_lossy().into_owned())
-                .unwrap_err();
+        let error = install_apk_with(
+            &runtimes,
+            "phone".into(),
+            not_apk.to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
 
         assert_eq!(error.code, "apk_path_invalid");
         assert!(
-            !calls.lock().unwrap().iter().any(|call| call.starts_with("install")),
+            !calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|call| call.starts_with("install")),
             "后缀不对时不应向设备发起安装"
         );
 
@@ -13286,13 +14523,17 @@ mod tests {
             ..FakeAdb::default()
         });
 
-        let error =
-            install_apk_with(&runtimes, "phone".into(), apk.to_string_lossy().into_owned())
-                .unwrap_err();
+        let error = install_apk_with(
+            &runtimes,
+            "phone".into(),
+            apk.to_string_lossy().into_owned(),
+        )
+        .unwrap_err();
 
         assert_eq!(error.code, "apk_install_failed");
         assert!(
-            error.message.contains("版本") && error.message.contains("INSTALL_FAILED_VERSION_DOWNGRADE"),
+            error.message.contains("版本")
+                && error.message.contains("INSTALL_FAILED_VERSION_DOWNGRADE"),
             "失败原因必须具体到可照做，并保留原始错误码，实际：{}",
             error.message
         );
@@ -13332,13 +14573,20 @@ mod tests {
             let calls = Arc::clone(&adb.calls);
             let runtimes = screenshot_runtimes(adb);
 
-            let error =
-                install_apk_with(&runtimes, "phone".into(), apk.to_string_lossy().into_owned())
-                    .unwrap_err();
+            let error = install_apk_with(
+                &runtimes,
+                "phone".into(),
+                apk.to_string_lossy().into_owned(),
+            )
+            .unwrap_err();
 
             assert!(error.code.starts_with("device_"), "实际：{}", error.code);
             assert!(
-                !calls.lock().unwrap().iter().any(|call| call.starts_with("install")),
+                !calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|call| call.starts_with("install")),
                 "{state:?} 的设备不得发起安装"
             );
         }
@@ -13373,8 +14621,14 @@ mod tests {
 
         // 第二步：用户在手机上点了"允许" → 设备就绪 → 再次尝试应当成功。
         *live.lock().unwrap() = vec![device("phone", DeviceState::Ready)];
-        start_mirroring_with(&runtimes, &store, "phone".into(), SessionOptions::default(), None)
-            .unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            "phone".into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
         assert_eq!(snapshot(&store).phase, SessionPhase::Streaming);
 
         // 第三步：会话中应用新设置 → 旧窗口被结束、按新参数重开，会话不经过 Idle。
@@ -13402,7 +14656,9 @@ mod tests {
         stop_mirroring_with(&store, Some("phone".into())).unwrap();
         assert_eq!(snapshot(&store).phase, SessionPhase::Idle);
         assert_eq!(
-            stop_mirroring_with(&store, Some("phone".into())).unwrap_err().code,
+            stop_mirroring_with(&store, Some("phone".into()))
+                .unwrap_err()
+                .code,
             "session_not_running"
         );
     }
@@ -13459,8 +14715,8 @@ mod tests {
 
         // 授权后：同一组通道全部可用，回执与文件都真实存在。
         *live.lock().unwrap() = vec![device("phone", DeviceState::Ready)];
-        let shot = capture_screenshot_into(&runtimes, &directory, "phone".into(), "s.png".into())
-            .unwrap();
+        let shot =
+            capture_screenshot_into(&runtimes, &directory, "phone".into(), "s.png".into()).unwrap();
         assert_eq!(shot.bytes, TINY_PNG.len());
         assert!(directory.join("s.png").exists());
         let receipt = send_file_to_device_with(
@@ -13470,11 +14726,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(receipt.file_name, "笔记.txt");
-        assert_eq!(list_device_files_with(&runtimes, "phone".into()).unwrap(), {
-            vec!["相册 导出.jpg".to_string()]
-        });
-        fetch_file_from_device_into(&runtimes, &directory, "phone".into(), "a.jpg".into())
-            .unwrap();
+        assert_eq!(
+            list_device_files_with(&runtimes, "phone".into()).unwrap(),
+            { vec!["相册 导出.jpg".to_string()] }
+        );
+        fetch_file_from_device_into(&runtimes, &directory, "phone".into(), "a.jpg".into()).unwrap();
         assert!(directory.join("a.jpg").exists(), "拉取的文件必须真实落盘");
 
         let _ = fs::remove_dir_all(&directory);
@@ -13494,8 +14750,14 @@ mod tests {
         );
         let store = SessionStore::default();
 
-        start_mirroring_with(&runtimes, &store, serial.into(), SessionOptions::default(), None)
-            .unwrap();
+        start_mirroring_with(
+            &runtimes,
+            &store,
+            serial.into(),
+            SessionOptions::default(),
+            None,
+        )
+        .unwrap();
         assert_eq!(snapshot(&store).phase, SessionPhase::Streaming);
 
         apply_session_options_with(
@@ -13514,10 +14776,7 @@ mod tests {
         stop_mirroring_with(&store, Some(serial.into())).unwrap();
         let ended = snapshot(&store);
         assert_eq!(ended.phase, SessionPhase::Idle);
-        assert_eq!(
-            ended.serial, None,
-            "停止后不得残留上一个设备的序列号"
-        );
+        assert_eq!(ended.serial, None, "停止后不得残留上一个设备的序列号");
     }
 
     // -- 诊断包：显式同意、可预览、默认脱敏 --
@@ -13655,7 +14914,9 @@ mod tests {
     #[test]
     fn base32_roundtrip_across_lengths() {
         for len in [0usize, 1, 4, 5, 6, 63, 64, 100] {
-            let data: Vec<u8> = (0..len as u8).map(|b| b.wrapping_mul(31).wrapping_add(5)).collect();
+            let data: Vec<u8> = (0..len as u8)
+                .map(|b| b.wrapping_mul(31).wrapping_add(5))
+                .collect();
             let encoded = licensing::base32_encode(&data);
             let decoded = licensing::base32_decode(&encoded).unwrap();
             assert_eq!(decoded, data, "base32 往返失败（长度 {len}）");
@@ -13682,7 +14943,9 @@ mod tests {
         let now = 1_700_000_000u64;
         let license = test_license("test-001", Some(now + 365 * 86_400));
         assert!(license.starts_with("MD1-"));
-        assert!(license.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        assert!(license
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'));
         let payload = licensing::verify_license(&license, &test_verifying_key(), now).unwrap();
         assert_eq!(payload.key_id, "test-001");
         assert_eq!(payload.edition, "pro");
@@ -13716,7 +14979,11 @@ mod tests {
             .enumerate()
             .map(|(i, c)| {
                 if i == idx {
-                    if *c == 'A' { 'B' } else { 'A' }
+                    if *c == 'A' {
+                        'B'
+                    } else {
+                        'A'
+                    }
                 } else {
                     *c
                 }
@@ -13724,7 +14991,10 @@ mod tests {
             .collect();
         let err = licensing::verify_license(&license, &test_verifying_key(), now).unwrap_err();
         assert!(
-            matches!(err, licensing::LicenseError::BadSignature | licensing::LicenseError::Malformed),
+            matches!(
+                err,
+                licensing::LicenseError::BadSignature | licensing::LicenseError::Malformed
+            ),
             "篡改应被拒绝，实际 {err:?}"
         );
     }

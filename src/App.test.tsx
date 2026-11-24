@@ -597,9 +597,11 @@ describe("App rendering", () => {
     expect(await screen.findByRole("heading", { name: "投屏演示能力" })).toBeInTheDocument();
     expect(screen.getAllByText("尚未实现").length).toBeGreaterThan(0);
 
+    // X10-129：相册已升级为真实能力（白名单目录浏览 + 取回）。
+    // 没有设备时依然诚实：提示尚未读取，不伪造照片列表。
     fireEvent.click(within(functionNav).getByRole("button", { name: "相册" }));
-    expect(await screen.findByRole("heading", { name: "相册取回" })).toBeInTheDocument();
-    expect(screen.getAllByText("尚未实现").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("heading", { name: "相册目录" })).toBeInTheDocument();
+    expect(screen.getByText(/尚未读取相册目录/)).toBeInTheDocument();
   });
 
   // X10-72 回归：用户报告"多设备各自设置桌面模式看起来还是全局设置，找不到按设备

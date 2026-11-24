@@ -53,15 +53,15 @@ export const ASSISTANT_VIEWS: Record<AssistantViewKey, AssistantViewMeta> = {
 
   mirror: { key: "mirror", title: "镜像控制", subtitle: "画面 · 键鼠直输 · 画质预设", action: "开始镜像" },
   present: { key: "present", title: "投屏演示", subtitle: "演示能力状态 · 本机渲染", action: "查看能力" },
-  keymap: { key: "keymap", title: "按键映射", subtitle: "键盘设置与全局快捷键", action: "打开键盘设置" },
+  keymap: { key: "keymap", title: "按键映射", subtitle: "键位映射注入方案 · 本机保存", action: "打开键盘设置" },
   schedule: { key: "schedule", title: "定时录制", subtitle: "计划能力状态 · 需设备授权", action: "查看能力" },
-  replay: { key: "replay", title: "操作回放", subtitle: "默认禁用 · 文件只存本机", action: "查看能力" },
+  replay: { key: "replay", title: "操作回放", subtitle: "动作序列编排与回放 · 本机保存", action: "开始回放" },
 
   files: { key: "files", title: "文件传输", subtitle: "手机发送区与电脑之间互传", action: "刷新文件" },
   shot: { key: "shot", title: "截图", subtitle: "保存到本机 · 不自动上传", action: "立即截图" },
   record: { key: "record", title: "录像", subtitle: "手动启停 · 不重启镜像", action: "开始录制" },
-  album: { key: "album", title: "相册", subtitle: "相册取回能力状态", action: "查看能力" },
-  install: { key: "install", title: "批量安装", subtitle: "APK 拖拽安装 · 设备逐次确认", action: "选择 APK" },
+  album: { key: "album", title: "相册", subtitle: "相册目录浏览与取回 · 本机保存", action: "刷新相册" },
+  install: { key: "install", title: "批量安装", subtitle: "多选 APK · 逐个安装到手机", action: "选择 APK" },
   apps: { key: "apps", title: "应用管理", subtitle: "只读应用清单", action: "刷新清单" },
 
   notify: { key: "notify", title: "通知中心", subtitle: "实时镜像 · 正文默认不持久化", action: "清空通知" },

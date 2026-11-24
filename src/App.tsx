@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
 import { AppSelect } from "./AppSelect";
 import {
   ASSISTANT_GROUPS,
@@ -30,6 +30,28 @@ import {
   writeUiTheme,
   type UiThemeKey,
 } from "./uiTheme";
+// X10-130 按键映射 / 操作回放的纯逻辑层：类型、校验、描述与本机持久化。
+import {
+  INJECTABLE_KEYCODES,
+  clampWaitMs,
+  describeAction,
+  describeStep,
+  isValidCoord,
+  isValidDuration,
+  isValidKeycode,
+  newLocalId,
+  normalizePhysicalKey,
+  physicalKeyLabel,
+  readKeymaps,
+  readReplays,
+  validateReplayScript,
+  writeKeymaps,
+  writeReplays,
+  type KeymapAction,
+  type KeymapProfile,
+  type ReplayScript,
+  type ReplayStep,
+} from "./inputAutomation";
 import QRCode from "qrcode";
 import "./App.css";
 
@@ -327,6 +349,23 @@ export function notificationTime(posted: number, now: number = Date.now()): stri
 }
 // 安装 APK 的回执：summary 是后端把 adb 结论解析后的可读结果。
 type ApkInstallReceipt = { file_name: string; bytes: number; summary: string };
+
+// X10-129 批量安装队列里的一项；status 反映 adb 的真实结论，不做乐观假状态。
+type BatchApkItem = {
+  name: string;
+  path: string;
+  status: "pending" | "installing" | "done" | "failed";
+  message?: string;
+};
+
+// X10-129 相册可浏览目录（与后端 GALLERY_ROOTS 对齐的白名单子集，无自由路径）。
+const GALLERY_DIRS: { dir: string; label: string }[] = [
+  { dir: "/sdcard/DCIM", label: "DCIM" },
+  { dir: "/sdcard/DCIM/Camera", label: "相机" },
+  { dir: "/sdcard/Pictures", label: "图片" },
+  { dir: "/sdcard/Pictures/Screenshots", label: "截图" },
+];
+
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, desktop_app: null, camera_source: false };
 export function readOptions(): SessionOptions {
   try {
@@ -803,6 +842,40 @@ function App() {
   const [apkReceipt, setApkReceipt] = useState<ApkInstallReceipt | null>(null);
   const [apkMessage, setApkMessage] = useState<string | null>(null);
   const [apkError, setApkError] = useState<string | null>(null);
+  // X10-129 批量安装：多选 APK 逐个安装；每个结论都来自 adb 的真实回执。
+  const [batchApks, setBatchApks] = useState<BatchApkItem[]>([]);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchCancelRef = useRef(false);
+  // X10-129 相册：固定白名单目录浏览；列表与取回失败都如实展示，不伪装空态。
+  const [galleryDir, setGalleryDir] = useState<string>(GALLERY_DIRS[0].dir);
+  const [galleryFiles, setGalleryFiles] = useState<string[] | null>(null);
+  const [galleryBusy, setGalleryBusy] = useState(false);
+  const [galleryError, setGalleryError] = useState<string | null>(null);
+  const [galleryMessage, setGalleryMessage] = useState<string | null>(null);
+  const [galleryFetched, setGalleryFetched] = useState<Record<string, TransferReceipt>>({});
+  const [galleryErrors, setGalleryErrors] = useState<Record<string, string>>({});
+  const [fetchingGalleryName, setFetchingGalleryName] = useState<string | null>(null);
+  // X10-130 按键映射：方案与绑定只保存在本机 localStorage。
+  const [keymaps, setKeymaps] = useState<{ profiles: KeymapProfile[]; activeId: string | null }>(() => readKeymaps());
+  const [capturingKey, setCapturingKey] = useState(false);
+  const [capturedKey, setCapturedKey] = useState<{ physicalKey: string; label: string } | null>(null);
+  const [newActionKind, setNewActionKind] = useState<"key" | "tap" | "swipe">("key");
+  const [newKeycode, setNewKeycode] = useState<string>(INJECTABLE_KEYCODES[0].value);
+  const [draftTap, setDraftTap] = useState({ x: "540", y: "1200" });
+  const [draftSwipe, setDraftSwipe] = useState({ x1: "540", y1: "1600", x2: "540", y2: "400", duration: "300" });
+  const [keymapNotice, setKeymapNotice] = useState<string | null>(null);
+  const [keymapError, setKeymapError] = useState<string | null>(null);
+  const [lastInjected, setLastInjected] = useState<string | null>(null);
+  // X10-130 操作回放：脚本与本机映射一样只存 localStorage；执行状态逐步展示。
+  const [replays, setReplays] = useState<ReplayScript[]>(() => readReplays());
+  const [activeReplayId, setActiveReplayId] = useState<string | null>(null);
+  const [draftStepKind, setDraftStepKind] = useState<"tap" | "swipe" | "key">("tap");
+  const [draftStepWait, setDraftStepWait] = useState("500");
+  const [replayStatus, setReplayStatus] = useState<string[] | null>(null);
+  const [replayRunning, setReplayRunning] = useState(false);
+  const [replayNotice, setReplayNotice] = useState<string | null>(null);
+  const [replayError, setReplayError] = useState<string | null>(null);
+  const replayCancelRef = useRef(false);
   // 诊断包：默认不生成、不落盘；预览后由用户显式导出。
   const [diagnostics, setDiagnostics] = useState<DiagnosticsPreviewData | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
@@ -1933,6 +2006,393 @@ function App() {
     }
   }
 
+  // X10-129 批量安装：一次挑多个 APK，逐个交给后端安装。
+  async function pickApksBatch() {
+    setApkError(null);
+    setApkMessage(null);
+    let picked: string | string[] | null;
+    try {
+      picked = await openFilePicker({
+        multiple: true,
+        title: "选择要安装到手机的 APK（可多选）",
+        filters: [{ name: "Android 安装包", extensions: ["apk"] }],
+      });
+    } catch (error) {
+      setApkError(errorMessage(error, "无法打开文件选择器。"));
+      return;
+    }
+    // 用户取消选择不算错误，界面回到原样即可。
+    const paths = Array.isArray(picked) ? picked.filter((path) => path.length > 0) : [];
+    if (paths.length === 0) return;
+    setBatchApks(paths.map((path) => ({
+      name: path.split(/[\\/]/).pop() ?? path,
+      path,
+      status: "pending" as const,
+    })));
+  }
+
+  // 批量安装执行：逐个调用后端，单个失败不阻断后续；「停止」在每步之间生效。
+  async function installBatch(serial: string) {
+    if (batchApks.length === 0) return;
+    setBatchBusy(true);
+    batchCancelRef.current = false;
+    setApkError(null);
+    setApkMessage(null);
+    let done = 0;
+    let failed = 0;
+    try {
+      for (let index = 0; index < batchApks.length; index += 1) {
+        if (batchCancelRef.current) break;
+        const item = batchApks[index];
+        setBatchApks((prev) => prev.map((entry, i) => (i === index ? { ...entry, status: "installing", message: undefined } : entry)));
+        try {
+          const receipt = await invoke<ApkInstallReceipt>("install_apk_to_device", { serial, apkPath: item.path });
+          setBatchApks((prev) => prev.map((entry, i) => (i === index ? { ...entry, status: "done", message: receipt.summary } : entry)));
+          done += 1;
+        } catch (error) {
+          setBatchApks((prev) => prev.map((entry, i) => (i === index ? { ...entry, status: "failed", message: errorMessage(error, "安装失败。") } : entry)));
+          failed += 1;
+        }
+      }
+      const skipped = batchApks.length - done - failed;
+      setApkMessage(
+        `批量安装结束：${done} 个成功${failed > 0 ? `，${failed} 个失败` : ""}${skipped > 0 ? `，${skipped} 个未执行` : ""}。` +
+          "安装过程手机上可能逐个出现确认，需要你本人同意。",
+      );
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  // -- X10-129 相册 --
+
+  async function refreshGallery(dir: string = galleryDir) {
+    if (!transferDeviceSerial) return;
+    setGalleryBusy(true);
+    setGalleryError(null);
+    setGalleryMessage(null);
+    try {
+      const names = await invoke<string[]>("list_device_gallery", { serial: transferDeviceSerial, dir });
+      setGalleryFiles(names);
+    } catch (error) {
+      // 读取失败置空并如实报错，不伪装成「相册是空的」。
+      setGalleryFiles(null);
+      setGalleryError(errorMessage(error, "无法读取相册目录。"));
+    } finally {
+      setGalleryBusy(false);
+    }
+  }
+
+  function chooseGalleryDir(dir: string) {
+    setGalleryDir(dir);
+    setGalleryFiles(null);
+    setGalleryError(null);
+    setGalleryMessage(null);
+    setGalleryFetched({});
+    setGalleryErrors({});
+    void refreshGallery(dir);
+  }
+
+  async function fetchGalleryFile(fileName: string) {
+    if (!transferDeviceSerial) return;
+    setGalleryMessage(null);
+    setGalleryError(null);
+    setFetchingGalleryName(fileName);
+    setGalleryErrors((prev) => {
+      if (!(fileName in prev)) return prev;
+      const next = { ...prev };
+      delete next[fileName];
+      return next;
+    });
+    try {
+      const receipt = await invoke<TransferReceipt>("fetch_device_gallery_file", {
+        serial: transferDeviceSerial,
+        dir: galleryDir,
+        fileName,
+      });
+      setGalleryFetched((prev) => ({ ...prev, [fileName]: receipt }));
+      setGalleryMessage(`已取回「${fileName}」，保存在「下载 / MirrorDock / 相册」。`);
+    } catch (error) {
+      setGalleryErrors((prev) => ({ ...prev, [fileName]: errorMessage(error, "没有取回成功。") }));
+    } finally {
+      setFetchingGalleryName(null);
+    }
+  }
+
+  // -- X10-130 按键映射 --
+
+  const activeKeymapProfile = keymaps.activeId
+    ? keymaps.profiles.find((profile) => profile.id === keymaps.activeId) ?? null
+    : null;
+
+  function persistKeymaps(next: { profiles: KeymapProfile[]; activeId: string | null }) {
+    setKeymaps(next);
+    writeKeymaps(next.profiles, next.activeId);
+  }
+
+  function createKeymapProfile() {
+    const profile: KeymapProfile = {
+      id: newLocalId(),
+      name: `方案 ${keymaps.profiles.length + 1}`,
+      bindings: [],
+    };
+    persistKeymaps({ profiles: [...keymaps.profiles, profile], activeId: profile.id });
+    setKeymapError(null);
+    setKeymapNotice(null);
+  }
+
+  function deleteKeymapProfile(id: string) {
+    const profiles = keymaps.profiles.filter((profile) => profile.id !== id);
+    persistKeymaps({ profiles, activeId: keymaps.activeId === id ? null : keymaps.activeId });
+  }
+
+  function updateActiveProfile(mutate: (profile: KeymapProfile) => KeymapProfile) {
+    persistKeymaps({
+      ...keymaps,
+      profiles: keymaps.profiles.map((profile) => (profile.id === keymaps.activeId ? mutate(profile) : profile)),
+    });
+  }
+
+  /** 注入一个动作到已授权设备（映射测试与回放共用）。 */
+  async function injectAction(action: KeymapAction): Promise<void> {
+    const serial = readyDevice?.serial;
+    if (!serial) throw new Error("需要一台已授权设备。");
+    if (action.kind === "key") {
+      await invoke("inject_device_key", { serial, keycode: action.keycode });
+    } else if (action.kind === "tap") {
+      await invoke("inject_device_tap", { serial, x: action.x, y: action.y });
+    } else {
+      await invoke("inject_device_swipe", {
+        serial,
+        x1: action.x1,
+        y1: action.y1,
+        x2: action.x2,
+        y2: action.y2,
+        durationMs: action.duration,
+      });
+    }
+  }
+
+  async function testBinding(binding: { physicalKey: string; label: string; action: KeymapAction }) {
+    setKeymapError(null);
+    setKeymapNotice(null);
+    try {
+      await injectAction(binding.action);
+      setLastInjected(`${binding.label} → ${describeAction(binding.action)}：已发送。`);
+    } catch (error) {
+      setKeymapError(errorMessage(error, "注入没有成功。"));
+    }
+  }
+
+  function handleTestPanelKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const physicalKey = normalizePhysicalKey(event);
+    if (!physicalKey) return;
+    event.preventDefault();
+    const binding = activeKeymapProfile?.bindings.find((item) => item.physicalKey === physicalKey);
+    if (!binding) {
+      setLastInjected(`${physicalKeyLabel(physicalKey)}：未映射，没有发送。`);
+      return;
+    }
+    void testBinding(binding);
+  }
+
+  // 捕获映射用的物理键：全局捕获阶段监听，拿到第一个可识别的键位就停。
+  useEffect(() => {
+    if (!capturingKey) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const physicalKey = normalizePhysicalKey(event);
+      if (!physicalKey) return;
+      event.preventDefault();
+      setCapturedKey({ physicalKey, label: physicalKeyLabel(physicalKey) });
+      setCapturingKey(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [capturingKey]);
+
+  function addKeymapBinding() {
+    if (!activeKeymapProfile) {
+      setKeymapError("先新建或选择一个映射方案。");
+      return;
+    }
+    if (!capturedKey) {
+      setKeymapError("先点「捕获按键」并按下一个物理键。");
+      return;
+    }
+    let action: KeymapAction;
+    if (newActionKind === "key") {
+      if (!isValidKeycode(newKeycode)) {
+        setKeymapError("这个按键码不在可注入范围内。");
+        return;
+      }
+      action = { kind: "key", keycode: newKeycode };
+    } else if (newActionKind === "tap") {
+      const x = Number.parseInt(draftTap.x, 10);
+      const y = Number.parseInt(draftTap.y, 10);
+      if (!isValidCoord(x) || !isValidCoord(y)) {
+        setKeymapError("点击坐标必须是 0..=9999 的整数。");
+        return;
+      }
+      action = { kind: "tap", x, y };
+    } else {
+      const x1 = Number.parseInt(draftSwipe.x1, 10);
+      const y1 = Number.parseInt(draftSwipe.y1, 10);
+      const x2 = Number.parseInt(draftSwipe.x2, 10);
+      const y2 = Number.parseInt(draftSwipe.y2, 10);
+      const duration = Number.parseInt(draftSwipe.duration, 10);
+      if (![x1, y1, x2, y2].every(isValidCoord) || !isValidDuration(duration)) {
+        setKeymapError("滑动坐标（0..=9999）或时长（50..=60000ms）超出范围。");
+        return;
+      }
+      action = { kind: "swipe", x1, y1, x2, y2, duration };
+    }
+    // 同一个物理键只保留一条映射：后加的替换旧的，避免隐式双发。
+    updateActiveProfile((profile) => ({
+      ...profile,
+      bindings: [
+        ...profile.bindings.filter((binding) => binding.physicalKey !== capturedKey.physicalKey),
+        { physicalKey: capturedKey.physicalKey, label: capturedKey.label, action },
+      ],
+    }));
+    setCapturedKey(null);
+    setKeymapError(null);
+    setKeymapNotice(`已把 ${capturedKey.label} 映射到「${describeAction(action)}」（同键旧映射已替换）。`);
+  }
+
+  function removeKeymapBinding(physicalKey: string) {
+    updateActiveProfile((profile) => ({
+      ...profile,
+      bindings: profile.bindings.filter((binding) => binding.physicalKey !== physicalKey),
+    }));
+  }
+
+  // -- X10-130 操作回放 --
+
+  const activeReplay = activeReplayId ? replays.find((script) => script.id === activeReplayId) ?? null : null;
+
+  function persistReplays(next: ReplayScript[]) {
+    setReplays(next);
+    writeReplays(next);
+  }
+
+  function createReplayScript() {
+    const script: ReplayScript = {
+      id: newLocalId(),
+      name: `脚本 ${replays.length + 1}`,
+      steps: [],
+    };
+    persistReplays([...replays, script]);
+    setActiveReplayId(script.id);
+    setReplayError(null);
+    setReplayNotice(null);
+    setReplayStatus(null);
+  }
+
+  function deleteReplayScript(id: string) {
+    persistReplays(replays.filter((script) => script.id !== id));
+    if (activeReplayId === id) setActiveReplayId(null);
+  }
+
+  function updateActiveScript(mutate: (script: ReplayScript) => ReplayScript) {
+    persistReplays(replays.map((script) => (script.id === activeReplayId ? mutate(script) : script)));
+  }
+
+  function addReplayStep() {
+    if (!activeReplay) {
+      setReplayError("先新建或选择一个回放脚本。");
+      return;
+    }
+    const waitMs = clampWaitMs(Number.parseInt(draftStepWait, 10) || 0);
+    let step: ReplayStep;
+    if (draftStepKind === "key") {
+      if (!isValidKeycode(newKeycode)) {
+        setReplayError("这个按键码不在可注入范围内。");
+        return;
+      }
+      step = { kind: "key", keycode: newKeycode, waitMs };
+    } else if (draftStepKind === "tap") {
+      const x = Number.parseInt(draftTap.x, 10);
+      const y = Number.parseInt(draftTap.y, 10);
+      if (!isValidCoord(x) || !isValidCoord(y)) {
+        setReplayError("点击坐标必须是 0..=9999 的整数。");
+        return;
+      }
+      step = { kind: "tap", x, y, waitMs };
+    } else {
+      const x1 = Number.parseInt(draftSwipe.x1, 10);
+      const y1 = Number.parseInt(draftSwipe.y1, 10);
+      const x2 = Number.parseInt(draftSwipe.x2, 10);
+      const y2 = Number.parseInt(draftSwipe.y2, 10);
+      const duration = Number.parseInt(draftSwipe.duration, 10);
+      if (![x1, y1, x2, y2].every(isValidCoord) || !isValidDuration(duration)) {
+        setReplayError("滑动坐标（0..=9999）或时长（50..=60000ms）超出范围。");
+        return;
+      }
+      step = { kind: "swipe", x1, y1, x2, y2, duration, waitMs };
+    }
+    updateActiveScript((script) => ({ ...script, steps: [...script.steps, step] }));
+    setReplayError(null);
+  }
+
+  function moveReplayStep(index: number, delta: number) {
+    updateActiveScript((script) => {
+      const steps = [...script.steps];
+      const target = index + delta;
+      if (target < 0 || target >= steps.length) return script;
+      [steps[index], steps[target]] = [steps[target], steps[index]];
+      return { ...script, steps };
+    });
+  }
+
+  function removeReplayStep(index: number) {
+    updateActiveScript((script) => ({ ...script, steps: script.steps.filter((_, i) => i !== index) }));
+  }
+
+  async function runReplayScript(script: ReplayScript) {
+    const serial = readyDevice?.serial;
+    if (!serial) {
+      setReplayError("需要一台已授权设备才能回放。");
+      return;
+    }
+    const problem = validateReplayScript(script.steps);
+    if (problem) {
+      setReplayError(problem);
+      return;
+    }
+    setReplayError(null);
+    setReplayNotice(null);
+    setReplayStatus(script.steps.map(() => "待执行"));
+    setReplayRunning(true);
+    replayCancelRef.current = false;
+    const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+    try {
+      for (let index = 0; index < script.steps.length; index += 1) {
+        if (replayCancelRef.current) {
+          setReplayNotice(`已停止：前 ${index} 步已执行，第 ${index + 1} 步及之后未执行。`);
+          return;
+        }
+        const step = script.steps[index];
+        if (step.waitMs > 0) await sleep(step.waitMs);
+        if (replayCancelRef.current) {
+          setReplayNotice(`已停止：前 ${index} 步已执行，第 ${index + 1} 步及之后未执行。`);
+          return;
+        }
+        setReplayStatus((prev) => (prev ? prev.map((value, i) => (i === index ? "执行中…" : value)) : prev));
+        try {
+          await injectAction(step);
+          setReplayStatus((prev) => (prev ? prev.map((value, i) => (i === index ? "已执行" : value)) : prev));
+        } catch (error) {
+          setReplayStatus((prev) => (prev ? prev.map((value, i) => (i === index ? "失败" : value)) : prev));
+          setReplayError(`第 ${index + 1} 步执行失败：${errorMessage(error, "注入没有成功。")}`);
+          return;
+        }
+      }
+      setReplayNotice(`回放完成：共 ${script.steps.length} 步。`);
+    } finally {
+      setReplayRunning(false);
+    }
+  }
+
   // 取回文件：保存到本机「下载 / MirrorDock」，同名时后端自动顺延序号。
   // X10-75：状态记到**该文件**上（fetchedFiles）；提示语也只说这一个文件，
   // 不写"已保存到…文件夹"（会被读成全部都存好了）。失败记在 fetchErrors，
@@ -2443,6 +2903,15 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesChangedHint]);
+  // X10-129 相册视图打开时自动读取当前目录：与文件传输同策略，不要求先点按钮。
+  // 目录切换由 chooseGalleryDir 自己刷新；这里只负责「进页面 / 换设备」两个时机。
+  useEffect(() => {
+    if (view !== "album") return;
+    if (galleryFiles !== null || galleryBusy) return;
+    if (!transferDeviceSerial) return;
+    void refreshGallery(galleryDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, transferDeviceSerial]);
   // X10-60：伴侣端崩溃堆栈上报（本地点对点，仅界面展示）。
   useEffect(() => {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -2600,6 +3069,14 @@ function App() {
       case "install":
         void pickApk();
         break;
+      // X10-129/130：页头快捷按钮与视图内主操作保持同一行为。
+      case "album":
+        void refreshGallery();
+        break;
+      case "replay":
+        if (!readyDevice) openView("connect");
+        else if (activeReplay) void runReplayScript(activeReplay);
+        break;
       case "apps":
         if (appsTargetSerial) void ensureDeviceApps(appsTargetSerial);
         break;
@@ -2709,7 +3186,8 @@ function App() {
           { kind: "actions", actions: [{ label: "打开镜像控制", primary: true, onClick: () => openView("mirror") }, { label: "查看桌面模式", onClick: () => openView("settings") }] },
           { kind: "note", text: "这里只显示真实能力状态，不使用演示数据；未实现的能力不会伪装成可点击功能。" },
         ];
-      case "keymap":
+      case "keymap": {
+        const profile = activeKeymapProfile;
         return [
           {
             kind: "table",
@@ -2722,21 +3200,226 @@ function App() {
               { cells: ["旋转画面", shortcuts.rotate], filterText: "旋转" },
             ],
           },
-          { kind: "actions", actions: [{ label: "打开键盘设置", primary: true, onClick: () => readySerial ? void openKeyboardSettings() : openView("connect") }, { label: "编辑快捷键", onClick: () => openView("settings") }] },
-          { kind: "note", text: "完整按键映射方案尚未实现；当前提供 scrcpy 键鼠直输与可修改的全局快捷键。" },
+          {
+            kind: "custom",
+            children: (
+              <section className="assistant-card assistant-tone-6">
+                <h4>键位映射方案</h4>
+                <div className="assistant-chip-row" role="group" aria-label="映射方案">
+                  {keymaps.profiles.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`assistant-chip${keymaps.activeId === item.id ? " active" : ""}`}
+                      onClick={() => persistKeymaps({ ...keymaps, activeId: item.id })}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                  <button type="button" className="assistant-chip" onClick={createKeymapProfile}>＋ 新建方案</button>
+                </div>
+                {profile && (
+                  <div className="assistant-chip-row">
+                    <button type="button" className="assistant-btn" onClick={() => deleteKeymapProfile(profile.id)}>删除「{profile.name}」</button>
+                  </div>
+                )}
+                {!profile && <p className="assistant-note">{keymaps.profiles.length > 0 ? `本机已恢复 ${keymaps.profiles.length} 个方案；点方案名选中后编辑。` : "还没有映射方案；点「＋ 新建方案」开始编排。"}</p>}
+              </section>
+            ),
+          },
+          ...(profile ? [
+            {
+              kind: "table" as const,
+              title: `映射条目 · ${profile.name}`,
+              tone: 6,
+              columns: ["物理键", "注入动作", "操作"],
+              rows: profile.bindings.map((binding) => ({
+                cells: [
+                  binding.label,
+                  describeAction(binding.action),
+                  <span key={binding.physicalKey}>
+                    <button type="button" className="assistant-link" disabled={!readyDevice} onClick={() => void testBinding(binding)}>发送测试</button>
+                    {" · "}
+                    <button type="button" className="assistant-link" onClick={() => removeKeymapBinding(binding.physicalKey)}>删除</button>
+                  </span>,
+                ],
+                filterText: `${binding.label} ${describeAction(binding.action)}`,
+              })),
+              empty: "这个方案还没有映射条目；在下方添加。",
+            },
+            {
+              kind: "custom" as const,
+              children: (
+                <section className="assistant-card assistant-tone-6">
+                  <h4>添加映射</h4>
+                  <div className="assistant-form-grid">
+                    <button type="button" className={`assistant-btn${capturingKey ? " primary" : ""}`} onClick={() => setCapturingKey(true)}>
+                      {capturingKey ? "请按下任意键…" : capturedKey ? `物理键：${capturedKey.label}` : "捕获按键"}
+                    </button>
+                    <select className="assistant-select" value={newActionKind} onChange={(event) => setNewActionKind(event.target.value as typeof newActionKind)} aria-label="注入动作类型">
+                      <option value="key">按键</option>
+                      <option value="tap">点击</option>
+                      <option value="swipe">滑动</option>
+                    </select>
+                    {newActionKind === "key" && (
+                      <select className="assistant-select" value={newKeycode} onChange={(event) => setNewKeycode(event.target.value)} aria-label="Android 按键码">
+                        {INJECTABLE_KEYCODES.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label}</option>
+                        ))}
+                      </select>
+                    )}
+                    {newActionKind === "tap" && (
+                      <span className="assistant-coord-inputs">
+                        X <input className="assistant-mini-input" value={draftTap.x} onChange={(event) => setDraftTap({ ...draftTap, x: event.target.value })} inputMode="numeric" aria-label="点击 X 坐标" />
+                        Y <input className="assistant-mini-input" value={draftTap.y} onChange={(event) => setDraftTap({ ...draftTap, y: event.target.value })} inputMode="numeric" aria-label="点击 Y 坐标" />
+                      </span>
+                    )}
+                    {newActionKind === "swipe" && (
+                      <span className="assistant-coord-inputs">
+                        起 X <input className="assistant-mini-input" value={draftSwipe.x1} onChange={(event) => setDraftSwipe({ ...draftSwipe, x1: event.target.value })} inputMode="numeric" aria-label="滑动起点 X" />
+                        Y <input className="assistant-mini-input" value={draftSwipe.y1} onChange={(event) => setDraftSwipe({ ...draftSwipe, y1: event.target.value })} inputMode="numeric" aria-label="滑动起点 Y" />
+                        终 X <input className="assistant-mini-input" value={draftSwipe.x2} onChange={(event) => setDraftSwipe({ ...draftSwipe, x2: event.target.value })} inputMode="numeric" aria-label="滑动终点 X" />
+                        Y <input className="assistant-mini-input" value={draftSwipe.y2} onChange={(event) => setDraftSwipe({ ...draftSwipe, y2: event.target.value })} inputMode="numeric" aria-label="滑动终点 Y" />
+                        时长(ms) <input className="assistant-mini-input" value={draftSwipe.duration} onChange={(event) => setDraftSwipe({ ...draftSwipe, duration: event.target.value })} inputMode="numeric" aria-label="滑动时长毫秒" />
+                      </span>
+                    )}
+                    <button type="button" className="assistant-btn primary" onClick={addKeymapBinding}>添加到方案</button>
+                  </div>
+                  {keymapError && <p className="assistant-note" role="alert">{keymapError}</p>}
+                  {keymapNotice && <p className="assistant-note" role="status">{keymapNotice}</p>}
+                </section>
+              ),
+            },
+            {
+              kind: "custom" as const,
+              children: (
+                <section className="assistant-card assistant-tone-6">
+                  <h4>测试面板</h4>
+                  <div className="assistant-capture-zone" tabIndex={0} role="group" aria-label="按键测试面板" onKeyDown={handleTestPanelKeyDown}>
+                    <p>点这里获得焦点，然后按已映射的物理键——动作会通过 adb 注入到「{currentDeviceLabel ?? "已授权设备"}」。未映射的键不会发送。</p>
+                    {lastInjected && <p className="assistant-note" role="status">{lastInjected}</p>}
+                  </div>
+                </section>
+              ),
+            },
+          ] : []),
+          { kind: "actions", actions: [{ label: "打开键盘设置", onClick: () => readySerial ? void openKeyboardSettings() : openView("connect") }] },
+          { kind: "note", text: "映射方案只保存在本机；焦点在镜像窗口时键盘输入由 scrcpy 直输处理，映射注入在这个测试面板聚焦时生效。触控注入走 adb，待真机验证。" },
         ];
+      }
       case "schedule":
         return [
           { kind: "kv", title: "录制状态", tone: 4, items: [["录制", recording?.active ? "进行中" : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["定时计划", "尚未实现"], ["设备授权", "每次录制都由用户手动启停"]] },
           { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active, danger: true }] },
           { kind: "note", text: "当前版本不做后台定时拉起，避免绕过设备授权；计划任务能力显示为本机真实状态。" },
         ];
-      case "replay":
+      case "replay": {
+        const script = activeReplay;
         return [
-          { kind: "kv", title: "操作回放", tone: 8, items: [["状态", "尚未实现"], ["默认策略", "禁用"], ["文件范围", "仅本机（如未来启用）"], ["云端上传", "不提供"]] },
-          { kind: "actions", actions: [{ label: "查看录像", onClick: () => openView("record") }] },
-          { kind: "note", text: "不会把演示回放当作真实功能；未实现的能力保持明确关闭。" },
+          {
+            kind: "custom",
+            children: (
+              <section className="assistant-card assistant-tone-8">
+                <h4>回放脚本</h4>
+                <div className="assistant-chip-row" role="group" aria-label="回放脚本">
+                  {replays.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`assistant-chip${activeReplayId === item.id ? " active" : ""}`}
+                      onClick={() => setActiveReplayId(item.id)}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                  <button type="button" className="assistant-chip" onClick={createReplayScript}>＋ 新建脚本</button>
+                </div>
+                {script && (
+                  <div className="assistant-chip-row">
+                    <button type="button" className="assistant-btn" onClick={() => deleteReplayScript(script.id)} disabled={replayRunning}>删除「{script.name}」</button>
+                  </div>
+                )}
+                {!script && <p className="assistant-note">{replays.length > 0 ? `本机已恢复 ${replays.length} 个脚本；点脚本名选中后编排或回放。` : "还没有回放脚本；点「＋ 新建脚本」开始编排。"}</p>}
+              </section>
+            ),
+          },
+          ...(script ? [
+            {
+              kind: "table" as const,
+              title: `动作序列 · ${script.steps.length} 步`,
+              tone: 8,
+              columns: ["#", "动作", "执行", "调整"],
+              rows: script.steps.map((step, index) => ({
+                cells: [
+                  `${index + 1}`,
+                  describeStep(step),
+                  replayStatus?.[index] ?? "—",
+                  <span key={index}>
+                    <button type="button" className="assistant-link" onClick={() => moveReplayStep(index, -1)} disabled={index === 0}>上移</button>
+                    {" · "}
+                    <button type="button" className="assistant-link" onClick={() => moveReplayStep(index, 1)} disabled={index === script.steps.length - 1}>下移</button>
+                    {" · "}
+                    <button type="button" className="assistant-link" onClick={() => removeReplayStep(index)} disabled={replayRunning}>删除</button>
+                  </span>,
+                ],
+                filterText: describeStep(step),
+              })),
+              empty: "脚本还没有步骤；在下方添加动作。",
+            },
+            {
+              kind: "custom" as const,
+              children: (
+                <section className="assistant-card assistant-tone-8">
+                  <h4>添加步骤</h4>
+                  <div className="assistant-form-grid">
+                    <select className="assistant-select" value={draftStepKind} onChange={(event) => setDraftStepKind(event.target.value as typeof draftStepKind)} aria-label="步骤类型">
+                      <option value="tap">点击</option>
+                      <option value="swipe">滑动</option>
+                      <option value="key">按键</option>
+                    </select>
+                    {draftStepKind === "key" && (
+                      <select className="assistant-select" value={newKeycode} onChange={(event) => setNewKeycode(event.target.value)} aria-label="Android 按键码">
+                        {INJECTABLE_KEYCODES.map((item) => (
+                          <option key={item.value} value={item.value}>{item.label}</option>
+                        ))}
+                      </select>
+                    )}
+                    {draftStepKind === "tap" && (
+                      <span className="assistant-coord-inputs">
+                        X <input className="assistant-mini-input" value={draftTap.x} onChange={(event) => setDraftTap({ ...draftTap, x: event.target.value })} inputMode="numeric" aria-label="点击 X 坐标" />
+                        Y <input className="assistant-mini-input" value={draftTap.y} onChange={(event) => setDraftTap({ ...draftTap, y: event.target.value })} inputMode="numeric" aria-label="点击 Y 坐标" />
+                      </span>
+                    )}
+                    {draftStepKind === "swipe" && (
+                      <span className="assistant-coord-inputs">
+                        起 X <input className="assistant-mini-input" value={draftSwipe.x1} onChange={(event) => setDraftSwipe({ ...draftSwipe, x1: event.target.value })} inputMode="numeric" aria-label="滑动起点 X" />
+                        Y <input className="assistant-mini-input" value={draftSwipe.y1} onChange={(event) => setDraftSwipe({ ...draftSwipe, y1: event.target.value })} inputMode="numeric" aria-label="滑动起点 Y" />
+                        终 X <input className="assistant-mini-input" value={draftSwipe.x2} onChange={(event) => setDraftSwipe({ ...draftSwipe, x2: event.target.value })} inputMode="numeric" aria-label="滑动终点 X" />
+                        Y <input className="assistant-mini-input" value={draftSwipe.y2} onChange={(event) => setDraftSwipe({ ...draftSwipe, y2: event.target.value })} inputMode="numeric" aria-label="滑动终点 Y" />
+                        时长(ms) <input className="assistant-mini-input" value={draftSwipe.duration} onChange={(event) => setDraftSwipe({ ...draftSwipe, duration: event.target.value })} inputMode="numeric" aria-label="滑动时长毫秒" />
+                      </span>
+                    )}
+                    <label className="assistant-coord-inputs">
+                      执行前等待(ms)
+                      <input className="assistant-mini-input" value={draftStepWait} onChange={(event) => setDraftStepWait(event.target.value)} inputMode="numeric" aria-label="执行前等待毫秒" />
+                    </label>
+                    <button type="button" className="assistant-btn primary" onClick={addReplayStep}>添加步骤</button>
+                  </div>
+                  {replayError && <p className="assistant-note" role="alert">{replayError}</p>}
+                </section>
+              ),
+            },
+          ] : []),
+          {
+            kind: "actions",
+            actions: [
+              { label: "开始回放", primary: true, onClick: () => script && void runReplayScript(script), disabled: replayRunning || !script || script.steps.length === 0 || !readyDevice },
+              { label: "停止", onClick: () => { replayCancelRef.current = true; }, disabled: !replayRunning, danger: true },
+            ],
+          },
+          { kind: "note", text: [replayNotice, "坐标以当前设备的分辨率与屏幕方向为准；脚本只保存在本机。录制镜像窗口里的真实触控需要控制通道，尚未实现——这里是编排式回放，不会伪装成录屏式回放。待真机验证。"].filter(Boolean).join(" ") },
         ];
+      }
       case "files":
         return [
           {
@@ -2793,15 +3476,85 @@ function App() {
         ];
       case "album":
         return [
-          { kind: "kv", title: "相册取回", tone: 7, items: [["相册直读", "尚未实现"], ["文件传输", "可用"], ["取回范围", "手机下载 / MirrorDock 发送区"], ["云端", "不提供"]] },
-          { kind: "actions", actions: [{ label: "前往文件传输", primary: true, onClick: () => openView("files") }] },
-          { kind: "note", text: "不伪装缩略图流；相册能力未实现时明确标注，避免用户误以为能读取整个相册。" },
+          {
+            kind: "custom",
+            children: (
+              <section className="assistant-card assistant-tone-7">
+                <h4>相册目录</h4>
+                <div className="assistant-chip-row" role="group" aria-label="相册目录">
+                  {GALLERY_DIRS.map((item) => (
+                    <button
+                      key={item.dir}
+                      type="button"
+                      className={`assistant-chip${galleryDir === item.dir ? " active" : ""}`}
+                      disabled={galleryBusy || !transferDeviceSerial}
+                      onClick={() => chooseGalleryDir(item.dir)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="assistant-note">只提供这几个公开媒体目录；其他位置请用文件传输，相册不做自由路径浏览。</p>
+              </section>
+            ),
+          },
+          {
+            kind: "table",
+            title: galleryFiles === null ? "相册文件" : `相册文件 · ${galleryFiles.length}`,
+            tone: 7,
+            columns: ["文件", "状态", "操作"],
+            rows: (galleryFiles ?? []).map((name) => ({
+              cells: [
+                name,
+                galleryFetched[name] ? "已取回" : galleryErrors[name] ?? "可取回",
+                <span key={name}>
+                  {fetchingGalleryName === name ? "正在取回…" : galleryFetched[name] ? "完成" : (
+                    <button type="button" className="assistant-link" disabled={fetchingGalleryName !== null} onClick={() => void fetchGalleryFile(name)}>
+                      {galleryErrors[name] ? "重试" : "取回到电脑"}
+                    </button>
+                  )}
+                </span>,
+              ],
+              filterText: name,
+            })),
+            empty: galleryFiles === null ? "尚未读取相册目录；连接设备后会自动读取，也可以点「刷新相册」。" : "这个目录里没有照片或视频。",
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "刷新相册", primary: true, onClick: () => void refreshGallery(), disabled: galleryBusy || !transferDeviceSerial },
+            ],
+          },
+          { kind: "note", text: [galleryError, galleryMessage, "文件保存到本机「下载 / MirrorDock / 相册」；读取失败会明确报错，不上传任何内容。"].filter(Boolean).join(" ") },
         ];
       case "install":
         return [
-          { kind: "kv", title: "安装队列", tone: 4, items: [["目标设备", currentDeviceLabel ?? "未选择设备"], ["已选择", apkPath ?? "尚未选择安装包"], ["安装结果", apkReceipt?.summary ?? "—"], ["确认方式", "每次都在手机上确认"]] },
-          { kind: "actions", actions: [{ label: "选择 APK", primary: true, onClick: () => void pickApk(), disabled: apkBusy }, { label: "安装到手机", onClick: () => readyDevice && void installApk(readyDevice.serial), disabled: apkBusy || !apkPath || !readyDevice }] },
-          { kind: "note", text: apkError ?? "支持把 APK 拖进窗口；不会静默安装，也不读取安装包以外的数据。" },
+          { kind: "kv", title: "安装队列", tone: 4, items: [["目标设备", currentDeviceLabel ?? "未选择设备"], ["队列", batchApks.length > 0 ? `${batchApks.length} 个安装包` : "尚未选择"], ["进度", batchBusy ? "正在逐个安装…" : "空闲"], ["确认方式", "每个安装包都在手机上确认"]] },
+          {
+            kind: "table",
+            title: batchApks.length > 0 ? `安装包 · ${batchApks.length}` : "安装包",
+            tone: 4,
+            columns: ["文件", "状态", "结果"],
+            rows: batchApks.map((item) => ({
+              cells: [
+                item.name,
+                item.status === "installing" ? "安装中…" : item.status === "done" ? "已安装" : item.status === "failed" ? "失败" : "待安装",
+                item.message ?? "—",
+              ],
+              filterText: item.name,
+            })),
+            empty: "还没有选择安装包；点「选择 APK（可多选）」一次挑多个。",
+          },
+          {
+            kind: "actions",
+            actions: [
+              { label: "选择 APK（可多选）", primary: true, onClick: () => void pickApksBatch(), disabled: batchBusy },
+              { label: "全部安装", onClick: () => readyDevice && void installBatch(readyDevice.serial), disabled: batchBusy || batchApks.length === 0 || !readyDevice },
+              { label: "停止", onClick: () => { batchCancelRef.current = true; }, disabled: !batchBusy },
+              { label: "清空队列", onClick: () => setBatchApks([]), disabled: batchBusy },
+            ],
+          },
+          { kind: "note", text: apkError ?? apkMessage ?? "安装包逐个经 adb 安装；失败原因来自 adb 的真实输出。单个 APK 也可以直接拖进窗口安装。" },
         ];
       case "apps":
         return [
