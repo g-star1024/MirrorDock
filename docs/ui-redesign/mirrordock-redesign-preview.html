@@ -339,7 +339,7 @@ html[data-theme="paper"] .card { border: 1px solid var(--line); box-shadow: none
 }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
 .chip.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: var(--fs-12); font-weight: 600; }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: var(--r-md); font-size: var(--fs-12); font-weight: 600; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
@@ -424,7 +424,7 @@ html[data-theme="paper"] .card { border: 1px solid var(--line); box-shadow: none
 .search-box input::placeholder { color: var(--muted); }
 
 .switch {
-  width: 36px; height: 20px; border-radius: 999px; border: 0; padding: 0; cursor: pointer;
+  width: 36px; height: 20px; border-radius: var(--r-md); border: 0; padding: 0; cursor: pointer;
   background: var(--line-strong); position: relative; transition: background var(--dur-fast) var(--ease); flex: none;
 }
 .switch::after {
@@ -462,8 +462,8 @@ html[data-theme="paper"] .card { border: 1px solid var(--line); box-shadow: none
 .kv dd { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kv dd.skeleton-line { height: 14px; margin-top: 5px; }
 
-.progress { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; min-width: 80px; }
-.progress i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width var(--dur) var(--ease); }
+.progress { height: 6px; border-radius: var(--r-md); background: var(--surface-2); overflow: hidden; min-width: 80px; }
+.progress i { display: block; height: 100%; background: var(--accent); border-radius: var(--r-md); transition: width var(--dur) var(--ease); }
 .progress.ok i { background: var(--ok); }
 
 .tool-row {
@@ -546,10 +546,10 @@ html[data-theme="prism"] .tool-ico.c6 { background: var(--cat-green-soft); color
 .phone-frame i { position: absolute; inset: 14px 4px 4px; border-radius: 6px; background: linear-gradient(150deg, var(--accent-soft), var(--accent)); opacity: .8; }
 .canvas-hud {
   position: absolute; left: var(--sp-3); bottom: var(--sp-3); display: flex; align-items: center; gap: var(--sp-2);
-  padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line);
+  padding: 4px 10px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line);
   font-size: var(--fs-12); color: var(--text-2); box-shadow: var(--shadow-1);
 }
-.canvas-flag { position: absolute; left: var(--sp-3); top: var(--sp-3); display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-11); color: var(--muted); }
+.canvas-flag { position: absolute; left: var(--sp-3); top: var(--sp-3); display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-11); color: var(--muted); }
 .mirror-toolbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 
 .thumb-strip { display: flex; gap: var(--sp-2); overflow-x: auto; padding-bottom: var(--sp-1); }
