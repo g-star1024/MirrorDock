@@ -512,3 +512,9 @@
 3. **色彩柔化**：soft 强调色 `#3469e4 → #4a7cf3`（提亮降饱和），底色微调冷蓝灰 `#f6f7fb`；prism 强调 `#6d4fe0 → #7a5cf0`、六分类色全部粉彩化；aurora 强调 `#3e63dd → #4f74e8`；状态色统一降一档饱和（danger #cd3d3d→#d24d4d 等）。阴影全部改为「近距 + 远距扩散」双层结构，避免生硬投影。
 4. **爱思亲和感**：顶栏底 `--titlebar-bg` 用极淡蓝调渐变（#fbfcff→#f4f6fc）；侧栏导航改 **999px 药丸**（去掉左侧竖条指示）；顶栏搜索、chips、徽章、分页 Tab 全部药丸形；徽章 padding 加大（3px 10px）。
 5. **主按钮**：accent 纵向微渐变 + 同色柔影（`color-mix` 55% 透明度），hover 加深渐变并增强投影——保留「每屏至多一个 primary」约束。
+
+## §10 迭代 v2.3：粉彩图标 + 全主题圆角统一（2026-11-25 用户反馈）
+
+1. **磁贴 Prism 分类图标压淡一档**：由「彩底白图标」改为「淡彩底 + 同系深色图标」。新增 6 个 soft token：`--cat-blue-soft #e3ecfd / --cat-teal-soft #dbf2f0 / --cat-violet-soft #ece8fd / --cat-pink-soft #fbe6ee / --cat-amber-soft #faf0d9 / --cat-green-soft #def1e6`，图标色取对应分类色的深化档（如 c1 图标 `#3568cf`）。状态徽章本来就是 soft 底彩字，方向一致。
+2. **全主题圆角统一为 4/7/9/12**：删除 paper 的 -2px 与 aurora 的 +2px 偏移（`--radius-shift` 全部归零），五套主题共用同一圆角档；paper 保留「细线无阴影」、aurora 保留「光斑 + blur」签名，仅圆角不再差异化。
+3. **修复圆角塌陷 bug（重要）**：`--radius-shift` 原为无单位 `0`，`calc(12px + 0)` 在部分 Chromium 版本判定非法 → computed 圆角变 0px（正方形）。v1 起就存在此隐患；现全部改为 `--radius-shift: 0px`（带单位），浏览器探针与卡片实测均恢复 12px。**教训：token 参与长度运算时必须带单位。**
