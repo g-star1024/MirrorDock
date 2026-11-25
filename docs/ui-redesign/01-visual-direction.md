@@ -518,3 +518,12 @@
 1. **磁贴 Prism 分类图标压淡一档**：由「彩底白图标」改为「淡彩底 + 同系深色图标」。新增 6 个 soft token：`--cat-blue-soft #e3ecfd / --cat-teal-soft #dbf2f0 / --cat-violet-soft #ece8fd / --cat-pink-soft #fbe6ee / --cat-amber-soft #faf0d9 / --cat-green-soft #def1e6`，图标色取对应分类色的深化档（如 c1 图标 `#3568cf`）。状态徽章本来就是 soft 底彩字，方向一致。
 2. **全主题圆角统一为 4/7/9/12**：删除 paper 的 -2px 与 aurora 的 +2px 偏移（`--radius-shift` 全部归零），五套主题共用同一圆角档；paper 保留「细线无阴影」、aurora 保留「光斑 + blur」签名，仅圆角不再差异化。
 3. **修复圆角塌陷 bug（重要）**：`--radius-shift` 原为无单位 `0`，`calc(12px + 0)` 在部分 Chromium 版本判定非法 → computed 圆角变 0px（正方形）。v1 起就存在此隐患；现全部改为 `--radius-shift: 0px`（带单位），浏览器探针与卡片实测均恢复 12px。**教训：token 参与长度运算时必须带单位。**
+
+## §11 迭代 v2.4：控件圆角与容器圆角统一（2026-11-25 用户反馈）
+
+用户要求：控件圆角与边框圆角统一成一个大小，以外框圆角为准。落定：
+
+1. **四档 token 归一**：`--r-xs / --r-sm / --r-md / --r-lg` 全部 = `12px`（变量名保留，语义层仍存在，值统一；CSS 的 border-radius 会自动钳制，小元素不受损）。
+2. **交互控件去胶囊化**：侧栏导航项、Tab、顶栏搜索位、页头搜索框、pill、chip 由 `999px` 全胶囊改回 `var(--r-md)`（12px）——这些正是用户红框圈出的控件。
+3. **保留 999px 的件**（非交互控件、形状语义就是胶囊）：状态徽章 `.badge`、开关轨道 `.switch`、进度条 `.progress`、画布悬浮标签 `.canvas-hud/.canvas-flag`、手机示意图。
+4. 主题菜单 14px 色块 swatch 与手机示意图的 3/6/14px 装饰圆角不变。
