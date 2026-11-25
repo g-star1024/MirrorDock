@@ -39,12 +39,16 @@ import {
   isValidCoord,
   isValidDuration,
   isValidKeycode,
+  keymapsToJson,
   newLocalId,
   normalizePhysicalKey,
+  parseImportedKeymaps,
+  parseImportedReplays,
   physicalKeyLabel,
   readKeymaps,
   readRecordPlans,
   readReplays,
+  replaysToJson,
   validateReplayScript,
   writeKeymaps,
   writeRecordPlans,
@@ -589,6 +593,13 @@ export function screenshotFileName(now: Date) {
   return `MirrorDock-${localTimestamp(now)}.png`;
 }
 
+/** 多设备批量截图的文件名：同一秒内多台设备不会互相覆盖，序列号拼进文件名。 */
+export function screenshotFileNameForDevice(now: Date, serial: string) {
+  // 序列号可能是无线地址（含冒号、点），只保留文件名白名单字符，其余换成短横线。
+  const tag = serial.replace(/[^A-Za-z0-9._-]/g, "-").replace(/\.\.+/g, ".");
+  return `MirrorDock-${localTimestamp(now)}-${tag}.png`;
+}
+
 export function recordingFileName(now: Date) {
   return `MirrorDock-${localTimestamp(now)}.mp4`;
 }
@@ -832,6 +843,8 @@ function App() {
   const [screenshot, setScreenshot] = useState<Screenshot | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const [screenshotBusy, setScreenshotBusy] = useState(false);
+  // X10-139 多端一键截图的结论（逐台成功/失败），只在多端视图展示。
+  const [multiCaptureSummary, setMultiCaptureSummary] = useState<string | null>(null);
   const [recording, setRecording] = useState<Recording | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
@@ -1827,6 +1840,34 @@ function App() {
     }
   }
 
+  // X10-139 一键全部截图：对所有就绪设备各截一张，文件名带序列号避免同秒覆盖；
+  // 单台失败不阻断其他设备，结论逐台展示。
+  async function captureAllScreens() {
+    const targets = (check?.devices ?? []).filter((device) => device.state === "ready");
+    if (targets.length === 0) {
+      setMultiCaptureSummary("没有就绪的手机可截图；先在「连接」页连上并授权设备。");
+      return;
+    }
+    setScreenshotBusy(true);
+    setMultiCaptureSummary(null);
+    let done = 0;
+    const failures: string[] = [];
+    for (const device of targets) {
+      const fileName = screenshotFileNameForDevice(new Date(), device.serial);
+      try {
+        await invoke<Screenshot>("capture_screenshot", { serial: device.serial, fileName });
+        done += 1;
+      } catch (error) {
+        failures.push(`${displayLabels[device.serial] ?? device.label}：${errorMessage(error, "截图失败")}`);
+      }
+    }
+    setScreenshotBusy(false);
+    setMultiCaptureSummary(
+      `全部截图结束：${done}/${targets.length} 台成功，保存在「图片 / MirrorDock」。` +
+        (failures.length > 0 ? `失败：${failures.join("；")}` : ""),
+    );
+  }
+
   // 撤销：删除刚刚保存的那张截图。只删这一个文件，不动其它内容。
   async function undoCapture() {
     if (!screenshot) return;
@@ -2290,6 +2331,23 @@ function App() {
     }
   }
 
+  // X10-137 拖入多个 APK → 全部加入批量安装队列并切到安装页；不再像以前那样
+  // 只装第一个、其余静默丢弃。队列按路径去重追加，不覆盖已挑选的内容。
+  function enqueueDroppedApks(apks: string[]) {
+    setBatchApks((prev) => {
+      const known = new Set(prev.map((item) => item.path));
+      const additions = apks
+        .filter((path) => !known.has(path))
+        .map((path) => ({ name: path.split(/[\\/]/).pop() ?? path, path, status: "pending" as const }));
+      return [...prev, ...additions];
+    });
+    openView("install");
+    setDropInstallNotice({
+      kind: "info",
+      text: `已把 ${apks.length} 个 APK 加入批量安装队列；到「批量安装」页选择手机后点「开始批量安装」。`,
+    });
+  }
+
   // -- X10-129 相册 --
 
   async function refreshGallery(dir: string = galleryDir) {
@@ -2319,8 +2377,8 @@ function App() {
     void refreshGallery(dir);
   }
 
-  async function fetchGalleryFile(fileName: string) {
-    if (!transferDeviceSerial) return;
+  async function fetchGalleryFile(fileName: string): Promise<boolean> {
+    if (!transferDeviceSerial) return false;
     setGalleryMessage(null);
     setGalleryError(null);
     setFetchingGalleryName(fileName);
@@ -2338,11 +2396,30 @@ function App() {
       });
       setGalleryFetched((prev) => ({ ...prev, [fileName]: receipt }));
       setGalleryMessage(`已取回「${fileName}」，保存在「下载 / MirrorDock / 相册」。`);
+      return true;
     } catch (error) {
       setGalleryErrors((prev) => ({ ...prev, [fileName]: errorMessage(error, "没有取回成功。") }));
+      return false;
     } finally {
       setFetchingGalleryName(null);
     }
+  }
+
+  // X10-138 一键取回全部：按顺序逐个取回未成功过的文件，单个失败不阻断后续；
+  // 已取回的文件不重复下载。
+  async function fetchAllGalleryFiles() {
+    if (!transferDeviceSerial || galleryFiles === null || fetchingGalleryName !== null) return;
+    const pending = galleryFiles.filter((name) => !galleryFetched[name]);
+    if (pending.length === 0) {
+      setGalleryMessage("这个目录里的文件都已取回过，没有需要重复下载的。");
+      return;
+    }
+    let done = 0;
+    for (const name of pending) {
+      const ok = await fetchGalleryFile(name);
+      if (ok) done += 1;
+    }
+    setGalleryMessage(`一键取回结束：${done}/${pending.length} 个成功，保存在「下载 / MirrorDock / 相册」。`);
   }
 
   // -- X10-130 按键映射 --
@@ -2354,6 +2431,48 @@ function App() {
   function persistKeymaps(next: { profiles: KeymapProfile[]; activeId: string | null }) {
     setKeymaps(next);
     writeKeymaps(next.profiles, next.activeId);
+  }
+
+  // X10-140 映射方案导出 / 导入：备份成 .json 文件、在机器之间迁移。
+  // 导入内容逐条校验，坏条目丢弃；导入成功立即写 localStorage。
+  async function exportKeymaps() {
+    setKeymapError(null);
+    setKeymapNotice(null);
+    try {
+      const path = await saveFilePicker({
+        title: "导出键位映射方案",
+        defaultPath: "mirrordock-keymaps.json",
+        filters: [{ name: "JSON 文件", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await invoke("write_export_file", { path, contents: keymapsToJson(keymaps) });
+      setKeymapNotice("映射方案已导出，可以在其他电脑上用「导入方案」恢复。");
+    } catch (error) {
+      setKeymapError(errorMessage(error, "导出没有完成。"));
+    }
+  }
+
+  async function importKeymaps() {
+    setKeymapError(null);
+    setKeymapNotice(null);
+    try {
+      const path = await openFilePicker({
+        title: "导入键位映射方案",
+        multiple: false,
+        filters: [{ name: "JSON 文件", extensions: ["json"] }],
+      });
+      if (typeof path !== "string" || path.length === 0) return;
+      const rawText = await invoke<string>("read_import_file", { path });
+      const parsed = parseImportedKeymaps(JSON.parse(rawText));
+      if (!parsed) {
+        setKeymapError("这个文件不是 MirrorDock 导出的映射方案；没有做任何改动。");
+        return;
+      }
+      persistKeymaps(parsed);
+      setKeymapNotice(`已导入 ${parsed.profiles.length} 个映射方案；坏条目已自动跳过。`);
+    } catch {
+      setKeymapError("读取或解析导入文件没有成功；没有做任何改动。");
+    }
   }
 
   function createKeymapProfile() {
@@ -2499,6 +2618,54 @@ function App() {
   function persistReplays(next: ReplayScript[]) {
     setReplays(next);
     writeReplays(next);
+  }
+
+  // X10-140 回放脚本导出 / 导入：与映射方案同一套文件读写与校验策略。
+  async function exportReplays() {
+    setReplayError(null);
+    setReplayNotice(null);
+    try {
+      const path = await saveFilePicker({
+        title: "导出回放脚本",
+        defaultPath: "mirrordock-replays.json",
+        filters: [{ name: "JSON 文件", extensions: ["json"] }],
+      });
+      if (!path) return;
+      await invoke("write_export_file", { path, contents: replaysToJson(replays) });
+      setReplayNotice("回放脚本已导出，可以在其他电脑上用「导入脚本」恢复。");
+    } catch (error) {
+      setReplayError(errorMessage(error, "导出没有完成。"));
+    }
+  }
+
+  async function importReplays() {
+    setReplayError(null);
+    setReplayNotice(null);
+    try {
+      const path = await openFilePicker({
+        title: "导入回放脚本",
+        multiple: false,
+        filters: [{ name: "JSON 文件", extensions: ["json"] }],
+      });
+      if (typeof path !== "string" || path.length === 0) return;
+      const rawText = await invoke<string>("read_import_file", { path });
+      const parsed = parseImportedReplays(JSON.parse(rawText));
+      if (!parsed) {
+        setReplayError("这个文件不是 MirrorDock 导出的回放脚本；没有做任何改动。");
+        return;
+      }
+      // 与本地脚本去重（按 id 覆盖同名脚本，其余追加）。
+      const merged = [...replays];
+      for (const script of parsed) {
+        const index = merged.findIndex((item) => item.id === script.id);
+        if (index >= 0) merged[index] = script;
+        else merged.push(script);
+      }
+      persistReplays(merged);
+      setReplayNotice(`已导入 ${parsed.length} 个回放脚本；坏步已自动跳过。`);
+    } catch {
+      setReplayError("读取或解析导入文件没有成功；没有做任何改动。");
+    }
   }
 
   function createReplayScript() {
@@ -2899,7 +3066,10 @@ function App() {
   function handleDroppedFiles(paths: string[]) {
     const apks = paths.filter((path) => path.toLowerCase().endsWith(".apk"));
     const others = paths.filter((path) => !path.toLowerCase().endsWith(".apk"));
-    if (apks.length > 0) void installDroppedApk(apks);
+    // X10-137：拖入 1 个 APK 保持原「直接安装」；拖入多个则全部进批量安装队列，
+    // 不再只装第一个、其余静默丢弃。
+    if (apks.length === 1) void installDroppedApk(apks);
+    else if (apks.length > 1) enqueueDroppedApks(apks);
     if (others.length > 0) void sendDroppedFiles(others);
   }
   // 拖入非 APK 文件 → 逐个发送到手机发送区；结果走右下角浮层反馈（拖拽可发生在任何页签）。
@@ -3385,6 +3555,9 @@ function App() {
       }
       case "multi":
         return [
+          ...(multiCaptureSummary
+            ? [{ kind: "note" as const, text: `全部截图结论：${multiCaptureSummary}` }]
+            : []),
           {
             kind: "table",
             title: "当前设备",
@@ -3434,6 +3607,8 @@ function App() {
             kind: "actions",
             actions: [
               { label: "刷新设备", onClick: () => void refreshDevices(), disabled: isChecking },
+              // X10-139：对所有就绪设备各截一张，文件名带序列号不互相覆盖。
+              { label: "一键全部截图", onClick: () => void captureAllScreens(), disabled: screenshotBusy },
               { label: "结束全部", onClick: () => void stopMirroring(), disabled: isStopping || activeSessionCount === 0, danger: true },
             ],
           },
@@ -3522,6 +3697,15 @@ function App() {
                 {profile && (
                   <div className="assistant-chip-row">
                     <button type="button" className="assistant-btn" onClick={() => deleteKeymapProfile(profile.id)}>删除「{profile.name}」</button>
+                    {/* X10-140：方案备份与迁移，走本机 .json 文件。 */}
+                    <button type="button" className="assistant-btn" onClick={() => void exportKeymaps()}>导出方案</button>
+                    <button type="button" className="assistant-btn" onClick={() => void importKeymaps()}>导入方案</button>
+                  </div>
+                )}
+                {!profile && (
+                  <div className="assistant-chip-row">
+                    <button type="button" className="assistant-btn" onClick={() => void exportKeymaps()} disabled={keymaps.profiles.length === 0}>导出方案</button>
+                    <button type="button" className="assistant-btn" onClick={() => void importKeymaps()}>导入方案</button>
                   </div>
                 )}
                 {!profile && <p className="assistant-note">{keymaps.profiles.length > 0 ? `本机已恢复 ${keymaps.profiles.length} 个方案；点方案名选中后编辑。` : "还没有映射方案；点「＋ 新建方案」开始编排。"}</p>}
@@ -3671,6 +3855,15 @@ function App() {
                 {script && (
                   <div className="assistant-chip-row">
                     <button type="button" className="assistant-btn" onClick={() => deleteReplayScript(script.id)} disabled={replayRunning}>删除「{script.name}」</button>
+                    {/* X10-140：脚本备份与迁移。 */}
+                    <button type="button" className="assistant-btn" onClick={() => void exportReplays()}>导出脚本</button>
+                    <button type="button" className="assistant-btn" onClick={() => void importReplays()}>导入脚本</button>
+                  </div>
+                )}
+                {!script && (
+                  <div className="assistant-chip-row">
+                    <button type="button" className="assistant-btn" onClick={() => void exportReplays()} disabled={replays.length === 0}>导出脚本</button>
+                    <button type="button" className="assistant-btn" onClick={() => void importReplays()}>导入脚本</button>
                   </div>
                 )}
                 {!script && <p className="assistant-note">{replays.length > 0 ? `本机已恢复 ${replays.length} 个脚本；点脚本名选中后编排或回放。` : "还没有回放脚本；点「＋ 新建脚本」开始编排。"}</p>}
@@ -3857,6 +4050,8 @@ function App() {
             kind: "actions",
             actions: [
               { label: "刷新相册", primary: true, onClick: () => void refreshGallery(), disabled: galleryBusy || !transferDeviceSerial },
+              // X10-138：一键取回本目录全部未取回的文件，逐个执行、失败不阻断。
+              { label: "一键取回全部", onClick: () => void fetchAllGalleryFiles(), disabled: galleryBusy || fetchingGalleryName !== null || !transferDeviceSerial || galleryFiles === null || (galleryFiles ?? []).every((name) => galleryFetched[name]) },
             ],
           },
           { kind: "note", text: [galleryError, galleryMessage, "文件保存到本机「下载 / MirrorDock / 相册」；读取失败会明确报错，不上传任何内容。"].filter(Boolean).join(" ") },

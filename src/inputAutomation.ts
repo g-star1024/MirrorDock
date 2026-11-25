@@ -246,9 +246,8 @@ function parseWaitMs(value: unknown): number {
   return typeof value === "number" ? clampWaitMs(value) : 0;
 }
 
-/** 读取映射方案；任何一条损坏的绑定都被丢弃，而不是让整个面板不可用。 */
-export function readKeymaps(): { profiles: KeymapProfile[]; activeId: string | null } {
-  const raw = readJson(KEYMAP_STORAGE_KEY);
+/** 解析任意来源（localStorage / 导入文件）的映射方案数据；坏条目丢弃，不让整个面板不可用。 */
+function parseKeymapsValue(raw: unknown): { profiles: KeymapProfile[]; activeId: string | null } {
   if (typeof raw !== "object" || raw === null) return { profiles: [], activeId: null };
   const record = raw as Record<string, unknown>;
   const rawProfiles = Array.isArray(record.profiles) ? record.profiles : [];
@@ -278,13 +277,23 @@ export function readKeymaps(): { profiles: KeymapProfile[]; activeId: string | n
   };
 }
 
+export function readKeymaps(): { profiles: KeymapProfile[]; activeId: string | null } {
+  return parseKeymapsValue(readJson(KEYMAP_STORAGE_KEY));
+}
+
 export function writeKeymaps(profiles: KeymapProfile[], activeId: string | null): void {
   writeJson(KEYMAP_STORAGE_KEY, { profiles, activeId });
 }
 
-/** 读取回放脚本；坏步丢弃、坏脚本跳过。 */
-export function readReplays(): ReplayScript[] {
-  const raw = readJson(REPLAY_STORAGE_KEY);
+/** 解析导入的映射方案文件内容；只接受 { profiles, activeId } 形状，坏数据整体视为空。 */
+export function parseImportedKeymaps(raw: unknown): { profiles: KeymapProfile[]; activeId: string | null } | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  if (!Array.isArray((raw as Record<string, unknown>).profiles)) return null;
+  return parseKeymapsValue(raw);
+}
+
+/** 解析任意来源（localStorage / 导入文件）的回放脚本数组；坏步丢弃、坏脚本跳过。 */
+function parseReplaysValue(raw: unknown): ReplayScript[] {
   if (!Array.isArray(raw)) return [];
   const scripts: ReplayScript[] = [];
   for (const item of raw) {
@@ -316,8 +325,38 @@ export function readReplays(): ReplayScript[] {
   return scripts;
 }
 
+export function readReplays(): ReplayScript[] {
+  return parseReplaysValue(readJson(REPLAY_STORAGE_KEY));
+}
+
 export function writeReplays(scripts: ReplayScript[]): void {
   writeJson(REPLAY_STORAGE_KEY, scripts);
+}
+
+/** 解析导入的回放脚本文件内容；接受 { replays: [...] } 包装形状或裸数组。 */
+export function parseImportedReplays(raw: unknown): ReplayScript[] | null {
+  if (Array.isArray(raw)) return parseReplaysValue(raw);
+  if (typeof raw === "object" && raw !== null && Array.isArray((raw as Record<string, unknown>).replays)) {
+    return parseReplaysValue((raw as Record<string, unknown>).replays);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 导入 / 导出（X10-140）：方案与脚本可以备份成 JSON 文件、在机器之间迁移。
+// ---------------------------------------------------------------------------
+
+export const KEYMAP_EXPORT_VERSION = 1;
+export const REPLAY_EXPORT_VERSION = 1;
+
+/** 把映射方案序列化为导出 JSON 字符串。 */
+export function keymapsToJson(keymaps: { profiles: KeymapProfile[]; activeId: string | null }): string {
+  return JSON.stringify({ version: KEYMAP_EXPORT_VERSION, exportedAt: new Date().toISOString(), ...keymaps });
+}
+
+/** 把回放脚本序列化为导出 JSON 字符串。 */
+export function replaysToJson(scripts: ReplayScript[]): string {
+  return JSON.stringify({ version: REPLAY_EXPORT_VERSION, exportedAt: new Date().toISOString(), replays: scripts });
 }
 
 /** 生成本地唯一 id（时间戳 + 随机尾巴，碰撞概率可忽略）。 */

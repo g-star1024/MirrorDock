@@ -53,6 +53,7 @@ import App, {
   recordingFileName,
   relativeTime,
   screenshotFileName,
+  screenshotFileNameForDevice,
   sessionShortcutKeys,
   sessionStatus,
   suggestedUsbSerial,
@@ -323,6 +324,14 @@ describe("screenshot and recording file names", () => {
     const now = new Date(2026, 8, 28, 20, 5, 9);
     expect(screenshotFileName(now)).toBe("MirrorDock-20260928-200509.png");
     expect(recordingFileName(now)).toBe("MirrorDock-20260928-200509.mp4");
+  });
+
+  it("tags_batch_screenshot_names_with_the_serial_so_same_second_devices_do_not_collide", () => {
+    const now = new Date(2026, 8, 28, 20, 5, 9);
+    // USB 序列号原样保留。
+    expect(screenshotFileNameForDevice(now, "ABC123")).toBe("MirrorDock-20260928-200509-ABC123.png");
+    // 无线地址里的冒号换成短横线；连续点压缩成单点，绕开「..」白名单拒绝。
+    expect(screenshotFileNameForDevice(now, "192.168.1.8:5555")).toBe("MirrorDock-20260928-200509-192.168.1.8-5555.png");
   });
 });
 

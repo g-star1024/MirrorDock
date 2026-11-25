@@ -7,12 +7,16 @@ import {
   isValidCoord,
   isValidDuration,
   isValidKeycode,
+  keymapsToJson,
   newLocalId,
   normalizePhysicalKey,
+  parseImportedKeymaps,
+  parseImportedReplays,
   physicalKeyLabel,
   readKeymaps,
   readRecordPlans,
   readReplays,
+  replaysToJson,
   validateReplayScript,
   writeKeymaps,
   writeRecordPlans,
@@ -244,5 +248,75 @@ describe("record plans (X10-131)", () => {
   it("uses_local_date_keys", () => {
     expect(dateKey(new Date(2026, 10, 24))).toBe("2026-11-24");
     expect(dateKey(new Date(2026, 0, 3))).toBe("2026-1-3");
+  });
+});
+
+describe("keymap / replay import & export (X10-140)", () => {
+  const validProfile: KeymapProfile = {
+    id: "p1",
+    name: "游戏方案",
+    bindings: [{ physicalKey: "KeyA", label: "A", action: { kind: "key", keycode: "KEYCODE_BACK" } }],
+  };
+  const validScript: ReplayScript = {
+    id: "s1",
+    name: "签到脚本",
+    steps: [{ kind: "tap", x: 100, y: 200, waitMs: 300 }],
+  };
+
+  it("exports_and_reimports_keymaps_without_loss", () => {
+    const json = keymapsToJson({ profiles: [validProfile], activeId: "p1" });
+    const parsed = parseImportedKeymaps(JSON.parse(json));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.activeId).toBe("p1");
+    expect(parsed!.profiles).toHaveLength(1);
+    expect(parsed!.profiles[0].bindings).toEqual(validProfile.bindings);
+  });
+
+  it("rejects_imported_keymaps_without_profiles_array", () => {
+    expect(parseImportedKeymaps(null)).toBeNull();
+    expect(parseImportedKeymaps("nonsense")).toBeNull();
+    expect(parseImportedKeymaps({ version: 1 })).toBeNull();
+    expect(parseImportedKeymaps({ profiles: "not-an-array" })).toBeNull();
+  });
+
+  it("drops_bad_entries_when_importing_keymaps", () => {
+    const raw = {
+      profiles: [
+        validProfile,
+        null,
+        { id: "p2", name: "坏绑定方案", bindings: [{ physicalKey: "KeyB", label: "B", action: { kind: "key", keycode: "KEYCODE_NOT_IN_WHITELIST" } }] },
+        { name: "缺 id" },
+      ],
+      activeId: "p1",
+    };
+    const parsed = parseImportedKeymaps(raw);
+    expect(parsed).not.toBeNull();
+    // 方案壳保留、坏绑定被丢弃（与 localStorage 恢复同一条规则）；无 id 的方案跳过。
+    expect(parsed!.profiles).toHaveLength(2);
+    expect(parsed!.profiles[0].id).toBe("p1");
+    expect(parsed!.profiles[1].bindings).toHaveLength(0);
+  });
+
+  it("exports_and_reimports_replays_without_loss", () => {
+    const json = replaysToJson([validScript]);
+    const parsed = parseImportedReplays(JSON.parse(json));
+    expect(parsed).not.toBeNull();
+    expect(parsed).toEqual([validScript]);
+  });
+
+  it("accepts_bare_arrays_of_replays_and_drops_bad_steps", () => {
+    const raw = [validScript, { id: "s2", name: "坏步脚本", steps: [{ kind: "tap", x: 99999, y: 0, waitMs: 100 }] }, "garbage"];
+    const parsed = parseImportedReplays(raw);
+    expect(parsed).not.toBeNull();
+    // 坏步被丢弃后脚本壳保留；字符串等垃圾条目跳过。
+    expect(parsed).toHaveLength(2);
+    expect(parsed![0].id).toBe("s1");
+    expect(parsed![1].steps).toHaveLength(0);
+  });
+
+  it("rejects_imported_replays_without_replays_array_or_array_shape", () => {
+    expect(parseImportedReplays({ version: 1 })).toBeNull();
+    expect(parseImportedReplays({ replays: "nope" })).toBeNull();
+    expect(parseImportedReplays(42)).toBeNull();
   });
 });

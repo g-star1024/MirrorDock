@@ -7615,6 +7615,80 @@ fn delete_screenshot(app: AppHandle, file_name: String) -> Result<(), AppError> 
     remove_screenshot_file(&directory, &file_name)
 }
 
+/// 按键映射 / 回放脚本导出文件的大小上限。方案与脚本本身很小，2MB 足够，
+/// 超限视为异常输入直接拒绝，避免把大文件误当配置导入导出。
+const MAX_EXPORT_FILE_BYTES: usize = 2 * 1024 * 1024;
+
+fn export_path_invalid_error() -> AppError {
+    AppError::new(
+        "export_path_invalid",
+        "文件路径不可用。",
+        "请选择一个 .json 结尾的文件路径。",
+    )
+}
+
+fn export_too_large_error() -> AppError {
+    AppError::new(
+        "export_file_too_large",
+        "文件太大，不像是方案或脚本文件。",
+        "请确认选的是 MirrorDock 导出的 .json 文件。",
+    )
+}
+
+/// 校验导入/导出文件路径：只放行 .json 扩展名。
+///
+/// 路径来自系统文件选择器（用户亲自挑选），但仍按不可信输入处理：不校验内容、
+/// 只约束扩展名与大小，避免误读写任意类型的文件。
+fn validate_export_json_path(path: &str) -> Result<PathBuf, AppError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.len() > 1024 {
+        return Err(export_path_invalid_error());
+    }
+    let candidate = PathBuf::from(trimmed);
+    if candidate
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        != Some(true)
+    {
+        return Err(export_path_invalid_error());
+    }
+    Ok(candidate)
+}
+
+/// 把导出内容写到用户指定的 .json 路径（X10-140）。只在用户明确保存时调用。
+#[tauri::command]
+fn write_export_file(path: String, contents: String) -> Result<(), AppError> {
+    let path = validate_export_json_path(&path)?;
+    if contents.len() > MAX_EXPORT_FILE_BYTES {
+        return Err(export_too_large_error());
+    }
+    std::fs::write(&path, contents).map_err(|_| {
+        AppError::new(
+            "export_write_failed",
+            "无法写入这个文件。",
+            "请检查文件是否被其他程序占用，或换一个保存位置。",
+        )
+    })
+}
+
+/// 读取用户指定的 .json 导入文件（X10-140）。只读文本，内容由前端再逐条校验。
+#[tauri::command]
+fn read_import_file(path: String) -> Result<String, AppError> {
+    let path = validate_export_json_path(&path)?;
+    let metadata = std::fs::metadata(&path).map_err(|_| export_path_invalid_error())?;
+    if metadata.len() > MAX_EXPORT_FILE_BYTES as u64 {
+        return Err(export_too_large_error());
+    }
+    std::fs::read_to_string(&path).map_err(|_| {
+        AppError::new(
+            "import_read_failed",
+            "无法读取这个文件。",
+            "请确认文件存在且是文本格式的 .json 文件。",
+        )
+    })
+}
+
 /// 从手机取回文件的本机保存目录：「下载 / MirrorDock」（不可用时退回应用数据目录）。
 fn transfer_download_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     app.path()
@@ -8929,6 +9003,8 @@ pub fn run() {
             revoke_device_access,
             capture_screenshot,
             delete_screenshot,
+            write_export_file,
+            read_import_file,
             send_file_to_device,
             list_device_files,
             list_device_apps,
@@ -13741,6 +13817,21 @@ mod tests {
 
         let too_long = format!("{}.png", "a".repeat(MAX_MEDIA_NAME_LEN));
         assert!(validate_screenshot_name(&too_long).is_err());
+    }
+
+    #[test]
+    fn export_json_path_only_accepts_json_files() {
+        // 合法路径放行。
+        assert!(validate_export_json_path("/tmp/keymaps.json").is_ok());
+        assert!(validate_export_json_path("  /tmp/keymaps.JSON  ").is_ok());
+        // 非 .json 扩展名、空串、缺扩展名一律拒绝。
+        assert!(validate_export_json_path("/tmp/keymaps.txt").is_err());
+        assert!(validate_export_json_path("/tmp/keymaps").is_err());
+        assert!(validate_export_json_path("").is_err());
+        assert!(validate_export_json_path("   ").is_err());
+        // 异常长路径拒绝。
+        let too_long = format!("/tmp/{}.json", "a".repeat(1100));
+        assert!(validate_export_json_path(&too_long).is_err());
     }
 
     #[test]
