@@ -1,0 +1,2379 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="soft">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MirrorDock · UI 重设计预览（安静的诊断台）</title>
+<style>
+/* ============================================================
+   MirrorDock UI Redesign Preview · Phase 3
+   设计方向：安静的诊断台（Quiet Instrument）
+   规则：全局样式只引用 token 变量；例外仅 E 主题签名光斑与两处规范指定的遮罩
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  /* 共享基座 · Phase 1 §3.1 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+             "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px;
+  --fs-16: 16px; --fs-20: 20px; --fs-28: 28px;
+  --lh-tight: 1.3; --lh-ui: 1.45; --lh-body: 1.6;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+  --radius-shift: 0;
+  --r-xs: calc(5px + var(--radius-shift));
+  --r-sm: calc(8px + var(--radius-shift));
+  --r-md: calc(12px + var(--radius-shift));
+  --r-lg: calc(16px + var(--radius-shift));
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --dur-fast: .12s; --dur: .18s;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+html[data-theme="soft"] {
+  color-scheme: light;
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f1f3f6; --surface-3: #fafbfc;
+  --text: #1b222b; --text-2: #49525f; --muted: #8a93a2;
+  --line: #e4e8ee; --line-strong: #d2d8e1;
+  --accent: #3469e4; --accent-strong: #2a54bd; --accent-soft: #e8eefc; --on-accent: #ffffff;
+  --ok: #1d8a54; --ok-soft: #e3f4eb; --warn: #b06a10; --warn-soft: #fcf1e0;
+  --danger: #cd3d3d; --danger-soft: #fbe9e9;
+  --shadow-1: 0 1px 2px rgba(23,32,48,.05);
+  --shadow-2: 0 8px 24px rgba(23,32,48,.12);
+  --radius-shift: 0;
+  --titlebar-bg: var(--surface); --titlebar-text: var(--text);
+  --mask: rgba(12,16,24,.45);
+}
+html[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #101216; --surface: #171a1f; --surface-2: #1e222a; --surface-3: #13161b;
+  --text: #e9ecf1; --text-2: #a6aeb9; --muted: #6e7683;
+  --line: #262b33; --line-strong: #343b45;
+  --accent: #4f8bff; --accent-strong: #7aa6ff; --accent-soft: rgba(79,139,255,.14); --on-accent: #0b1220;
+  --ok: #3ecf8e; --ok-soft: rgba(62,207,142,.14);
+  --warn: #f0a63c; --warn-soft: rgba(240,166,60,.14);
+  --danger: #ff6b6b; --danger-soft: rgba(255,107,107,.13);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 12px 32px rgba(0,0,0,.5);
+  --radius-shift: 0;
+  --titlebar-bg: var(--surface); --titlebar-text: var(--text);
+  --mask: rgba(0,0,0,.55);
+}
+html[data-theme="prism"] {
+  color-scheme: light;
+  --bg: #f4f5f9; --surface: #ffffff; --surface-2: #f0f2f7; --surface-3: #fafafc;
+  --text: #1d1f2b; --text-2: #4b4f63; --muted: #8a8ea0;
+  --line: #e4e6ef; --line-strong: #d3d6e3;
+  --accent: #6d4fe0; --accent-strong: #5a3fc6; --accent-soft: #ece8fc; --on-accent: #ffffff;
+  --ok: #17855f; --ok-soft: #e0f4ec; --warn: #b26a0f; --warn-soft: #fcf1df;
+  --danger: #cc3d54; --danger-soft: #fbe8ec;
+  --cat-blue: #2f6fe4; --cat-teal: #0e9488; --cat-violet: #6d4fe0;
+  --cat-pink: #d6457e; --cat-amber: #c07a12; --cat-green: #2c9a52;
+  --shadow-1: 0 1px 2px rgba(29,31,43,.06);
+  --shadow-2: 0 8px 24px rgba(29,31,43,.13);
+  --radius-shift: 0;
+  --titlebar-bg: var(--surface); --titlebar-text: var(--text);
+  --mask: rgba(12,16,24,.45);
+}
+html[data-theme="paper"] {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #f7f7f8; --surface-3: #fafafa;
+  --text: #17181a; --text-2: #45474c; --muted: #7c8087;
+  --line: #ebebee; --line-strong: #dcdee1;
+  --accent: #17181a; --accent-strong: #000000; --accent-soft: #f1f1f3; --on-accent: #ffffff;
+  --ok: #1f7a46; --ok-soft: #eaf4ee; --warn: #9a6206; --warn-soft: #faf3e3;
+  --danger: #c23b3b; --danger-soft: #faebeb;
+  --shadow-1: none;
+  --shadow-2: 0 4px 16px rgba(23,24,26,.1);
+  --radius-shift: -2px;
+  --titlebar-bg: var(--surface); --titlebar-text: var(--text);
+  --mask: rgba(12,16,24,.4);
+}
+html[data-theme="aurora"] {
+  color-scheme: light;
+  --bg: #e9eef8; --surface: rgba(255,255,255,.78); --surface-2: rgba(255,255,255,.55); --surface-3: rgba(255,255,255,.42);
+  --text: #1a2438; --text-2: #47536d; --muted: #6b7794;
+  --line: rgba(20,32,60,.12); --line-strong: rgba(20,32,60,.2);
+  --accent: #3e63dd; --accent-strong: #2c4ab8; --accent-soft: rgba(62,99,221,.12); --on-accent: #ffffff;
+  --ok: #1d8a54; --ok-soft: rgba(29,138,84,.13);
+  --warn: #b06a10; --warn-soft: rgba(176,106,16,.13);
+  --danger: #cd3d3d; --danger-soft: rgba(205,61,61,.12);
+  --shadow-1: 0 1px 3px rgba(25,40,80,.1);
+  --shadow-2: 0 12px 36px rgba(25,40,80,.18);
+  --radius-shift: 2px;
+  --titlebar-bg: var(--surface); --titlebar-text: var(--text);
+  --mask: rgba(12,16,24,.45);
+}
+/* E 主题签名光斑（唯一允许的硬编码背景，Phase 1 §3.2） */
+html[data-theme="aurora"] body::before {
+  position: fixed; inset: 0; z-index: -1; content: "";
+  background:
+    radial-gradient(1100px 500px at 12% -8%, rgba(93,140,255,.28), transparent 60%),
+    linear-gradient(160deg, #eef2fb, #dfe6f3);
+}
+/* E 主题毛玻璃只给两个悬浮层：标题栏 + 弹层 */
+html[data-theme="aurora"] .titlebar,
+html[data-theme="aurora"] .modal,
+html[data-theme="aurora"] .cmdk,
+html[data-theme="aurora"] .popover {
+  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+}
+
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font-ui); font-size: var(--fs-13); color: var(--text);
+  background: var(--bg); line-height: var(--lh-ui);
+  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+h1, h2, h3, h4, p, dl, dd, figure { margin: 0; }
+button { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+.mono { font-family: var(--font-mono); font-size: var(--fs-13); }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+/* ---------- 焦点与跳过链接（UX §5.1） ---------- */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: inherit; }
+:focus:not(:focus-visible) { outline: none; }
+.skip {
+  position: fixed; left: var(--sp-3); top: -48px; z-index: 300;
+  padding: 6px 14px; border-radius: var(--r-sm); background: var(--accent); color: var(--on-accent);
+  font-size: var(--fs-13); font-weight: 600; text-decoration: none; transition: top var(--dur-fast) var(--ease);
+}
+.skip:focus-visible { top: var(--sp-2); }
+
+/* ============================================================
+   外壳 · Phase 1 §4.1：44 titlebar / 232(56) sidebar / 56 vh / 28 statusbar
+   ============================================================ */
+.app {
+  --side-w: 232px;
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  grid-template-rows: 44px minmax(0, 1fr) 28px;
+  grid-template-areas: "title title" "side main" "foot foot";
+  height: 100vh;
+}
+.app.side-alt { --side-w: 56px; }
+
+/* ---------- Titlebar 44px ---------- */
+.titlebar {
+  grid-area: title; display: flex; align-items: center; gap: var(--sp-3);
+  padding: 0 var(--sp-3) 0 var(--sp-4);
+  background: var(--titlebar-bg); color: var(--titlebar-text);
+  border-bottom: 1px solid var(--line);
+  position: relative; z-index: 50; white-space: nowrap;
+}
+.brand { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-16); font-weight: 700; }
+.brand-mark {
+  width: 24px; height: 24px; border-radius: var(--r-sm); display: grid; place-items: center;
+  background: var(--accent); color: var(--on-accent); font-size: var(--fs-13); font-weight: 800;
+}
+.tb-search {
+  flex: 0 1 340px; margin-inline: auto; display: flex; align-items: center; gap: var(--sp-2);
+  height: 30px; padding: 0 var(--sp-3); min-width: 160px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface-2);
+  color: var(--muted); font-size: var(--fs-13); cursor: pointer; text-align: left;
+}
+.tb-search:hover { border-color: var(--muted); }
+.tb-search .kbd { margin-inline-start: auto; }
+.tb-right { display: flex; align-items: center; gap: var(--sp-2); margin-inline-start: auto; }
+.pill {
+  display: inline-flex; align-items: center; gap: var(--sp-2); height: 30px; padding: 0 var(--sp-3);
+  border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface);
+  font-size: var(--fs-12); color: var(--text-2); cursor: pointer; max-width: 180px;
+}
+.pill:hover { background: var(--surface-2); }
+.pill span { overflow: hidden; text-overflow: ellipsis; }
+.tb-hamburger { display: none; }
+
+/* ---------- Sidebar 232px / 56px ---------- */
+.sidebar {
+  grid-area: side; display: flex; flex-direction: column; min-width: 0;
+  background: var(--surface); border-right: 1px solid var(--line);
+  overflow-y: auto; overscroll-behavior: contain; position: relative;
+}
+.side-scroll { flex: 1; padding: var(--sp-2) var(--sp-2) var(--sp-3); }
+.nav-top { display: flex; padding: var(--sp-1); }
+.nav-group-title {
+  margin: var(--sp-4) var(--sp-1) var(--sp-1); padding: 0 var(--sp-2);
+  font-size: var(--fs-11); font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted);
+}
+.nav-item {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  height: 32px; padding: 0 var(--sp-2); margin: 1px 0;
+  border: 0; border-radius: var(--r-xs); background: transparent; text-align: left;
+  color: var(--text-2); font-size: var(--fs-13); font-weight: 500; cursor: pointer;
+  position: relative;
+}
+.nav-item .ic { color: var(--muted); flex: none; }
+.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-item[aria-current="page"] .ic { color: var(--accent); }
+.nav-item[aria-current="page"]::before {
+  content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px;
+  border-radius: 2px; background: var(--accent);
+}
+.nav-badge { margin-inline-start: auto; }
+.nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-foot {
+  border-top: 1px solid var(--line); padding: var(--sp-2); display: flex; align-items: center; gap: var(--sp-2);
+}
+.side-foot .hint-line { font-size: var(--fs-12); color: var(--muted); }
+/* 折叠态 56px */
+.app.side-alt .nav-label, .app.side-alt .nav-group-title, .app.side-alt .side-foot .hint-line { display: none; }
+.app.side-alt .nav-item { justify-content: center; padding: 0; }
+.app.side-alt .nav-item[aria-current="page"]::before { left: 4px; }
+.app.side-alt .nav-group-title { height: 1px; margin: var(--sp-2) var(--sp-2) 0; padding: 0; background: var(--line); }
+.app.side-alt .nav-badge { display: none; }
+
+/* ---------- Workspace：ws-main + Context Panel ---------- */
+.workspace { grid-area: main; display: flex; min-width: 0; min-height: 0; }
+.ws-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; }
+.vh {
+  position: sticky; top: 0; z-index: 20; min-height: 56px;
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: nowrap;
+  padding: var(--sp-2) var(--sp-6); background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.vh-title { font-size: var(--fs-16); font-weight: 600; line-height: var(--lh-tight); }
+.vh-sub { font-size: var(--fs-12); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vh-head-text { min-width: 0; }
+.vh-actions { margin-inline-start: auto; display: flex; align-items: center; gap: var(--sp-2); flex: none; }
+.demo-sw {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-12); color: var(--muted); cursor: pointer;
+  padding: var(--sp-1) var(--sp-2); border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
+}
+.content { max-width: 1080px; width: 100%; padding: var(--sp-6); display: grid; gap: var(--sp-4); align-content: start; }
+
+/* ---------- Statusbar 28px ---------- */
+.statusbar {
+  grid-area: foot; display: flex; align-items: center; gap: var(--sp-4);
+  padding: 0 var(--sp-4); background: var(--surface-2); border-top: 1px solid var(--line);
+  font-size: var(--fs-12); color: var(--muted); white-space: nowrap; overflow: hidden;
+}
+.statusbar .spacer { margin-inline-start: auto; }
+.statusbar b { color: var(--text-2); font-weight: 600; }
+.sb-privacy { display: inline-flex; align-items: center; gap: var(--sp-1); }
+
+/* ============================================================
+   组件库 · Phase 1 §5
+   ============================================================ */
+.ic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ic.lg { width: 28px; height: 28px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 14px; border-radius: var(--r-sm);
+  font-size: var(--fs-13); font-weight: 600; border: 1px solid transparent; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.btn:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: var(--on-accent); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-strong); }
+.btn-secondary { background: var(--surface); color: var(--text); border-color: var(--line-strong); }
+.btn-secondary:hover:not(:disabled) { background: var(--surface-2); }
+.btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-soft); }
+.btn-danger-solid { background: var(--danger); color: #fff; }
+.btn-danger-solid:hover:not(:disabled) { background: var(--danger); filter: brightness(.92); }
+.btn-ghost { height: auto; min-height: 24px; padding: 4px 8px; background: none; border: 0; color: var(--accent); font-weight: 600; cursor: pointer; border-radius: var(--r-xs); }
+.btn-ghost:hover:not(:disabled) { background: var(--accent-soft); }
+.btn-ghost.danger { color: var(--danger); }
+.btn-ghost.danger:hover { background: var(--danger-soft); }
+.btn-sm { height: 26px; padding: 0 10px; font-size: var(--fs-12); }
+.btn.is-loading { position: relative; color: transparent !important; pointer-events: none; }
+.btn.is-loading::before {
+  content: ""; position: absolute; left: 12px; top: 50%; width: 14px; height: 14px; margin-top: -7px;
+  border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+.btn.is-loading.btn-primary::before { border-color: color-mix(in srgb, var(--on-accent) 40%, transparent); border-top-color: var(--on-accent); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.icon-btn {
+  width: 28px; height: 28px; display: inline-grid; place-items: center;
+  border: 0; background: transparent; border-radius: var(--r-xs); color: var(--muted); cursor: pointer;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.icon-btn.danger { color: var(--danger); }
+.icon-btn.danger:hover { background: var(--danger-soft); }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-1); overflow: hidden; }
+.card-head {
+  display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--line); font-size: var(--fs-14); font-weight: 600; min-height: 48px;
+}
+.card-head .spacer, .spacer { margin-inline-start: auto; }
+.card-body { padding: var(--sp-5); }
+.card-body.tight { padding: var(--sp-3) var(--sp-5); }
+.card-section { background: var(--surface-2); border-radius: var(--r-sm); padding: var(--sp-4); }
+.card-foot { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line); }
+
+.table-wrap { overflow-x: auto; }
+.table { width: 100%; font-size: var(--fs-13); border-collapse: collapse; }
+.table th {
+  padding: 8px 12px; text-align: left; color: var(--muted); font-weight: 500;
+  font-size: var(--fs-12); background: var(--surface-2); border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.table td { padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--text-2); }
+.table tbody tr:hover { background: var(--surface-3); }
+.table tbody tr:last-child td { border-bottom: 0; }
+.table th[data-col="ops"], .table td[data-col="ops"] { text-align: right; width: 120px; white-space: nowrap; }
+.table td b, .cell-main { color: var(--text); font-weight: 600; }
+
+.chip {
+  display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px;
+  font-size: var(--fs-12); border: 1px solid var(--line-strong); background: var(--surface);
+  color: var(--text-2); cursor: pointer; transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: var(--r-xs); font-size: var(--fs-12); font-weight: 600; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.danger { background: var(--danger-soft); color: var(--danger); }
+.badge.neutral { background: var(--surface-2); color: var(--muted); }
+
+.alert {
+  display: flex; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-sm); font-size: var(--fs-13); line-height: var(--lh-body);
+}
+.alert > .ic { margin-top: 2px; }
+.alert-warn { background: var(--warn-soft); color: var(--warn); }
+.alert-danger { background: var(--danger-soft); color: var(--danger); }
+.alert-info { background: var(--accent-soft); color: var(--accent-strong); }
+.alert .alert-text { flex: 1; min-width: 0; }
+.alert .alert-actions { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
+.alert .alert-detail { margin-top: var(--sp-2); font-size: var(--fs-12); opacity: .85; line-height: 1.7; }
+.alert .icon-btn { flex: none; }
+
+.empty { display: grid; justify-items: center; gap: var(--sp-3); padding: var(--sp-10) var(--sp-6); text-align: center; }
+.empty-icon {
+  width: 56px; height: 56px; border-radius: var(--r-md); display: grid; place-items: center;
+  background: var(--surface-2); color: var(--muted);
+}
+.empty h3 { font-size: var(--fs-14); font-weight: 600; color: var(--text); }
+.empty p { font-size: var(--fs-13); color: var(--muted); max-width: 420px; line-height: var(--lh-body); }
+.empty .btn { margin-top: var(--sp-2); }
+.empty.hint { padding: var(--sp-6); }
+
+.skeleton {
+  border-radius: var(--r-xs);
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%; animation: shimmer 1.2s infinite linear; height: 14px;
+}
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+.toast-wrap { position: fixed; right: var(--sp-5); bottom: calc(28px + var(--sp-4)); z-index: 90; display: grid; gap: var(--sp-2); justify-items: end; }
+.toast {
+  display: flex; align-items: center; gap: var(--sp-3); padding: 10px 14px; border-radius: var(--r-sm);
+  background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--muted);
+  box-shadow: var(--shadow-2); font-size: var(--fs-13); max-width: 380px;
+  animation: toast-in var(--dur) var(--ease);
+}
+.toast.ok { border-left-color: var(--ok); }
+.toast.error { border-left-color: var(--danger); }
+.toast .btn-ghost { flex: none; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+.toast-wrap.closing .toast { opacity: 0; transition: opacity var(--dur) var(--ease); }
+
+.modal-mask {
+  position: fixed; inset: 0; z-index: 120; background: var(--mask);
+  display: grid; place-items: center; padding: var(--sp-6);
+}
+.modal {
+  width: min(400px, calc(100vw - 48px)); border-radius: var(--r-lg);
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-2);
+  padding: var(--sp-6); animation: modal-in 150ms var(--ease);
+}
+.modal.wide { width: min(480px, calc(100vw - 48px)); }
+@keyframes modal-in { from { opacity: 0; transform: scale(.98); } }
+.modal h2 { font-size: var(--fs-16); font-weight: 600; margin-bottom: var(--sp-3); }
+.modal .modal-body { font-size: var(--fs-13); color: var(--text-2); line-height: var(--lh-body); }
+.modal .modal-body ul { margin: var(--sp-2) 0 0; padding-inline-start: var(--sp-5); }
+.modal-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-5); }
+
+.kbd {
+  display: inline-block; padding: 1px 6px; border-radius: var(--r-xs);
+  background: var(--surface-2); border: 1px solid var(--line); border-bottom-width: 2px;
+  font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-2);
+}
+.input, .select {
+  height: 32px; padding: 0 10px; border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+  font-size: var(--fs-13); font-family: inherit; min-width: 0;
+}
+.input:hover, .select:hover { border-color: var(--muted); }
+.input:focus, .select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input::placeholder { color: var(--muted); }
+.input:disabled { background: var(--surface-2); color: var(--muted); }
+.field-error { font-size: var(--fs-12); color: var(--danger); margin-top: var(--sp-1); }
+.search-box { display: flex; align-items: center; gap: var(--sp-1); height: 30px; padding: 0 var(--sp-2); border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--muted); }
+.search-box input { border: 0; outline: none; background: transparent; height: 100%; width: 150px; font: inherit; font-size: var(--fs-12); color: var(--text); }
+.search-box input::placeholder { color: var(--muted); }
+
+.switch {
+  width: 36px; height: 20px; border-radius: 999px; border: 0; padding: 0; cursor: pointer;
+  background: var(--line-strong); position: relative; transition: background var(--dur-fast) var(--ease); flex: none;
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--surface); box-shadow: var(--shadow-1); transition: transform var(--dur-fast) var(--ease);
+}
+.switch[aria-checked="true"] { background: var(--accent); }
+.switch[aria-checked="true"]::after { transform: translateX(16px); }
+.switch:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+
+.tabs { display: inline-flex; gap: 2px; background: var(--surface-2); padding: 2px; border-radius: var(--r-sm); }
+.tab { height: 28px; padding: 0 12px; border: 0; border-radius: 6px; font-size: var(--fs-13); color: var(--text-2); background: transparent; cursor: pointer; }
+.tab.active { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow-1); }
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); }
+.dot.off { background: var(--muted); }
+.dot.busy { background: var(--accent); animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.dropzone {
+  display: grid; place-items: center; gap: var(--sp-1); min-height: 96px; padding: var(--sp-4);
+  border: 1px dashed var(--line-strong); border-radius: var(--r-sm); background: var(--surface-3);
+  color: var(--text-2); font-size: var(--fs-13); text-align: center; cursor: pointer; width: 100%;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.dropzone small { color: var(--muted); font-size: var(--fs-12); }
+.dropzone:hover, .dropzone.is-over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.dropzone[data-locked="true"] { cursor: not-allowed; color: var(--muted); }
+
+.kv-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
+.kv-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.kv { padding: var(--sp-3); background: var(--surface-2); border-radius: var(--r-sm); min-width: 0; }
+.kv dt { font-size: var(--fs-12); color: var(--muted); }
+.kv dd { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv dd.skeleton-line { height: 14px; margin-top: 5px; }
+
+.progress { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; min-width: 80px; }
+.progress i { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width var(--dur) var(--ease); }
+.progress.ok i { background: var(--ok); }
+
+.tool-row {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  padding: var(--sp-2) var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent;
+  font-size: var(--fs-13); color: var(--text-2); cursor: pointer; text-align: left;
+}
+.tool-row:hover { background: var(--surface-2); color: var(--text); }
+.tool-row .kbd { margin-inline-start: auto; }
+.tool-ico { width: 28px; height: 28px; border-radius: var(--r-sm); display: grid; place-items: center; background: var(--surface-2); color: var(--text-2); flex: none; }
+/* 磁贴 Prism：彩色预算只给工具图标底 */
+html[data-theme="prism"] .tool-ico.c1 { background: var(--cat-blue); color: #fff; }
+html[data-theme="prism"] .tool-ico.c2 { background: var(--cat-teal); color: #fff; }
+html[data-theme="prism"] .tool-ico.c3 { background: var(--cat-violet); color: #fff; }
+html[data-theme="prism"] .tool-ico.c4 { background: var(--cat-pink); color: #fff; }
+html[data-theme="prism"] .tool-ico.c5 { background: var(--cat-amber); color: #fff; }
+html[data-theme="prism"] .tool-ico.c6 { background: var(--cat-green); color: #fff; }
+
+.steps { display: grid; gap: var(--sp-2); counter-reset: step; }
+.steps .step-line { position: relative; padding: var(--sp-2) 0 var(--sp-2) var(--sp-6); color: var(--text-2); line-height: var(--lh-body); }
+.steps .step-line::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: var(--sp-2); width: 20px; height: 20px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent); font-size: var(--fs-11); font-weight: 700;
+  display: grid; place-items: center;
+}
+
+/* ---------- ⌘K 命令面板 ---------- */
+.cmdk-mask { position: fixed; inset: 0; z-index: 130; background: var(--mask); display: flex; justify-content: center; padding-top: 12vh; }
+.cmdk {
+  width: min(560px, calc(100vw - 48px)); height: fit-content; max-height: 62vh;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); display: flex; flex-direction: column; overflow: hidden;
+  animation: modal-in 150ms var(--ease);
+}
+.cmdk-input {
+  border: 0; outline: none; background: transparent; height: 48px; padding: 0 var(--sp-5);
+  font: inherit; font-size: var(--fs-14); color: var(--text); border-bottom: 1px solid var(--line); flex: none;
+}
+.cmdk-input::placeholder { color: var(--muted); }
+.cmdk-list { overflow-y: auto; padding: var(--sp-2); flex: 1; }
+.cmdk-group { font-size: var(--fs-11); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: var(--sp-2) var(--sp-3) var(--sp-1); }
+.cmdk-item {
+  display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3); height: 36px;
+  border-radius: var(--r-sm); font-size: var(--fs-13); color: var(--text-2); cursor: pointer;
+}
+.cmdk-item .ic { color: var(--muted); }
+.cmdk-item.active { background: var(--accent-soft); color: var(--accent); }
+.cmdk-item.active .ic { color: var(--accent); }
+.cmdk-item .cmd-tag { margin-inline-start: auto; font-size: var(--fs-11); color: var(--muted); }
+.cmdk-item .kbd { flex: none; }
+.cmdk-foot { flex: none; display: flex; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-top: 1px solid var(--line); font-size: var(--fs-11); color: var(--muted); }
+.cmdk-empty { padding: var(--sp-6); text-align: center; color: var(--muted); font-size: var(--fs-13); }
+
+/* ---------- Popover（设备 pill / 主题菜单） ---------- */
+.popover {
+  position: fixed; z-index: 110; min-width: 220px; padding: var(--sp-3);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow-2); font-size: var(--fs-13);
+}
+.popover .kv-grid { grid-template-columns: 1fr; }
+.popover .menu-item {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%; height: 32px;
+  padding: 0 var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent;
+  font-size: var(--fs-13); color: var(--text-2); cursor: pointer; text-align: left;
+}
+.popover .menu-item:hover { background: var(--surface-2); color: var(--text); }
+.popover .menu-item[aria-checked="true"] { color: var(--accent); font-weight: 600; background: var(--accent-soft); }
+.popover .menu-item .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--line-strong); flex: none; }
+
+/* ---------- 视图专用结构 ---------- */
+.canvas16 { aspect-ratio: 16 / 9; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface-2); position: relative; overflow: hidden; display: grid; }
+.canvas16 .empty { width: 100%; }
+.canvas-screen { position: absolute; inset: 0; display: grid; place-items: center; background: linear-gradient(140deg, var(--surface-3), var(--surface-2)); }
+.phone-frame {
+  width: 96px; height: 170px; border: 3px solid var(--line-strong); border-radius: 14px;
+  background: var(--surface); position: relative; box-shadow: var(--shadow-1);
+}
+.phone-frame::before { content: ""; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: 20px; height: 3px; border-radius: 3px; background: var(--line-strong); }
+.phone-frame i { position: absolute; inset: 14px 4px 4px; border-radius: 6px; background: linear-gradient(150deg, var(--accent-soft), var(--accent)); opacity: .8; }
+.canvas-hud {
+  position: absolute; left: var(--sp-3); bottom: var(--sp-3); display: flex; align-items: center; gap: var(--sp-2);
+  padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line);
+  font-size: var(--fs-12); color: var(--text-2); box-shadow: var(--shadow-1);
+}
+.canvas-flag { position: absolute; left: var(--sp-3); top: var(--sp-3); display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-11); color: var(--muted); }
+.mirror-toolbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+
+.thumb-strip { display: flex; gap: var(--sp-2); overflow-x: auto; padding-bottom: var(--sp-1); }
+.thumb {
+  height: 88px; min-width: 132px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: linear-gradient(150deg, var(--accent-soft), var(--accent)); color: var(--on-accent);
+  display: flex; align-items: flex-end; justify-content: space-between; padding: var(--sp-2);
+  font-size: var(--fs-11); cursor: pointer; position: relative; flex: none;
+}
+.thumb .icon-btn { position: absolute; top: 2px; right: 2px; color: var(--on-accent); }
+.thumb .icon-btn:hover { background: var(--mask); color: var(--on-accent); }
+.thumb:nth-child(3n+2) { background: linear-gradient(150deg, var(--ok-soft), var(--ok)); }
+.thumb:nth-child(3n) { background: linear-gradient(150deg, var(--warn-soft), var(--warn)); }
+
+.album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--sp-3); }
+.album-cell { position: relative; border-radius: var(--r-sm); border: 1px solid var(--line); overflow: hidden; background: linear-gradient(150deg, var(--accent-soft), var(--accent)); aspect-ratio: 1; cursor: pointer; padding: 0; }
+.album-cell:nth-child(4n+2) { background: linear-gradient(150deg, var(--ok-soft), var(--ok)); }
+.album-cell:nth-child(4n+3) { background: linear-gradient(150deg, var(--warn-soft), var(--warn)); }
+.album-cell time { position: absolute; left: var(--sp-2); bottom: var(--sp-1); font-size: var(--fs-11); color: var(--on-accent); }
+.album-cell input { position: absolute; top: var(--sp-2); left: var(--sp-2); width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--sp-3); }
+.plan-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-4); background: var(--surface); display: grid; gap: var(--sp-2); }
+.plan-card h4 { font-size: var(--fs-14); display: flex; align-items: center; gap: var(--sp-2); }
+.plan-card .plan-foot { display: flex; align-items: center; gap: var(--sp-1); margin-top: var(--sp-1); }
+.step-row { display: grid; grid-template-columns: minmax(0,1fr) 120px 96px auto; gap: var(--sp-2); align-items: center; font-size: var(--fs-12); color: var(--text-2); padding: var(--sp-1) 0; border-bottom: 1px dashed var(--line); }
+.step-row:last-child { border-bottom: 0; }
+.step-row .mono { font-size: var(--fs-12); }
+
+.notify-row { display: flex; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--line); align-items: flex-start; }
+.notify-row:last-child { border-bottom: 0; }
+.notify-row .notify-body { flex: 1; min-width: 0; }
+.notify-row .notify-text { color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: var(--lh-body); }
+.notify-row time { font-size: var(--fs-12); color: var(--muted); flex: none; }
+
+.settings-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 0; border-bottom: 1px solid var(--line); }
+.settings-row:last-child { border-bottom: 0; }
+.settings-row .set-text { flex: 1; min-width: 0; }
+.settings-row .set-text b { font-weight: 600; color: var(--text); display: block; font-size: var(--fs-13); }
+.settings-row .set-text small { color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); display: block; margin-top: 2px; }
+.settings-row .set-ctrl { flex: none; }
+
+.theme-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--sp-3); }
+.theme-swatch {
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface);
+  padding: var(--sp-2); cursor: pointer; text-align: left; font-size: var(--fs-12); color: var(--text-2);
+  display: grid; gap: var(--sp-2); position: relative;
+}
+.theme-swatch .swatch-strip { height: 28px; border-radius: var(--r-xs); border: 1px solid var(--line); display: flex; overflow: hidden; }
+.theme-swatch .swatch-strip i { flex: 1; }
+.theme-swatch[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); color: var(--text); font-weight: 600; }
+.theme-swatch[aria-pressed="true"]::after { content: "✓"; position: absolute; top: 4px; right: 6px; color: var(--accent); font-weight: 700; }
+
+.check-list { display: grid; gap: var(--sp-2); }
+.check-item { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--surface-2); font-size: var(--fs-13); color: var(--text-2); }
+.check-item .ic { flex: none; }
+.check-item .ic.ok { color: var(--ok); } .check-item .ic.bad { color: var(--warn); }
+.check-item .why { margin-inline-start: auto; font-size: var(--fs-12); color: var(--muted); }
+
+.device-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--sp-3); }
+.device-tile { display: flex; gap: var(--sp-3); padding: var(--sp-4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); align-items: center; }
+.device-tile .tile-ico { width: 40px; height: 40px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; flex: none; }
+.device-tile b { font-size: var(--fs-14); }
+.device-tile p { font-size: var(--fs-12); color: var(--muted); margin-top: 2px; }
+
+.tool-grid-home { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--sp-3); }
+.tool-card { display: flex; gap: var(--sp-3); align-items: center; padding: var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); cursor: pointer; text-align: left; font-size: var(--fs-13); }
+.tool-card:hover { background: var(--surface-2); }
+.tool-card b { display: block; color: var(--text); font-weight: 600; }
+.tool-card small { display: block; color: var(--muted); font-size: var(--fs-12); margin-top: 2px; }
+
+.ctx { width: 280px; flex: none; border-left: 1px solid var(--line); background: var(--surface); overflow-y: auto; padding: var(--sp-4); display: grid; gap: var(--sp-4); align-content: start; }
+.ctx-block { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.ctx-block > h3 { font-size: var(--fs-12); font-weight: 600; color: var(--muted); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.ctx-block > div { padding: var(--sp-3) var(--sp-4); }
+.ctx-dl { display: grid; gap: var(--sp-2); }
+.ctx-dl > div { display: flex; justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-12); }
+.ctx-dl dt { color: var(--muted); flex: none; }
+.ctx-dl dd { color: var(--text-2); font-weight: 600; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 遮罩 / 抽屉 / 窗口过小 ---------- */
+.scrim { position: fixed; inset: 44px 0 28px 0; z-index: 40; background: var(--mask); }
+.drawer-hint { font-size: var(--fs-12); color: var(--muted); padding: var(--sp-2) var(--sp-4); }
+.too-small {
+  position: fixed; inset: 0; z-index: 400; display: none; place-items: center;
+  background: var(--bg); color: var(--text); text-align: center; padding: var(--sp-6);
+}
+.too-small .empty-icon { margin-inline: auto; }
+@media (max-width: 859px) { .too-small { display: grid; } }
+
+/* ---------- 响应式 · UX §6 三档 ---------- */
+@media (max-width: 1199px) {
+  .app { --side-w: 56px; }
+  /* 1000–1199：侧栏默认收起；用户展开时浮层覆盖不挤压内容 */
+  .app.side-alt .sidebar {
+    position: fixed; left: 0; top: 44px; bottom: 28px; width: 232px; z-index: 45;
+    box-shadow: var(--shadow-2); --side-w: 232px;
+  }
+  .ctx { display: none; }
+  .kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .table [data-col="meta"] { display: none; }
+  .table [data-mid-hide] { display: none; }
+  .sb-ext { display: none; }
+  .pill span { display: none; }
+  .pill { max-width: none; padding: 0 9px; }
+}
+@media (max-width: 999px) {
+  .app { --side-w: 0px; }
+  .sidebar {
+    position: fixed; left: 0; top: 44px; bottom: 28px; width: 232px; z-index: 60;
+    transform: translateX(-100%); transition: transform var(--dur) var(--ease);
+    box-shadow: var(--shadow-2); --side-w: 232px;
+  }
+  .app.drawer-open .sidebar { transform: none; }
+  /* 抽屉态保持展开样式 */
+  .app.drawer-open .nav-label, .app.drawer-open .nav-group-title, .app.drawer-open .side-foot .hint-line,
+  .app.drawer-open .nav-badge { display: revert; }
+  .app.drawer-open .nav-item { justify-content: flex-start; padding: 0 var(--sp-2); }
+  .app.drawer-open .nav-group-title { height: auto; background: none; margin: var(--sp-4) var(--sp-1) var(--sp-1); padding: 0 var(--sp-2); }
+  .tb-hamburger { display: inline-grid; }
+  .brand span { display: none; }
+  .vh-sub { display: none; }
+  .kv-grid, .kv-grid.two { grid-template-columns: 1fr; }
+  .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .table [data-col="secondary"] { display: none; }
+  .files-split { grid-template-columns: 1fr !important; }
+  .demo-sw span { display: none; }
+  .theme-label { display: none; }
+}
+@media (min-width: 1000px) { .drawer-only { display: none !important; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#vh">跳到主内容</a>
+
+<div class="app" id="app">
+  <!-- ============ Titlebar 44px ============ -->
+  <header class="titlebar">
+    <button class="icon-btn tb-hamburger" data-act="drawer-open" aria-label="打开导航抽屉">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span>MirrorDock</span></div>
+    <button class="tb-search" data-act="cmdk-open" aria-label="搜索功能或输入命令">
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></svg>
+      <span>搜索功能或输入命令…</span>
+      <span class="kbd">⌘K</span>
+    </button>
+    <div class="tb-right">
+      <button class="pill" id="device-pill" data-act="pill" aria-haspopup="dialog"></button>
+      <button class="btn btn-secondary btn-sm" id="theme-btn" data-act="theme-menu" aria-haspopup="menu"><svg class="ic" aria-hidden="true"><use href="#i-set"/></svg><span class="theme-label">主题</span></button>
+      <button class="btn btn-ghost" data-act="nav" data-view="help">帮助</button>
+    </div>
+  </header>
+
+  <div class="scrim" id="side-scrim" hidden data-act="overlay-close"></div>
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar" id="sidebar" aria-label="主导航">
+    <div class="side-scroll" id="side-scroll"></div>
+    <div class="side-foot">
+      <button class="btn btn-secondary btn-sm" data-act="side" id="side-toggle">折叠</button>
+      <span class="hint-line">本地版 · 无需账号</span>
+    </div>
+  </aside>
+
+  <!-- ============ Workspace ============ -->
+  <main class="workspace">
+    <div class="ws-main" id="ws-main">
+      <div class="vh" id="vh" tabindex="-1">
+        <div class="vh-head-text">
+          <h1 class="vh-title" id="vh-title">设备中心</h1>
+          <p class="vh-sub" id="vh-sub"></p>
+        </div>
+        <div class="vh-actions" id="vh-actions"></div>
+      </div>
+      <div class="content" id="content" aria-live="polite"></div>
+    </div>
+    <aside class="ctx" id="ctx" aria-label="设备上下文面板"></aside>
+  </main>
+
+  <!-- ============ Statusbar 28px ============ -->
+  <footer class="statusbar">
+    <span id="sb-device" aria-live="polite"></span>
+    <span class="sb-ext">scrcpy 4.1 · 固定哈希</span>
+    <span class="spacer"></span>
+    <span class="sb-privacy">
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      本地处理 · 无遥测 · v0.4.28
+    </span>
+  </footer>
+</div>
+
+<!-- ============ Toast ============ -->
+<div class="toast-wrap" id="toast-wrap" role="status" aria-live="polite"></div>
+
+<!-- ============ Modal ============ -->
+<div class="modal-mask" id="modal-mask" hidden>
+  <div class="modal" id="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-title">
+    <h2 id="modal-title"></h2>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<!-- ============ ⌘K ============ -->
+<div class="cmdk-mask" id="cmdk-mask" hidden>
+  <div class="cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
+    <input class="cmdk-input" id="cmdk-input" role="combobox" aria-expanded="true"
+           aria-controls="cmdk-list" placeholder="搜索功能或输入命令…" autocomplete="off">
+    <div class="cmdk-list" id="cmdk-list" role="listbox" aria-label="命令列表"></div>
+    <div class="cmdk-foot"><span>↑↓ 选择</span><span>Enter 执行</span><span>Esc 关闭</span></div>
+  </div>
+</div>
+
+<!-- ============ Popover ============ -->
+<div class="popover" id="popover" hidden></div>
+
+<!-- ============ 窗口过小 ============ -->
+<div class="too-small" role="alert">
+  <div class="empty" style="padding:0">
+    <span class="empty-icon"><svg class="ic lg" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9v6M15 9v6"/></svg></span>
+    <h3>窗口过小</h3>
+    <p>MirrorDock 是桌面应用，窗口宽度低于 860px 时无法可用。请拉大窗口后继续。</p>
+  </div>
+</div>
+
+<!-- ============ 图标库 ============ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/></symbol>
+  <symbol id="i-usb" viewBox="0 0 24 24"><path d="M12 2v9M8 6l4-4 4 4"/><rect x="9" y="11" width="6" height="5" rx="1"/><path d="M7 20h10"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+  <symbol id="i-mirror" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="i-present" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M9 20h6M10 8l4 2-4 2z"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-replay" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/><path d="M10 10l5 3-5 3z" transform="translate(1,-1)"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 18l5-5 4 4 3-3 4 4"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.2"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></symbol>
+  <symbol id="i-pkg" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+  <symbol id="i-apps" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6z"/><path d="M10 19h4"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.2-1.6l2-1.5-2-3.4-2.3.9A7 7 0 0 0 14 5.2L13.6 3h-4L9.2 5.2a7 7 0 0 0-2.5 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 3.2l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2.5 1.2L10.4 21h4l.4-2.2a7 7 0 0 0 2.5-1.2l2.3.9 2-3.4-2-1.5c.1-.5.2-1 .2-1.6z" transform="scale(.92) translate(1,1)"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.8.3-.9 1-.9 1.7M12 17h.01"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16 16l5 5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4M5 20h14"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V9M8 13l4-4 4 4M5 4h14"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-3-6.2"/><path d="M20 4v5h-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16h.01"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/></symbol>
+</svg>
+
+<script>
+"use strict";
+/* ============================================================
+   MirrorDock UI Redesign Preview · Phase 3
+   预览内持久化仅限主题选择（localStorage）；其余为内存演示状态
+   ============================================================ */
+var $ = function (s) { return document.querySelector(s); };
+var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function ico(id, cls) { return '<svg class="ic' + (cls ? " " + cls : "") + '" aria-hidden="true"><use href="#' + id + '"/></svg>'; }
+
+/* ==================== 演示数据 ==================== */
+var DEMO_DEVICE = { name: "小狸", model: "Redmi K40 · M2104K10AC", os: "Android 13", channel: "USB 直连", battery: "78%", storage: "64 / 128 GB", resolution: "1080 × 2400", latency: "38 ms" };
+var DEMO_APPS = [
+  { name: "微信", pkg: "com.tencent.mm", size: "412 MB", sys: false },
+  { name: "Chrome", pkg: "com.android.chrome", size: "168 MB", sys: false },
+  { name: "MirrorDock 伴侣", pkg: "com.mirrordock.companion", size: "24.6 MB", sys: false },
+  { name: "哔哩哔哩", pkg: "tv.danmaku.bili", size: "156 MB", sys: false },
+  { name: "网易云音乐", pkg: "com.netease.cloudmusic", size: "189 MB", sys: false },
+  { name: "相机", pkg: "com.android.camera", size: "34 MB", sys: true },
+  { name: "设置", pkg: "com.android.settings", size: "18 MB", sys: true },
+  { name: "文件管理", pkg: "com.android.fileexplorer", size: "22 MB", sys: true }
+];
+var DEMO_FILES = [
+  { name: "AfterServiceApp-v0.3.0.apk", size: "18.4 MB", date: "11-24 10:20" },
+  { name: "日志截图_1123.png", size: "2.1 MB", date: "11-23 18:04" },
+  { name: "MirrorDock（文件夹 · 9 项）", size: "—", date: "11-22 09:12" },
+  { name: "recording_1122.mp4", size: "86.7 MB", date: "11-22 21:36" }
+];
+var DEMO_NOTIS = [
+  { app: "微信", icon: "信", time: "14:32", text: "张工：日志我看到了，晚点同步结论" },
+  { app: "系统更新", icon: "系", time: "13:05", text: "安全补丁可下载，建议连接 Wi-Fi 后安装" },
+  { app: "MirrorDock", icon: "M", time: "10:24", text: "APK 安装完成：companion-v0.4.27" }
+];
+var DEMO_HELP = [
+  { group: "连接", items: [
+    ["如何连接第一台设备？", "开启手机开发者选项与 USB 调试，用数据线连接并在手机上点「始终允许」。设备卡显示绿点后即可镜像与传输。"],
+    ["无线 ADB 总是掉线怎么办？", "优先使用 USB；无线连接依赖路由器多播与设备休眠策略，息屏后可能断开，可在设置中关闭设备休眠优化。"],
+    ["在手机上撤销授权会怎样？", "撤销后客户端立即显示离线，不保留任何静默通道；重新插入数据线即可再次授权。"]
+  ]},
+  { group: "镜像", items: [
+    ["镜像延迟偏高？", "USB 直连通常 30–50ms；无线延迟受 Wi-Fi 质量影响，建议使用 5GHz 频段。"],
+    ["画面出现黑屏？", "银行、支付类应用受 Android 安全标志保护，画面在本机与手机端都会黑屏，这是系统行为，不是故障。"]
+  ]},
+  { group: "文件", items: [
+    ["传输失败如何排查？", "文件通道走 ADB，不依赖镜像会话；失败时错误条会给出 adb 原始原因，点「重试」通常可恢复。"],
+    ["APK 拖拽安装安全吗？", "仅在本机解析 APK，推送后仍需在手机上逐次确认，不做静默安装。"]
+  ]},
+  { group: "通知", items: [
+    ["通知为什么不显示？", "通知镜像需要设备已连接且已授权通知访问；通知正文默认不持久化，开启持久化属于显式选择。"]
+  ]},
+  { group: "故障排查", items: [
+    ["提示 adb 未就绪？", "点「重新检查」；仍失败时确认没有其他助手类软件占用 adb 端口。"],
+    ["开机自启后白屏？", "升级到 0.4.28 或更新版本，客户端会自动修复自启路径。"]
+  ]}
+];
+var BRAND_CHIPS = ["Pixel", "三星", "小米", "OPPO", "vivo", "荣耀", "一加", "真我"];
+var THEMES = {
+  soft:     { name: "A · 云鲸 Soft Light", dots: ["#f5f6f8", "#3469e4", "#ffffff"] },
+  midnight: { name: "B · 深空 Midnight",    dots: ["#101216", "#4f8bff", "#171a1f"] },
+  prism:    { name: "C · 磁贴 Prism",       dots: ["#f4f5f9", "#6d4fe0", "#ffffff"] },
+  paper:    { name: "D · 留白 Paper",       dots: ["#ffffff", "#17181a", "#ffffff"] },
+  aurora:   { name: "E · 玻璃 Aurora",      dots: ["#e9eef8", "#3e63dd", "#ffffff"] }
+};
+var THEME_ORDER = ["soft", "midnight", "prism", "paper", "aurora"];
+
+/* ==================== 状态 ==================== */
+var state = {
+  view: "home",
+  theme: "soft",
+  demo: false,          // 预览演示数据开关（预览专用，非真实状态）
+  sideAlt: false,       // 侧栏折叠/展开（与断点默认值相反）
+  drawer: false,        // <1000 抽屉
+  connTab: "usb",
+  mirrorOn: false,
+  recording: false, recSec: 0, recTimer: null,
+  keymapPlans: [],
+  replayScripts: [],
+  schedulePlans: [],
+  installQueue: [],
+  installMode: "phone",
+  apps: DEMO_APPS.slice(),
+  appsQuery: "", appsSort: "name",
+  notis: [],
+  notifyKeep: false,
+  shots: [],
+  albumSel: {},
+  albumDir: 0,
+  proActive: false,
+  proInput: "",
+  recentCmds: [],
+  cmdkIndex: 0,
+  settings: { autoStart: true, minToTray: false, updateCheck: true, desktopMode: false, openAfter: false, notifyPersist: false, replay: false }
+};
+
+/* ==================== Toast ==================== */
+function showToast(text, opts) {
+  opts = opts || {};
+  var wrap = $("#toast-wrap");
+  while (wrap.children.length >= 3) wrap.removeChild(wrap.firstChild);
+  var t = document.createElement("div");
+  t.className = "toast " + (opts.type || "");
+  t.innerHTML = '<span>' + esc(text) + '</span>';
+  if (opts.action) {
+    var b = document.createElement("button");
+    b.className = "btn-ghost";
+    b.textContent = opts.action.label;
+    b.setAttribute("data-act", opts.action.act);
+    t.appendChild(b);
+  }
+  wrap.appendChild(t);
+  var ms = opts.duration || 4000;
+  setTimeout(function () {
+    t.style.opacity = "0";
+    t.style.transition = "opacity .18s";
+    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 200);
+  }, ms);
+}
+
+/* ==================== Modal（危险操作对话框 · UX §5.3） ==================== */
+var modalReturnFocus = null;
+function openModal(cfg) {
+  modalReturnFocus = document.activeElement;
+  $("#modal-title").textContent = cfg.title;
+  $("#modal-body").innerHTML = cfg.body;
+  var foot = $("#modal-foot");
+  foot.innerHTML = "";
+  var cancel = document.createElement("button");
+  cancel.className = "btn btn-secondary";
+  cancel.textContent = cfg.cancelLabel || "取消";
+  cancel.setAttribute("data-act", "modal-cancel");
+  var ok = document.createElement("button");
+  ok.className = "btn " + (cfg.danger ? "btn-danger-solid" : "btn-primary");
+  ok.textContent = cfg.okLabel || "确认";
+  ok.setAttribute("data-act", "modal-ok");
+  foot.appendChild(cancel); foot.appendChild(ok);
+  $("#modal").className = "modal" + (cfg.wide ? " wide" : "");
+  $("#modal-mask").hidden = false;
+  $("#modal").dataset.pending = cfg.id || "";
+  /* 危险确认：焦点落取消，防回车误触 */
+  (cfg.danger ? cancel : ok).focus();
+}
+function closeModal() {
+  $("#modal-mask").hidden = true;
+  if (modalReturnFocus && modalReturnFocus.focus) modalReturnFocus.focus();
+}
+function confirmModal() {
+  var id = $("#modal").dataset.pending;
+  closeModal();
+  runModalAction(id);
+}
+function runModalAction(id) {
+  if (id === "uninstall-app") {
+    var i = state.apps._pendingRemove;
+    if (typeof i === "number") {
+      var name = state.apps[i].name;
+      state.apps.splice(i, 1);
+      state.apps._pendingRemove = undefined;
+      render();
+      showToast("已卸载 " + name + "（演示）", { type: "ok" });
+    }
+  } else if (id === "clear-notis") {
+    state.notis = [];
+    render();
+    showToast("已清空通知（演示）", { type: "ok" });
+  } else if (id === "end-all") {
+    state.mirrorOn = false;
+    render();
+    showToast("已结束全部镜像会话（演示）", { type: "ok" });
+  } else if (id === "revoke") {
+    state.proActive = false;
+    render();
+    showToast("已撤销本机授权，回到免费版（演示）", { type: "ok" });
+  }
+}
+
+/* ==================== 二次点击确认（3s 内再点生效 · UX §5.3） ==================== */
+function armDanger(btn, confirmText, fn) {
+  if (btn.dataset.armed === "1") {
+    btn.dataset.armed = "";
+    fn();
+    return;
+  }
+  btn.dataset.armed = "1";
+  btn.dataset.oldHtml = btn.innerHTML;
+  btn.dataset.oldClass = btn.className;
+  btn.textContent = confirmText;
+  btn.className = btn.className.replace("btn-ghost", "btn-danger-solid").replace("btn-secondary", "btn-danger-solid");
+  setTimeout(function () {
+    if (btn.isConnected && btn.dataset.armed === "1") {
+      btn.dataset.armed = "";
+      btn.innerHTML = btn.dataset.oldHtml;
+      btn.className = btn.dataset.oldClass;
+    }
+  }, 3000);
+}
+
+/* ==================== 主题 ==================== */
+function applyTheme(key, silent) {
+  if (!THEMES[key]) return;
+  state.theme = key;
+  document.documentElement.setAttribute("data-theme", key);
+  try { localStorage.setItem("md-theme", key); } catch (e) {}
+  var swatches = $$(".theme-swatch");
+  for (var i = 0; i < swatches.length; i++) swatches[i].setAttribute("aria-pressed", String(swatches[i].dataset.theme === key));
+  if (!silent) showToast("已切换主题：" + THEMES[key].name, { type: "ok" });
+}
+
+/* ==================== 侧栏 / 抽屉 ==================== */
+var NAV = [
+  { group: null, items: [{ id: "home", label: "设备中心", icon: "i-home" }] },
+  { group: "设备", items: [
+    { id: "connect", label: "连接与授权", icon: "i-usb" },
+    { id: "info", label: "设备信息", icon: "i-info" },
+    { id: "multi", label: "多端", icon: "i-layers" }
+  ]},
+  { group: "镜像与控制", items: [
+    { id: "mirror", label: "镜像控制", icon: "i-mirror" },
+    { id: "present", label: "投屏演示", icon: "i-present" },
+    { id: "keymap", label: "按键映射", icon: "i-keyboard" },
+    { id: "schedule", label: "定时录制", icon: "i-clock" },
+    { id: "replay", label: "操作回放", icon: "i-replay" }
+  ]},
+  { group: "内容", items: [
+    { id: "files", label: "文件传输", icon: "i-folder" },
+    { id: "album", label: "相册", icon: "i-image" },
+    { id: "shot", label: "截图", icon: "i-camera" },
+    { id: "record", label: "录像", icon: "i-video" },
+    { id: "install", label: "批量安装", icon: "i-pkg" },
+    { id: "apps", label: "应用管理", icon: "i-apps" }
+  ]},
+  { group: "系统", items: [
+    { id: "notify", label: "通知中心", icon: "i-bell" },
+    { id: "settings", label: "设置", icon: "i-set" },
+    { id: "help", label: "帮助中心", icon: "i-help" },
+    { id: "pro", label: "Pro / 激活", icon: "i-shield" }
+  ]}
+];
+function renderSidebar() {
+  var html = "";
+  NAV.forEach(function (g) {
+    html += '<nav aria-label="' + (g.group || "常用") + '">';
+    if (g.group) html += '<div class="nav-group-title">' + g.group + "</div>";
+    g.items.forEach(function (item) {
+      var badge = "";
+      if (item.id === "connect" && state.demo) badge = '<span class="badge ok nav-badge">1</span>';
+      html += '<button class="nav-item" data-act="nav" data-view="' + item.id + '" title="' + item.label + '"' +
+        (state.view === item.id ? ' aria-current="page"' : "") + ">" +
+        ico(item.icon) + '<span class="nav-label">' + item.label + "</span>" + badge + "</button>";
+    });
+    html += "</nav>";
+  });
+  $("#side-scroll").innerHTML = html;
+}
+function toggleSide() {
+  state.sideAlt = !state.sideAlt;
+  syncShellClasses();
+  $("#side-toggle").textContent = sideCollapsedNow() ? "展开" : "折叠";
+}
+function sideCollapsedNow() {
+  var w = window.innerWidth;
+  if (w < 1000) return false;
+  if (w <= 1199) return !state.sideAlt;
+  return state.sideAlt;
+}
+function syncShellClasses() {
+  var app = $("#app");
+  app.classList.toggle("side-alt", state.sideAlt);
+  app.classList.toggle("drawer-open", state.drawer);
+  $("#side-scrim").hidden = !(state.drawer || (window.innerWidth <= 1199 && window.innerWidth >= 1000 && state.sideAlt));
+}
+function openDrawer() {
+  state.drawer = true;
+  syncShellClasses();
+  var first = $("#sidebar .nav-item");
+  if (first) first.focus();
+}
+function closeDrawer() {
+  if (!state.drawer) return;
+  state.drawer = false;
+  syncShellClasses();
+  var btn = $(".tb-hamburger");
+  if (btn) btn.focus();
+}
+
+/* ==================== 视图注册与渲染 ==================== */
+function emptyState(iconId, title, desc, cta) {
+  var ctaHtml = "";
+  if (cta) {
+    ctaHtml = '<button class="btn ' + (cta.primary === false ? "btn-secondary" : "btn-primary") + '" data-act="' + cta.act + '"' +
+      (cta.view ? ' data-view="' + cta.view + '"' : "") + ">" + esc(cta.label) + "</button>";
+  }
+  return '<div class="empty">' +
+    '<span class="empty-icon">' + ico(iconId, "lg") + "</span>" +
+    "<h3>" + esc(title) + "</h3>" +
+    (desc ? "<p>" + desc + "</p>" : "") +
+    ctaHtml + "</div>";
+}
+function alertBox(kind, iconId, text, actions, detail) {
+  var btns = "";
+  (actions || []).forEach(function (a) {
+    btns += '<button class="btn btn-sm ' + (a.style || "btn-secondary") + '" data-act="' + a.act + '"' +
+      (a.view ? ' data-view="' + a.view + '"' : "") + (a.arg ? ' data-arg="' + a.arg + '"' : "") + ">" + esc(a.label) + "</button>";
+  });
+  return '<div class="alert alert-' + kind + '" role="alert">' + ico(iconId) +
+    '<div class="alert-text">' + text + (detail ? '<div class="alert-detail" hidden data-detail>' + detail + "</div>" : "") + "</div>" +
+    '<div class="alert-actions">' + btns + "</div></div>";
+}
+function noDeviceAlert(extraCount) {
+  var n = 3 + (extraCount || 0);
+  return alertBox("danger", "i-alert",
+    "<b>" + n + " 项后台检查失败</b>，可能是 adb 未就绪。",
+    [{ label: "重新检查", act: "refresh", style: "btn-secondary" }, { label: "查看详情", act: "alert-detail" }],
+    "无法读取连接状态（adb server not responding）<br>无法更新会话状态（device list empty）<br>无法读取桌面模式配置（config locked）");
+}
+function demoSwitch() {
+  return '<label class="demo-sw" title="预览专用：切换到有内容的演示状态，不代表真实设备状态">' +
+    '<button class="switch" role="switch" aria-checked="' + state.demo + '" data-act="demo" aria-label="预览演示数据"></button>' +
+    "<span>预览演示数据</span></label>";
+}
+function headerBtn(cfg) {
+  if (cfg.hidden) return "";
+  return '<button class="btn ' + (cfg.style || "btn-secondary") + '" data-act="' + cfg.act + '"' +
+    (cfg.view ? ' data-view="' + cfg.view + '"' : "") +
+    (cfg.arg ? ' data-arg="' + esc(cfg.arg) + '"' : "") +
+    (cfg.title ? ' title="' + esc(cfg.title) + '"' : "") +
+    (cfg.disabled ? " disabled" : "") + ">" + esc(cfg.label) + "</button>";
+}
+
+/* ---------- 各视图内容 ---------- */
+var CTX_VIEWS = ["home", "info", "multi", "mirror", "files", "apps"];
+
+function vHome() {
+  if (!state.demo) {
+    return noDeviceAlert() +
+      '<div class="card">' + emptyState("i-usb", "等待连接手机",
+        "用数据线连接 Android 设备并完成一次授权，即可开始镜像与传输。",
+        { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>" +
+      '<div class="card"><div class="card-head">三步连接</div><div class="card-body">' +
+      '<div class="steps">' +
+      '<div class="step-line">开启手机「开发者选项」与「USB 调试」。</div>' +
+      '<div class="step-line">用数据线连接，手机上点「始终允许」。</div>' +
+      '<div class="step-line">设备卡显示绿点后，即可镜像与传输。</div>' +
+      "</div></div></div>" +
+      '<div class="card"><div class="card-head">品牌排查 <span class="badge neutral">连接失败时按品牌查看指引</span></div><div class="card-body tight">' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px 0">' +
+      BRAND_CHIPS.map(function (b) { return '<button class="chip" data-act="brand" data-arg="' + b + '">' + b + "</button>"; }).join("") +
+      "</div></div></div>";
+  }
+  return '<div class="device-tiles">' +
+    '<div class="device-tile"><span class="tile-ico">' + ico("i-phone") + "</span><div><b>小狸 · USB 已授权</b><p>Redmi K40 · Android 13 · 78%</p></div></div>" +
+    '<div class="device-tile"><span class="tile-ico">' + ico("i-phone") + "</span><div><b>平板 · 无线已连接</b><p>小米平板 5 · Android 12 · 52%</p></div></div>" +
+    '<div class="device-tile"><span class="tile-ico" style="background:var(--surface-2);color:var(--muted)">' + ico("i-phone") + "</span><div><b>备用机 · 离线</b><p>Pixel 6 · 昨天</p></div></div>" +
+    "</div>" +
+    '<div class="card"><div class="card-head">常用工具</div><div class="card-body"><div class="tool-grid-home">' +
+    [["mirror", "镜像控制", "画面 · 键鼠直输", "i-mirror", "c1"],
+     ["files", "文件传输", "双向传输 · 本机目录", "i-folder", "c2"],
+     ["apps", "应用管理", "列表 / 卸载 / 导出", "i-apps", "c3"],
+     ["notify", "通知中心", "实时镜像 · 按应用筛选", "i-bell", "c4"],
+     ["shot", "截图", "保存到本机", "i-camera", "c5"],
+     ["info", "设备信息", "只读诊断摘要", "i-info", "c6"]].map(function (t) {
+      return '<button class="tool-card" data-act="nav" data-view="' + t[0] + '">' +
+        '<span class="tool-ico ' + t[4] + '">' + ico(t[3]) + "</span><span><b>" + t[1] + "</b><small>" + t[2] + "</small></span></button>";
+    }).join("") +
+    '</div></div></div>' +
+    '<div class="card"><div class="card-head">最近任务</div><div class="table-wrap"><table class="table">' +
+    "<thead><tr><th>任务</th><th data-col=\"secondary\">状态</th><th data-col=\"meta\">时间</th></tr></thead><tbody>" +
+    "<tr><td><b>AfterServiceApp-v0.3.0.apk</b> 已安装到小狸</td><td data-col=\"secondary\"><span class='badge ok'>已安装</span></td><td data-col=\"meta\">10:24</td></tr>" +
+    "<tr><td><b>截图_20261124_1432.png</b> 已保存</td><td data-col=\"secondary\"><span class='badge ok'>已完成</span></td><td data-col=\"meta\">09:58</td></tr>" +
+    "<tr><td><b>DCIM/2026-11</b> · 12 张照片取回中</td><td data-col=\"secondary\"><span class='badge warn'>进行中</span></td><td data-col=\"meta\">09:31</td></tr>" +
+    "</tbody></table></div></div>" +
+    alertBox("info", "i-shield", "安全边界：无需账号、数据不出本机；镜像、传输、卸载都需要设备显式授权。", []);
+}
+
+function vConnect() {
+  var tab = state.connTab;
+  var tabs = '<div class="tabs" role="tablist" aria-label="连接方式">' +
+    [["usb", "USB 数据线"], ["wifi", "无线连接"], ["pair", "配对码"]].map(function (t) {
+      return '<button class="tab' + (tab === t[0] ? " active" : "") + '" role="tab" aria-selected="' + (tab === t[0]) + '" data-act="conn-tab" data-arg="' + t[0] + '">' + t[1] + "</button>";
+    }).join("") + "</div>";
+  var guides = {
+    usb: ["开启手机「开发者选项」与「USB 调试」。", "用数据线连接电脑，手机上点「始终允许」。", "设备卡显示绿点后即可镜像与传输。"],
+    wifi: ["手机与电脑连入同一局域网。", "先完成一次 USB 授权，再在设备页开启无线调试。", "输入手机显示的 IP 与端口完成配对。"],
+    pair: ["手机上打开「无线调试 · 使用配对码配对」。", "在本页输入 6 位配对码与端口。", "配对成功后设备进入已信任列表。"]
+  };
+  var body = tabs + '<div class="card"><div class="card-body"><div class="steps">' +
+    guides[tab].map(function (s) { return '<div class="step-line">' + s + "</div>"; }).join("") +
+    "</div>" + (tab === "pair" ? '<div style="display:flex;gap:8px;margin-top:12px"><input class="input" placeholder="6 位配对码" style="width:140px" aria-label="配对码"><input class="input mono" placeholder="端口" style="width:110px" aria-label="端口"><button class="btn btn-primary" data-act="pair">配对</button></div>' : "") +
+    "</div></div>";
+  if (state.demo) {
+    body = '<div class="alert alert-info" role="status">' + ico("i-check") + "<div class='alert-text'><b>已连接 · 小狸</b>，USB 已授权。</div><div class='alert-actions'><button class='btn btn-sm btn-secondary' data-act='nav' data-view='home'>打开设备中心</button></div></div>" + body;
+  }
+  body += '<div class="card"><div class="card-head">已保存的无线设备 / 受信设备</div>';
+  if (state.demo) {
+    body += '<div class="table-wrap"><table class="table"><thead><tr><th>设备</th><th>方式</th><th data-col="meta">最近连接</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+      "<tr><td><b>平板</b></td><td>无线 ADB</td><td data-col=\"meta\">2 小时前</td><td data-col=\"ops\"><button class='btn-ghost danger' data-act='trust-revoke'>移除</button></td></tr></tbody></table></div>";
+  } else {
+    body += '<div class="empty hint">' +
+      '<span class="empty-icon">' + ico("i-phone") + "</span><h3>还没有受信设备</h3>" +
+      "<p>完成首次连接后，设备会保存在这里。</p></div>";
+  }
+  body += "</div>";
+  if (!state.demo) body += alertBox("danger", "i-alert", "读取已保存设备列表失败。", [{ label: "重试", act: "refresh" }]);
+  return body;
+}
+
+function vInfo() {
+  var kv = [
+    ["型号", DEMO_DEVICE.model.replace(" · M2104K10AC", "")], ["系统版本", DEMO_DEVICE.os],
+    ["分辨率", DEMO_DEVICE.resolution], ["存储", DEMO_DEVICE.storage],
+    ["电量", DEMO_DEVICE.battery + " · " + DEMO_DEVICE.channel], ["序列号", "M2104K10AC"],
+    ["安全补丁", "2025-11-01"], ["镜像延迟", DEMO_DEVICE.latency]
+  ];
+  var items = kv.map(function (p) {
+    var val = state.demo ? esc(p[1]) : '<div class="skeleton" style="width:70%"></div>';
+    return '<div class="kv"><dt>' + p[0] + "</dt><dd" + (state.demo ? "" : ' class="skeleton-line"') + ">" + val + "</dd></div>";
+  }).join("");
+  return '<div class="card"><div class="card-head">只读设备摘要 <span class="badge neutral">不上传</span></div><div class="card-body"><dl class="kv-grid">' + items + "</dl></div></div>" +
+    (state.demo
+      ? '<div class="card"><div class="card-head">诊断摘要</div><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-act="copy-diag">' + ico("i-copy") + "复制诊断摘要</button><button class='btn btn-secondary' data-act='toast' data-arg='原型演示：查看 adb 日志'>查看 adb 日志</button></div></div></div>"
+      : "") +
+    alertBox("info", "i-shield", "设备信息为只读诊断摘要，全部数据保留在本机，不上传任何字段。", []);
+}
+
+function vMulti() {
+  if (!state.demo) {
+    return '<div class="card">' + emptyState("i-layers", "还没有连接任何设备",
+      "连接后，这里会合并显示设备列表与镜像会话。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
+  }
+  var rows =
+    "<tr><td><b>小狸</b> · Redmi K40</td><td data-col=\"secondary\"><span class='dot ok'></span> USB 已授权</td><td data-col=\"meta\"><span class='badge ok'>推流中</span></td><td data-col='ops'><button class='btn-ghost' data-act='nav' data-view='mirror'>打开</button></td></tr>" +
+    "<tr><td><b>平板</b> · 小米平板 5</td><td data-col=\"secondary\"><span class='dot ok'></span> 无线已连接</td><td data-col=\"meta\"><span class='badge neutral'>空闲</span></td><td data-col='ops'><button class='btn-ghost' data-act='toast' data-arg='原型演示：为平板开始镜像'>镜像</button></td></tr>" +
+    "<tr><td><b>备用机</b> · Pixel 6</td><td data-col=\"secondary\"><span class='dot off'></span> 离线</td><td data-col=\"meta\">—</td><td data-col='ops'></td></tr>";
+  return '<div class="card"><div class="card-head">设备与会话 <span class="badge neutral">2 台在线 · 1 个会话</span></div>' +
+    '<div class="table-wrap"><table class="table"><thead><tr><th>设备</th><th data-col="secondary">状态</th><th data-col="meta">会话阶段</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+    rows + "</tbody></table></div>" +
+    '<div class="card-foot"><button class="btn btn-danger" data-act="end-all">结束全部会话</button><span class="hint" style="color:var(--muted);font-size:var(--fs-12)">镜像会话结束后可在镜像控制页重新开始</span></div></div>';
+}
+
+function vMirror() {
+  var canvas;
+  if (state.demo && state.mirrorOn) {
+    canvas = '<div class="canvas16"><div class="canvas-screen"><div class="phone-frame" aria-hidden="true"><i></i></div></div>' +
+      '<span class="canvas-flag">' + ico("i-lock") + '受保护内容将显示黑屏</span>' +
+      '<div class="canvas-hud"><span class="dot busy"></span>推流中 · 1080 × 2400 · 60 fps · 38 ms</div></div>';
+  } else if (state.demo) {
+    canvas = '<div class="canvas16">' + emptyState("i-mirror", "设备已授权，随时可以开始",
+      "点右上角「开始镜像」建立会话；画面与键鼠输入都走本机直连通道。", null) + "</div>";
+  } else {
+    canvas = '<div class="canvas16">' + emptyState("i-mirror", "设备授权后即可开始镜像",
+      "未连接设备。连接并授权后，这里会显示实时画面。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
+  }
+  return canvas +
+    '<div class="mirror-toolbar">' +
+    (state.demo && state.mirrorOn
+      ? '<button class="btn btn-secondary" data-act="mirror-pause">暂停</button><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：旋转画面">旋转</button>'
+      : "") +
+    '<span style="font-size:var(--fs-12);color:var(--muted)">' +
+    (state.demo && state.mirrorOn ? "UHID 键鼠直输 · 无需手机输入法" : "画质与桌面模式在会话参数中调整") + "</span></div>";
+}
+
+function vPresent() {
+  var checks = [
+    ["目标设备已连接", state.demo, state.demo ? "小狸 · USB" : "未连接"],
+    ["镜像引擎可用", true, "scrcpy 4.1"],
+    ["分辨率 ≥ 1080p", state.demo, state.demo ? "1080 × 2400" : "无法确认"],
+    ["音频通道就绪", state.demo, state.demo ? "UHID" : "无法确认"]
+  ];
+  var list = checks.map(function (c) {
+    var ok = c[1];
+    return '<div class="check-item">' + ico(ok ? "i-check" : "i-warn", ok ? "ok" : "bad") +
+      "<span>" + c[0] + "</span><span class='why'>" + esc(c[2]) +
+      (!ok && c[0] === "目标设备已连接" ? ' · <button class="btn-ghost" data-act="nav" data-view="connect">去连接</button>' : "") +
+      "</span></div>";
+  }).join("");
+  var canvas = state.demo
+    ? '<div class="canvas16"><div class="canvas-screen"><div class="phone-frame" aria-hidden="true"><i></i></div></div><div class="canvas-hud">演示就绪 · 投屏画面只在本机渲染</div></div>'
+    : '<div class="canvas16">' + emptyState("i-present", "未连接设备", "连接设备并通过就绪检查后即可开始演示。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
+  return '<div class="card"><div class="card-head">就绪检查</div><div class="card-body"><div class="check-list">' + list + "</div></div></div>" + canvas +
+    '<p style="font-size:var(--fs-12);color:var(--muted)">标注图层可导出为 PNG，不写入手机相册。 <button class="btn-ghost" data-act="toast" data-arg="原型演示：查看演示能力边界">了解更多</button></p>';
+}
+
+function vKeymap() {
+  var html = "";
+  if (state.keymapPlans.length === 0) {
+    html += '<div class="card">' + emptyState("i-keyboard", "还没有键位方案",
+      "新建方案后，可为返回、主页等手机操作绑定键盘按键。", { label: "新建方案", act: "plan-new", view: "keymap" }) + "</div>";
+  } else {
+    html += '<div class="plan-grid">' + state.keymapPlans.map(function (p, pi) {
+      var steps = p.steps.length
+        ? p.steps.map(function (s, si) {
+            return '<div class="step-row"><span>' + esc(s.action) + "</span>" +
+              '<span class="mono"><kbd class="kbd">' + esc(s.key) + "</kbd></span>" +
+              '<span class="mono">' + esc(s.x) + ", " + esc(s.y) + "</span>" +
+              '<button class="icon-btn danger" data-act="step-del" data-arg="' + pi + ":" + si + '" aria-label="删除步骤">' + ico("i-trash") + "</button></div>";
+          }).join("")
+        : '<div class="empty hint" style="padding:12px"><p style="max-width:none">还没有步骤</p></div>';
+      return '<div class="plan-card"><h4>' + esc(p.name) + '<span class="badge neutral">' + p.steps.length + " 步</span></h4>" +
+        '<div class="card-section" style="padding:8px">' + steps + "</div>" +
+        '<div class="step-row" style="border:0"><span><input class="input" placeholder="动作，如 返回" style="width:100%" id="km-act-' + pi + '" aria-label="动作"></span>' +
+        '<span><input class="input mono" placeholder="按键" style="width:100%" id="km-key-' + pi + '" aria-label="按键"></span>' +
+        '<span><input class="input mono" placeholder="x, y" style="width:100%" id="km-xy-' + pi + '" aria-label="坐标"></span>' +
+        '<button class="btn btn-secondary btn-sm" data-act="step-add" data-arg="' + pi + '">添加</button></div>' +
+        '<div class="plan-foot"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导出方案（需要已有方案）">导出</button>' +
+        '<button class="btn-ghost danger" data-act="plan-del" data-arg="keymap:' + pi + '" style="margin-inline-start:auto">删除方案</button></div></div>';
+    }).join("") + "</div>";
+  }
+  html += '<div class="card"><div class="card-head">全局快捷键</div><div class="table-wrap"><table class="table">' +
+    '<thead><tr><th>动作</th><th style="width:220px">快捷键</th></tr></thead><tbody>' +
+    [["返回", "Esc"], ["主页", "H"], ["多任务", "Tab"], ["音量+", "↑"], ["音量−", "↓"]].map(function (r) {
+      return "<tr><td>" + r[0] + '</td><td><kbd class="kbd">' + r[1] + "</kbd></td></tr>";
+    }).join("") + "</tbody></table></div></div>";
+  html += '<div style="display:flex;gap:8px"><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：导入配置">导入配置</button>' +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：打开键盘设置">打开键盘设置</button></div>';
+  return html;
+}
+
+function vSchedule() {
+  var html = "";
+  if (state.schedulePlans.length === 0) {
+    html += '<div class="card"><div class="empty hint">' +
+      '<span class="empty-icon">' + ico("i-clock") + "</span><h3>还没有录制计划</h3>" +
+      "<p>在下方表单添加计划；触发时手机端仍会弹出授权确认。</p></div></div>";
+  } else {
+    html += '<div class="card"><div class="table-wrap"><table class="table">' +
+      '<thead><tr><th>名称</th><th data-col="secondary">时间</th><th data-col="meta">时长</th><th data-col="secondary">状态</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+      state.schedulePlans.map(function (p, i) {
+        var status = p.enabled ? '<span class="badge ok">启用</span>' : '<span class="badge neutral">暂停</span>';
+        var needDev = state.demo ? "" : ' <span class="badge warn">需设备</span>';
+        return "<tr><td><b>" + esc(p.name) + "</b>" + needDev + "</td>" +
+          '<td data-col="secondary">每天 ' + p.time + "</td>" +
+          '<td data-col="meta">' + p.dur + " 分钟</td>" +
+          '<td data-col="secondary">' + status + "</td>" +
+          "<td data-col='ops'><button class='btn btn-secondary btn-sm' data-act='sched-toggle' data-arg='" + i + "'>" + (p.enabled ? "暂停" : "启用") + "</button> " +
+          "<button class='btn-ghost danger' data-act='plan-del' data-arg='schedule:" + i + "'>删除</button></td></tr>";
+      }).join("") + "</tbody></table></div></div>";
+  }
+  html += '<div class="card"><div class="card-head">添加计划</div><div class="card-body"><div class="card-section">' +
+    '<div style="display:flex;gap:8px;margin-bottom:8px"><input class="input" id="sch-name" placeholder="计划名称" style="flex:1;min-width:120px" aria-label="计划名称"></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+    '<input class="input" id="sch-time" type="time" value="09:30" aria-label="触发时间">' +
+    '<input class="input" id="sch-dur" type="number" min="1" value="10" style="width:90px" aria-label="时长（分钟）"><span style="color:var(--muted);font-size:var(--fs-12)">分钟</span>' +
+    '<button class="btn btn-primary" data-act="sched-add">添加计划</button>' +
+    '<span class="field-error" id="sch-err" hidden></span></div>' +
+    "</div></div></div>";
+  return html;
+}
+/* 表单内提交按钮用 primary；页头「添加计划」为聚焦入口（btn-secondary） */
+
+function vReplay() {
+  var html = "";
+  if (state.replayScripts.length === 0) {
+    html += '<div class="card">' + emptyState("i-replay", "还没有回放脚本",
+      "新建脚本并添加步骤，即可在本机回放已录制的操作序列。", { label: "新建脚本", act: "plan-new", view: "replay" }) + "</div>";
+  } else {
+    html += '<div class="plan-grid">' + state.replayScripts.map(function (p, pi) {
+      var steps = p.steps.length
+        ? p.steps.map(function (s, si) {
+            return '<div class="step-row"><span>' + esc(s.action) + "</span>" +
+              '<span class="mono"><kbd class="kbd">' + esc(s.key) + "</kbd></span>" +
+              '<span class="mono">' + esc(s.x) + ", " + esc(s.y) + "</span>" +
+              '<button class="icon-btn danger" data-act="step-del" data-arg="' + pi + ":" + si + '" aria-label="删除步骤">' + ico("i-trash") + "</button></div>";
+          }).join("")
+        : '<div class="empty hint" style="padding:12px"><p style="max-width:none">还没有步骤</p></div>';
+      return '<div class="plan-card"><h4>' + esc(p.name) + '<span class="badge neutral">' + p.steps.length + " 步</span></h4>" +
+        '<div class="card-section" style="padding:8px">' + steps + "</div>" +
+        '<div class="step-row" style="border:0"><span><input class="input" placeholder="动作" style="width:100%" id="rp-act-' + pi + '" aria-label="动作"></span>' +
+        '<span><input class="input mono" placeholder="按键" style="width:100%" id="rp-key-' + pi + '" aria-label="按键"></span>' +
+        '<span><input class="input mono" placeholder="x, y" style="width:100%" id="rp-xy-' + pi + '" aria-label="坐标"></span>' +
+        '<button class="btn btn-secondary btn-sm" data-act="step-add" data-arg="' + pi + '">添加</button></div>' +
+        '<div class="plan-foot"><button class="btn-ghost danger" data-act="plan-del" data-arg="replay:' + pi + '" style="margin-inline-start:auto">删除脚本</button></div></div>';
+    }).join("") + "</div>";
+  }
+  html += '<div class="details-block"><details class="card"><summary class="card-head" style="cursor:pointer">能力边界</summary>' +
+    '<div class="card-body" style="font-size:var(--fs-12);color:var(--muted);line-height:var(--lh-body)">' +
+    "默认禁用操作回放，开启需二次确认；回放文件只保存在本机，不上传；回放期间设备端可见操作，不做静默注入。</div></details></div>";
+  return html;
+}
+
+function vFiles() {
+  var left;
+  if (!state.demo) {
+    left = '<div class="card">' + emptyState("i-folder", "手机发送区暂无文件",
+      "连接设备并刷新后，手机目录内容会出现在这里。", { label: "刷新文件", act: "file-refresh" }) + "</div>";
+  } else {
+    left = '<div class="card"><div class="card-head">手机 → 电脑 <span class="badge neutral">Download · ' + DEMO_FILES.length + " 项</span></div>" +
+      '<div class="table-wrap"><table class="table"><thead><tr><th>名称</th><th data-col="meta">大小</th><th data-col="secondary">修改日期</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+      DEMO_FILES.map(function (f) {
+        var op = f.size === "—" ? "" : "<button class='btn-ghost' data-act='toast' data-arg='原型演示：取回 " + esc(f.name) + "'>取回</button>";
+        return "<tr><td><b>" + esc(f.name) + "</b></td><td data-col=\"meta\">" + f.size + "</td><td data-col=\"secondary\">" + f.date + "</td><td data-col='ops'>" + op + "</td></tr>";
+      }).join("") +
+      "</tbody></table></div><div class='card-foot'><button class='btn btn-secondary btn-sm' data-act='file-refresh'>" + ico("i-refresh") + "刷新文件</button></div></div>";
+  }
+  var right = '<div class="card"><div class="card-head">电脑 → 手机</div><div class="card-body">' +
+    '<button class="dropzone" data-act="file-push" data-locked="' + (!state.demo) + '"' + (!state.demo ? ' title="连接后可用"' : "") + '>' +
+    ico("i-upload") + "把文件拖到这里推送到手机" +
+    "<small>" + (state.demo ? "推送后需在手机上确认接收" : "连接后可用") + "</small></button>" +
+    '<p style="font-size:var(--fs-12);color:var(--muted);margin-top:12px">文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不会伪装成「没有文件」。</p>' +
+    "</div></div>";
+  return '<div class="files-split" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">' + left + right + "</div>";
+}
+
+function vShot() {
+  var body = "";
+  if (state.shots.length === 0) {
+    body = state.demo
+      ? '<div class="card">' + emptyState("i-camera", "本机还没有新截图", "点右上角「立即截图」获取第一张。", null) + "</div>"
+      : '<div class="card">' + emptyState("i-camera", "本机还没有新截图", "连接设备后即可截图；截图保存到本机 MirrorDock 目录。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
+  } else {
+    body = '<div class="card"><div class="card-head">最近截图 <span class="badge neutral">' + state.shots.length + " 张</span></div>" +
+      '<div class="card-body"><div class="thumb-strip">' +
+      state.shots.map(function (s, i) {
+        return '<div class="thumb" role="button" tabindex="0" data-act="shot-view" data-arg="' + i + '"><span>' + s + "</span>" +
+          '<button class="icon-btn" data-act="shot-del" data-arg="' + i + '" aria-label="删除这张截图">' + ico("i-trash") + "</button></div>";
+      }).join("") + "</div></div></div>";
+  }
+  body += '<p style="font-size:var(--fs-12);color:var(--muted)">截图默认保存到本机 MirrorDock 目录；点击缩略图放大预览，删除需 3 秒内二次确认。</p>';
+  return body;
+}
+
+function vRecord() {
+  var kv = [
+    ["状态", state.recording ? "录制中" : "未开始"],
+    ["最高规格", "1080 × 2400 · 60 fps"],
+    ["保存位置", "本机 MirrorDock / Recordings"],
+    ["授权", "使用既有镜像会话，不绕过授权"]
+  ];
+  var html = "";
+  if (state.demo && !state.proActive) {
+    html += alertBox("info", "i-shield", "录像是 Pro 功能；未激活时核心镜像与传输保持免费可用。",
+      [{ label: "查看 Pro", act: "nav", view: "pro", style: "btn-secondary" }]);
+  }
+  if (state.recording) {
+    html += '<div class="card"><div class="card-body" style="display:flex;align-items:center;gap:12px"><span class="dot busy"></span><b style="font-size:var(--fs-28)" id="rec-timer">00:00</b><span style="color:var(--muted)">正在录制到本机</span></div></div>';
+  }
+  html += '<div class="card"><div class="card-head">录制参数</div><div class="card-body"><dl class="kv-grid two">' +
+    kv.map(function (p) { return '<div class="kv"><dt>' + p[0] + "</dt><dd>" + p[1] + "</dd></div>"; }).join("") +
+    "</dl></div></div>";
+  html += '<p style="font-size:var(--fs-12);color:var(--muted)">不默认云录制，不读取手机本地录像文件；「结束录制」无确认，误停止可用 ⌘K 重新开始。</p>';
+  return html;
+}
+
+function vAlbum() {
+  var dirs = ["DCIM/Camera", "Pictures/Screenshots", "Download"];
+  var chips = '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+    dirs.map(function (d, i) {
+      return '<button class="chip' + (state.albumDir === i ? " active" : "") + '" data-act="album-dir" data-arg="' + i + '">' + d + "</button>";
+    }).join("") +
+    '<span class="spacer"></span><button class="btn btn-secondary btn-sm" data-act="album-refresh">' + ico("i-refresh") + "刷新相册</button></div>";
+  var grid;
+  if (!state.demo) {
+    grid = emptyState("i-image", "未连接设备", "连接设备并刷新后，目录缩略图会出现在这里。", { label: "连接设备 →", act: "nav", view: "connect" });
+  } else {
+    var n = state.albumDir === 0 ? 12 : 8;
+    var cells = "";
+    for (var i = 0; i < n; i++) {
+      var label = "11-" + (24 - Math.floor(i / 2)) + " 1" + (i % 6) + ":0" + (i % 9);
+      cells += '<label class="album-cell"><input type="checkbox" data-act="album-check" aria-label="选择 ' + label + '"><time>' + label + "</time></label>";
+    }
+    grid = '<div class="album-grid">' + cells + "</div>";
+  }
+  var selCount = Object.keys(state.albumSel).length;
+  return '<div class="card"><div class="card-head">' + dirs[state.albumDir] + '<span class="badge neutral">' + (state.demo ? "按日期分组" : "未连接") + "</span></div>" +
+    '<div class="card-body tight">' + chips + "</div>" +
+    '<div class="card-body" style="padding-top:0">' + grid + "</div>" +
+    '<div class="card-foot">' +
+    '<button class="btn btn-secondary" data-act="album-fetch"' + (selCount === 0 ? " disabled title=\"请先选择缩略图\"" : "") + ">取回所选" + (selCount ? "（" + selCount + "）" : "") + "</button>" +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：按日期建文件夹">按日期建文件夹</button>' +
+    '<span style="font-size:var(--fs-12);color:var(--muted)">取回中行级进度条可暂停；相册只读，不会修改手机内容</span></div></div>' +
+    alertBox("info", "i-eye", "相册为只读浏览；取回是唯一写操作，且只写入本机目录。", []);
+}
+
+function vInstall() {
+  var html = '<div class="card"><div class="card-body">' +
+    '<button class="dropzone" data-act="install-add"' + (!state.demo ? ' data-locked="true" title="连接设备后可用"' : "") + ">" +
+    ico("i-pkg") + "把 APK 拖到这里，或选择 APK（可多选）" +
+    "<small>" + (state.demo ? "每台设备都需在手机上逐次确认，不做静默安装" : "连接设备后可用") + "</small></button>" +
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">' +
+    '<span style="font-size:var(--fs-12);color:var(--muted)">确认方式</span>' +
+    '<select class="select" data-act="install-mode" aria-label="确认方式"><option value="phone">手机确认（每个安装包都在手机上确认）</option><option value="auth">仅授权包安装</option></select>' +
+    "</div></div></div>";
+  if (state.installQueue.length === 0) {
+    html += '<div class="card">' + (state.demo
+      ? emptyState("i-pkg", "安装队列为空", "选择 APK 后，队列会在这里显示解析与安装状态。", { label: "选择 APK", act: "install-add" })
+      : emptyState("i-pkg", "安装队列为空", "连接设备并选择 APK 后，队列会在这里显示解析与安装状态。", { label: "连接设备 →", act: "nav", view: "connect" })) + "</div>";
+  } else {
+    html += '<div class="card"><div class="table-wrap"><table class="table">' +
+      '<thead><tr><th>安装包</th><th data-col="meta">大小</th><th data-col="secondary">状态</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+      state.installQueue.map(function (q, i) {
+        var badge = q.state === "done" ? '<span class="badge ok">已完成</span>'
+          : q.state === "wait" ? '<span class="badge warn">等待设备确认</span>'
+          : '<span class="badge neutral">待推送</span>';
+        return "<tr><td><b>" + esc(q.name) + "</b></td><td data-col=\"meta\">" + q.size + "</td><td data-col=\"secondary\">" + badge + "</td>" +
+          "<td data-col='ops'><button class='btn-ghost' data-act='toast' data-arg='原型演示：查看 adb 输出'>结果</button></td></tr>";
+      }).join("") + "</tbody></table></div>" +
+      '<div class="card-foot"><button class="btn btn-primary" data-act="install-run"' + (!state.demo ? ' disabled title="需要设备已连接"' : "") + ">全部安装</button>" +
+      '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：停止安装">停止</button>' +
+      '<button class="btn-ghost danger" data-act="install-clear" style="margin-inline-start:auto">清空队列</button>' +
+      '<span style="font-size:var(--fs-12);color:var(--muted)">队列整体 n/m 进度显示在安装行</span></div></div>';
+  }
+  return html;
+}
+
+function vApps() {
+  var html = '<div class="card"><div class="card-head">已安装应用（只读）' +
+    '<span class="spacer"></span>' +
+    '<span class="search-box">' + ico("i-search") + '<input type="search" placeholder="搜索应用名或包名" data-filter="apps" value="' + esc(state.appsQuery) + '" aria-label="搜索应用名或包名"></span>' +
+    '<select class="select" data-act="apps-sort" aria-label="排序"><option value="name">按名称</option><option value="size">按大小</option></select>' +
+    "</div>";
+  if (!state.demo) {
+    html += emptyState("i-apps", "尚未读取应用清单",
+      "连接设备并刷新后，这里会列出已安装应用。<br>连接后每行将提供：打开 / 卸载 / 停用。",
+      { label: "连接设备 →", act: "nav", view: "connect" });
+  } else {
+    var apps = state.apps.slice();
+    if (state.appsQuery) {
+      var q = state.appsQuery.toLowerCase();
+      apps = apps.filter(function (a) { return (a.name + a.pkg).toLowerCase().indexOf(q) !== -1; });
+    }
+    if (state.appsSort === "size") {
+      apps.sort(function (a, b) { return parseFloat(b.size) - parseFloat(a.size); });
+    }
+    html += '<div class="table-wrap"><table class="table">' +
+      '<thead><tr><th>应用</th><th data-col="secondary" data-mid-hide>包名</th><th data-col="meta">大小</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+      apps.map(function (a) {
+        var idx = state.apps.indexOf(a);
+        return "<tr><td><span style='display:inline-flex;align-items:center;gap:8px'><span class='tool-ico' style='width:32px;height:32px'>" + esc(a.name[0]) + "</span><b>" + esc(a.name) + (a.sys ? ' <span class="badge neutral">系统</span>' : "") + "</b></span></td>" +
+          '<td data-col="secondary" data-mid-hide><span class="mono" style="font-size:var(--fs-12);color:var(--muted)">' + esc(a.pkg) + "</span></td>" +
+          '<td data-col="meta">' + a.size + "</td>" +
+          "<td data-col='ops'><button class='btn-ghost' data-act='toast' data-arg='原型演示：打开 " + esc(a.name) + "'>打开</button> " +
+          "<button class='btn-ghost danger' data-act='app-uninstall' data-arg='" + idx + "'>卸载</button></td></tr>";
+      }).join("");
+    if (apps.length === 0) html += '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">没有匹配「' + esc(state.appsQuery) + '」的应用</td></tr>';
+    html += "</tbody></table></div>";
+  }
+  html += "</div>";
+  return html;
+}
+
+function vNotify() {
+  var html = '<div class="card"><div class="card-head">实时通知</div>';
+  if (state.notis.length === 0) {
+    html += emptyState("i-bell", "暂无新通知",
+      state.demo ? "通知会实时出现在这里。" : "开启镜像并授权通知访问后，通知会实时出现在这里。", null);
+  } else {
+    html += state.notis.map(function (n, i) {
+      return '<div class="notify-row"><span class="tool-ico">' + esc(n.icon) + "</span>" +
+        '<div class="notify-body"><b>' + esc(n.app) + '</b><p class="notify-text">' + esc(n.text) + "</p>" +
+        '<details style="margin-top:4px"><summary class="btn-ghost" style="font-size:var(--fs-12)">快捷回复</summary>' +
+        '<div style="display:flex;gap:8px;margin-top:6px"><input class="input" placeholder="回复内容（发到手机）" style="flex:1"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：已发送快捷回复">发送</button></div></details></div>' +
+        "<time>" + n.time + "</time></div>";
+    }).join("");
+  }
+  html += "</div>";
+  html += '<div class="card"><div class="card-body tight"><div class="settings-row" style="border:0">' +
+    '<div class="set-text"><b>本机保留</b><small>开启后通知持久化到本机，不上传；默认不持久化正文。</small></div>' +
+    '<div class="set-ctrl"><button class="switch" role="switch" aria-checked="' + state.notifyKeep + '" data-act="notify-keep" aria-label="本机保留"></button></div></div></div></div>';
+  return html;
+}
+
+function vSettings() {
+  function row(title, note, ctrl) {
+    return '<div class="settings-row"><div class="set-text"><b>' + title + "</b><small>" + note + "</small></div><div class='set-ctrl'>" + ctrl + "</div></div>";
+  }
+  function sw(key) {
+    return '<button class="switch" role="switch" aria-checked="' + state.settings[key] + '" data-act="set-switch" data-arg="' + key + '" aria-label="' + key + '"></button>';
+  }
+  var themeSwatches = THEME_ORDER.map(function (k) {
+    var t = THEMES[k];
+    return '<button class="theme-swatch" data-theme="' + k + '" data-act="theme-set" data-arg="' + k + '" aria-pressed="' + (state.theme === k) + '">' +
+      '<span class="swatch-strip">' + t.dots.map(function (c) { return '<i style="background:' + c + '"></i>'; }).join("") + "</span>" + t.name + "</button>";
+  }).join("");
+  return '<div class="card"><div class="card-head">外观主题</div><div class="card-body"><div class="theme-grid">' + themeSwatches + "</div></div></div>" +
+    '<div class="card"><div class="card-head">通用</div><div class="card-body tight">' +
+    row("开机自启", "随系统登录后启动 MirrorDock", sw("autoStart")) +
+    row("关闭时最小化到托盘", "点关闭按钮时不退出，保留后台连接", sw("minToTray")) +
+    row("检查更新", "仅校验签名包，不走遥测通道", sw("updateCheck")) +
+    "</div></div>" +
+    '<div class="card"><div class="card-head">镜像</div><div class="card-body tight">' +
+    row("默认画质", "会话内可随时切换", '<select class="select" aria-label="默认画质"><option>高清</option><option>流畅</option><option>演示</option></select>') +
+    row("桌面模式", "按设备记忆，插拔后恢复", sw("desktopMode")) +
+    "</div></div>" +
+    '<div class="card"><div class="card-head">传输</div><div class="card-body tight">' +
+    row("下载目录", "文件取回与截图保存位置", '<input class="input mono" style="width:240px;font-size:var(--fs-12)" value="MirrorDock/Download" readonly aria-label="下载目录">') +
+    row("传输后打开文件夹", "每次取回完成后在访达中显示", sw("openAfter")) +
+    "</div></div>" +
+    '<div class="card"><div class="card-head">隐私</div><div class="card-body tight">' +
+    row("通知持久化", "开启后通知正文写入本机数据库；不上传", sw("notifyPersist")) +
+    row("操作回放", "默认禁用；开启需二次确认", sw("replay")) +
+    row("遥测", "本版本无遥测字段", '<span class="badge ok">无遥测</span>') +
+    "</div></div>";
+}
+
+function vHelp() {
+  var html = '<div class="search-box" style="max-width:360px">' + ico("i-search") +
+    '<input type="search" placeholder="搜索帮助" style="width:100%" data-filter="help" aria-label="搜索帮助"></div>';
+  var q = (state._helpQuery || "").toLowerCase();
+  var groups = DEMO_HELP.map(function (g, gi) {
+    var items = g.items;
+    if (q) items = items.filter(function (it) { return (it[0] + it[1]).toLowerCase().indexOf(q) !== -1; });
+    if (!items.length) return "";
+    return '<div class="card"><div class="card-head">' + g.group + "</div>" +
+      items.map(function (it, ii) {
+        return '<details class="help-item" data-openable><summary style="padding:12px 20px;cursor:pointer;font-weight:600;font-size:var(--fs-13);border-bottom:1px solid var(--line);min-height:52px;display:flex;align-items:center">' + esc(it[0]) + "</summary>" +
+          '<p style="padding:0 20px 14px;color:var(--text-2);line-height:var(--lh-body);font-size:var(--fs-13)">' + esc(it[1]) + "</p></details>";
+      }).join("") + "</div>";
+  }).join("");
+  html += groups || '<div class="card"><div class="empty hint"><p style="max-width:none">没有匹配的帮助文章</p></div></div>';
+  return html;
+}
+
+function vPro() {
+  var html = '<div class="card"><div class="card-head">激活</div><div class="card-body">' +
+    (state.proActive
+      ? '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span class="badge ok">已激活 · Pro</span><span style="color:var(--muted);font-size:var(--fs-12)">本机校验，不需要账号</span></div>' +
+        '<button class="btn btn-danger" data-act="revoke">撤销本机授权</button>'
+      : '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<input class="input mono" id="pro-code" placeholder="输入激活码" style="flex:1;min-width:160px" value="' + esc(state.proInput) + '" aria-label="激活码">' +
+        '<button class="btn btn-primary" id="pro-btn" data-act="pro-activate">' + (state.proInput ? "激活" : "输入激活码后激活") + "</button></div>" +
+        '<p class="field-error" id="pro-err" hidden></p>') +
+    "</div></div>";
+  html += '<div class="card"><div class="card-head">版本与权益 <span class="badge ok">本地校验 · 不需要账号</span></div><div class="card-body"><dl class="kv-grid two">' +
+    [["当前版本", state.proActive ? "Pro（已激活）" : "免费版 · 功能正常"],
+     ["录像与定时录制", "本机保存，不云录制"],
+     ["操作回放", "默认禁用，可显式开启"],
+     ["批量安装与扫码配对", "多设备队列 / 无同网环境"]].map(function (p) {
+      return '<div class="kv"><dt>' + p[0] + "</dt><dd>" + p[1] + "</dd></div>";
+    }).join("") + "</dl></div></div>";
+  return html;
+}
+
+/* ==================== 视图注册 ==================== */
+var VIEW_META = {
+  home:     { title: "设备中心", sub: "连接状态、常用入口与安全边界", render: vHome },
+  connect:  { title: "连接与授权", sub: "USB 数据线 / 无线连接 / 配对码", render: vConnect },
+  info:     { title: "设备信息", sub: "只读诊断摘要 · 不上传", render: vInfo },
+  multi:    { title: "多端", sub: "设备列表与镜像会话", render: vMulti },
+  mirror:   { title: "镜像控制", sub: "16:9 画面 · 键鼠直输 · 会话参数", render: vMirror },
+  present:  { title: "投屏演示", sub: "就绪检查与演示画面", render: vPresent },
+  keymap:   { title: "按键映射", sub: "键位方案与全局快捷键", render: vKeymap },
+  schedule: { title: "定时录制", sub: "计划任务 · 触发时手机端确认", render: vSchedule },
+  replay:   { title: "操作回放", sub: "脚本库 · 只保存在本机", render: vReplay },
+  files:    { title: "文件传输", sub: "双向传输 · ADB 通道", render: vFiles },
+  album:    { title: "相册", sub: "只读浏览 · 批量取回", render: vAlbum },
+  shot:     { title: "截图", sub: "保存到本机 MirrorDock 目录", render: vShot },
+  record:   { title: "录像", sub: "Pro 功能 · 手动启停", render: vRecord },
+  install:  { title: "批量安装", sub: "APK 队列 · 逐次设备确认", render: vInstall },
+  apps:     { title: "应用管理", sub: "已安装应用 · 只读清单", render: vApps },
+  notify:   { title: "通知中心", sub: "实时镜像 · 正文默认不持久化", render: vNotify },
+  settings: { title: "设置", sub: "外观 / 通用 / 镜像 / 传输 / 隐私", render: vSettings },
+  help:     { title: "帮助中心", sub: "常见问题与故障排查", render: vHelp },
+  pro:      { title: "Pro / 激活", sub: "本地校验 · 不需要账号", render: vPro }
+};
+
+function headerActions(view) {
+  var demo = state.demo;
+  var parts = [demoSwitch()];
+  var m = null;
+  switch (view) {
+    case "home":
+      m = demo ? { label: "打开镜像", act: "nav", view: "mirror", style: "btn-primary" } : null;
+      break;
+    case "connect":
+      m = { label: "重新检查", act: "refresh", style: "btn-secondary" };
+      break;
+    case "info":
+      m = demo ? { label: "复制诊断摘要", act: "copy-diag", style: "btn-primary" } : null;
+      break;
+    case "multi":
+      m = demo ? { label: "结束全部会话", act: "end-all", style: "btn-danger" } : null;
+      break;
+    case "mirror":
+      m = demo
+        ? (state.mirrorOn
+            ? { label: "结束镜像", act: "mirror-end", style: "btn-danger" }
+            : { label: "开始镜像", act: "mirror-start", style: "btn-primary" })
+        : { label: "开始镜像", act: "", style: "btn-primary", disabled: true, title: "先连接设备" };
+      break;
+    case "present":
+      m = demo
+        ? { label: "开始演示", act: "toast", style: "btn-primary", arg: "原型演示：开始放映" }
+        : { label: "开始演示", act: "", style: "btn-primary", disabled: true, title: "先连接设备" };
+      break;
+    case "keymap":
+      parts.push(headerBtn({ label: "导入配置", act: "toast", style: "btn-secondary", arg: "原型演示：导入配置" }));
+      /* 无方案时空态 CTA 是唯一 primary（G7 规则），页头主操作隐藏 */
+      m = { label: "新建方案", act: "plan-new", style: "btn-primary", hidden: state.keymapPlans.length === 0 };
+      break;
+    case "schedule":
+      m = { label: "添加计划", act: "sched-focus", style: "btn-secondary" };
+      break;
+    case "replay":
+      m = { label: "新建脚本", act: "plan-new", style: "btn-primary", hidden: state.replayScripts.length === 0 };
+      break;
+    case "files":
+      m = demo ? { label: "取回到电脑", act: "toast", style: "btn-secondary" } : { label: "刷新文件", act: "file-refresh", style: "btn-secondary" };
+      break;
+    case "album":
+      m = demo
+        ? { label: "取回所选", act: "album-fetch", style: "btn-primary", disabled: Object.keys(state.albumSel).length === 0, title: "请先选择缩略图" }
+        : { label: "刷新相册", act: "album-refresh", style: "btn-secondary" };
+      break;
+    case "shot":
+      m = demo
+        ? { label: "立即截图", act: "shot-now", style: "btn-primary" }
+        : { label: "立即截图", act: "", style: "btn-primary", disabled: true, title: "连接设备后可截图" };
+      break;
+    case "record":
+      m = demo
+        ? (state.recording ? { label: "停止录制", act: "record-stop", style: "btn-danger" } : { label: "开始录制", act: "record-start", style: "btn-primary" })
+        : { label: "开始录制", act: "", style: "btn-primary", disabled: true, title: "先连接设备" };
+      break;
+    case "install":
+      parts.push(headerBtn({ label: "清空队列", act: "install-clear", style: "btn-ghost danger", hidden: state.installQueue.length === 0 }));
+      m = demo
+        ? { label: "选择 APK", act: "install-add", style: "btn-primary", hidden: state.installQueue.length === 0 }
+        : { label: "选择 APK", act: "", style: "btn-primary", disabled: true, title: "连接设备后可用" };
+      break;
+    case "apps":
+      m = demo ? { label: "刷新清单", act: "apps-refresh", style: "btn-primary" } : { label: "刷新清单", act: "", style: "btn-primary", disabled: true, title: "先连接设备" };
+      break;
+    case "notify":
+      m = (demo && state.notis.length) ? { label: "清空通知", act: "notify-clear", style: "btn-danger" } : null;
+      break;
+    case "settings":
+      m = { label: "恢复默认", act: "settings-reset", style: "btn-secondary" };
+      break;
+    case "help":
+      m = { label: "展开全部", act: "help-toggle", style: "btn-ghost" };
+      break;
+    case "pro":
+      m = null;
+      break;
+  }
+  if (m) {
+    if (view === "apps" && !demo) parts.push(headerBtn(m));
+    else parts.push(headerBtn(m));
+  }
+  if (CTX_VIEWS.indexOf(view) !== -1 && window.innerWidth >= 1000 && window.innerWidth < 1200) {
+    parts.push('<button class="btn btn-secondary btn-sm" data-act="ctx-open">详情</button>');
+  }
+  return parts.join("");
+}
+
+/* ==================== Context Panel（仅 6 视图 · Phase 1 §4.1） ==================== */
+function ctxContent(view) {
+  function block(title, body) {
+    return '<div class="ctx-block"><h3>' + title + "</h3><div>" + body + "</div></div>";
+  }
+  function dl(pairs) {
+    return '<dl class="ctx-dl">' + pairs.map(function (p) { return "<div><dt>" + p[0] + "</dt><dd>" + p[1] + "</dd></div>"; }).join("") + "</dl>";
+  }
+  if (view === "home") {
+    return block("设备状态", state.demo
+      ? dl([["设备", DEMO_DEVICE.name], ["型号", "Redmi K40"], ["电量", DEMO_DEVICE.battery], ["存储", DEMO_DEVICE.storage], ["通道", DEMO_DEVICE.channel]])
+      : '<p style="font-size:var(--fs-12);color:var(--muted)">未连接设备。连接后这里显示电量、存储与通道。</p>') +
+      block("常用工具",
+        [["mirror", "镜像控制", "i-mirror"], ["files", "文件传输", "i-folder"], ["apps", "应用管理", "i-apps"], ["shot", "截图", "i-camera"], ["info", "设备信息", "i-info"], ["settings", "设置", "i-set"]]
+          .map(function (t, i) {
+            return '<button class="tool-row" data-act="nav" data-view="' + t[0] + '"><span class="tool-ico c' + ((i % 6) + 1) + '">' + ico(t[2]) + "</span><span>" + t[1] + "</span></button>";
+          }).join("")) +
+      block("安全边界", '<p style="font-size:var(--fs-12);color:var(--muted);line-height:var(--lh-body)">数据不出本机：不读取短信正文，不做静默安装与远程清除；撤销授权后立即离线。</p>');
+  }
+  if (view === "info") {
+    return block("诊断历史", state.demo
+      ? '<div style="font-size:var(--fs-12);color:var(--text-2);display:grid;gap:6px">' +
+        "<div>11-24 14:12 · 快照完整</div><div>11-23 09:30 · 快照完整</div><div>11-22 21:36 · 电池字段缺失</div></div>"
+      : '<p style="font-size:var(--fs-12);color:var(--muted)">连接后，每次刷新会保存一条诊断快照。</p>');
+  }
+  if (view === "multi") {
+    return block("会话概览", state.demo
+      ? dl([["在线设备", "2 / 3"], ["进行中会话", "1"], ["会话设备", "小狸"], ["阶段", "推流中"]])
+      : '<p style="font-size:var(--fs-12);color:var(--muted)">未连接设备。</p>');
+  }
+  if (view === "mirror") {
+    return block("会话参数", dl([
+      ["目标设备", state.demo ? DEMO_DEVICE.name : "未选择"],
+      ["通道", state.demo ? DEMO_DEVICE.channel : "—"],
+      ["画质", "高清 / 流畅 / 演示"],
+      ["桌面模式", "按设备记忆"],
+      ["延迟", state.demo ? DEMO_DEVICE.latency : "—"]
+    ])) + block("保护内容", '<p style="font-size:var(--fs-12);color:var(--muted);line-height:var(--lh-body)">受 Android 安全标志保护的应用（如支付页）画面将显示黑屏，画布左下角有常驻角标。</p>');
+  }
+  if (view === "files") {
+    return block("最近传输", state.demo
+      ? '<div style="font-size:var(--fs-12);color:var(--text-2);display:grid;gap:6px">' +
+        "<div>APK → 小狸 · 已完成 10:24</div><div>截图_20261124.png ← 小狸 · 已完成 09:58</div><div>DCIM/2026-11 ← 小狸 · 进行中 12 张</div></div>"
+      : '<p style="font-size:var(--fs-12);color:var(--muted)">未连接设备。</p>');
+  }
+  if (view === "apps") {
+    return block("设备摘要", state.demo
+      ? dl([["设备", DEMO_DEVICE.name], ["用户应用", String(state.apps.filter(function (a) { return !a.sys; }).length)], ["系统应用", String(state.apps.filter(function (a) { return a.sys; }).length)], ["存储", DEMO_DEVICE.storage]])
+      : '<p style="font-size:var(--fs-12);color:var(--muted)">未连接设备。</p>');
+  }
+  return "";
+}
+
+/* ==================== 主渲染 ==================== */
+function render() {
+  var meta = VIEW_META[state.view];
+  document.title = meta.title + " · MirrorDock 预览";
+  $("#vh-title").textContent = meta.title;
+  $("#vh-sub").textContent = meta.sub;
+  $("#vh-actions").innerHTML = headerActions(state.view);
+  $("#content").innerHTML = meta.render();
+  $("#ctx").innerHTML = CTX_VIEWS.indexOf(state.view) !== -1 && window.innerWidth >= 1200 ? ctxContent(state.view) : "";
+  renderSidebar();
+  syncShellClasses();
+  syncStatusbar();
+  $("#side-toggle").textContent = sideCollapsedNow() ? "展开" : "折叠";
+}
+function syncStatusbar() {
+  $("#sb-device").innerHTML = state.demo
+    ? '<span class="dot ok"></span> <b>' + DEMO_DEVICE.name + "</b> · " + DEMO_DEVICE.channel
+    : '<span class="dot off"></span> <b>未连接手机</b>';
+  $("#device-pill").innerHTML = state.demo
+    ? '<span class="dot ok"></span><span>' + DEMO_DEVICE.name + "</span>"
+    : '<span class="dot off"></span><span>未连接</span>';
+}
+function switchView(id) {
+  if (!VIEW_META[id]) return;
+  state.view = id;
+  $("#ws-main").scrollTop = 0;
+  render();
+}
+
+/* ==================== ⌘K 命令面板（26 条） ==================== */
+function cmdkCommands() {
+  var jumps = [
+    ["home", "设备中心", "home 首页 设备"], ["connect", "连接与授权", "connect 连接 配对 adb"],
+    ["info", "设备信息", "info 诊断 参数"], ["multi", "多端", "multi 多设备 并发"],
+    ["mirror", "镜像控制", "mirror 投屏 scrcpy"], ["present", "投屏演示", "present 演示 演讲"],
+    ["keymap", "按键映射", "keymap 键位 快捷键"], ["schedule", "定时录制", "schedule 计划 定时"],
+    ["replay", "操作回放", "replay 脚本 自动化"], ["files", "文件传输", "files 传文件 推送 拉取"],
+    ["shot", "截图", "shot 截屏"], ["record", "录像", "record 录屏"],
+    ["album", "相册", "album 照片 图库"], ["install", "批量安装", "install apk 安装"],
+    ["apps", "应用管理", "apps 卸载 应用"], ["notify", "通知中心", "notify 通知"],
+    ["settings", "设置", "settings 偏好 主题"], ["help", "帮助中心", "help 帮助 faq"],
+    ["pro", "Pro / 激活", "pro 激活码 license"]
+  ];
+  var cmds = jumps.map(function (j) {
+    return { id: "jump:" + j[0], title: "打开 " + j[1], kw: j[2], group: "跳页", tag: "视图", icon: "i-search", run: function () { switchView(j[0]); } };
+  });
+  function needDevice(fn, page) {
+    return function () {
+      if (!state.demo) {
+        showToast("未连接设备：" + (page ? "已为你打开「" + VIEW_META[page].title + "」" : "请先连接设备"), { type: "error" });
+        switchView(page || "connect");
+      } else { fn(); }
+    };
+  }
+  cmds.push({ id: "act:refresh", title: "重新检查设备", kw: "刷新 adb 检查", group: "动作", tag: "动作", icon: "i-refresh", run: function () {
+    showToast(state.demo ? "检查完成：1 台设备在线" : "检查完成：未发现设备，可尝试连接页指引", { type: state.demo ? "ok" : "error" });
+  }});
+  cmds.push({ id: "act:shot", title: "立即截图", kw: "截屏 capture", group: "动作", tag: "动作", icon: "i-camera", run: needDevice(function () {
+    runAct("shot-now");
+  }, "connect")});
+  cmds.push({ id: "act:record", title: state.recording ? "停止录制" : "开始录制", kw: "录屏 record toggle", group: "动作", tag: "动作", icon: "i-video", run: needDevice(function () {
+    runAct(state.recording ? "record-stop" : "record-start");
+  }, "connect")});
+  cmds.push({ id: "act:folder", title: "打开输出文件夹", kw: "目录 folder", group: "动作", tag: "动作", icon: "i-folder", run: function () {
+    showToast("原型演示：已打开 MirrorDock 目录");
+  }});
+  cmds.push({ id: "act:copy", title: "复制诊断摘要", kw: "诊断 复制", group: "动作", tag: "动作", icon: "i-copy", run: needDevice(function () {
+    runAct("copy-diag");
+  }, "info")});
+  cmds.push({ id: "act:side", title: "折叠/展开侧栏", kw: "侧栏 sidebar", group: "动作", tag: "动作", icon: "i-layers", kbd: "⌘B", run: function () { toggleSide(); }});
+  cmds.push({ id: "act:theme", title: "切换主题", kw: "theme 主题 玻璃", group: "动作", tag: "动作", icon: "i-set", run: function () {
+    var i = THEME_ORDER.indexOf(state.theme);
+    applyTheme(THEME_ORDER[(i + 1) % THEME_ORDER.length]);
+  }});
+  return cmds;
+}
+function openCmdk() {
+  $("#cmdk-mask").hidden = false;
+  var input = $("#cmdk-input");
+  input.value = "";
+  buildCmdkList("");
+  input.focus();
+}
+function closeCmdk() {
+  $("#cmdk-mask").hidden = true;
+}
+function buildCmdkList(q) {
+  q = q.trim().toLowerCase();
+  var all = cmdkCommands();
+  var recents = state.recentCmds.slice(0, 3).map(function (id) {
+    return all.filter(function (c) { return c.id === id; })[0];
+  }).filter(Boolean);
+  var matched = all.filter(function (c) { return !q || (c.title + " " + c.kw).toLowerCase().indexOf(q) !== -1; });
+  var items = q ? matched : recents.concat(matched.filter(function (c) { return recents.indexOf(c) === -1; }));
+  state._cmdkItems = items;
+  state.cmdkIndex = 0;
+  var list = $("#cmdk-list");
+  if (!items.length) {
+    list.innerHTML = '<div class="cmdk-empty">没有匹配的命令</div>';
+    return;
+  }
+  var html = "";
+  var lastGroup = null;
+  items.forEach(function (c, i) {
+    if (c.group !== lastGroup) { html += '<div class="cmdk-group">' + c.group + "</div>"; lastGroup = c.group; }
+    html += '<div class="cmdk-item' + (i === 0 ? " active" : "") + '" id="cmdk-opt-' + i + '" role="option" aria-selected="' + (i === 0) + '" data-cmd-index="' + i + '">' +
+      ico(c.icon) + "<span>" + esc(c.title) + "</span>" +
+      (c.kbd ? '<span class="kbd">' + c.kbd + "</span>" : "") +
+      '<span class="cmd-tag">' + c.tag + "</span></div>";
+  });
+  list.innerHTML = html;
+  $("#cmdk-input").setAttribute("aria-activedescendant", "cmdk-opt-0");
+}
+function cmdkMove(delta) {
+  var items = state._cmdkItems || [];
+  if (!items.length) return;
+  state.cmdkIndex = (state.cmdkIndex + delta + items.length) % items.length;
+  $$(".cmdk-item").forEach(function (el, i) {
+    el.classList.toggle("active", i === state.cmdkIndex);
+    el.setAttribute("aria-selected", String(i === state.cmdkIndex));
+  });
+  var active = $("#cmdk-opt-" + state.cmdkIndex);
+  if (active) {
+    $("#cmdk-input").setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  }
+}
+function cmdkRun(index) {
+  var items = state._cmdkItems || [];
+  var c = items[index];
+  if (!c) return;
+  closeCmdk();
+  state.recentCmds = [c.id].concat(state.recentCmds.filter(function (x) { return x !== c.id; })).slice(0, 3);
+  c.run();
+}
+
+/* ==================== Popover（设备 pill / 主题菜单） ==================== */
+function showPopover(anchor, html) {
+  var pop = $("#popover");
+  pop.innerHTML = html;
+  pop.hidden = false;
+  var r = anchor.getBoundingClientRect();
+  pop.style.top = (r.bottom + 6) + "px";
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 240)) + "px";
+}
+function hidePopover() { $("#popover").hidden = true; }
+function devicePopover() {
+  showPopover($("#device-pill"), state.demo
+    ? '<div style="font-weight:600;margin-bottom:8px">' + DEMO_DEVICE.name + ' <span class="badge ok">USB 已授权</span></div>' +
+      '<dl class="kv-grid">' +
+      [["型号", "Redmi K40"], ["系统", "Android 13"], ["电量", "78%"], ["存储", "64 / 128 GB"], ["分辨率", "1080 × 2400"], ["延迟", "38 ms"]]
+        .map(function (p) { return '<div class="kv"><dt>' + p[0] + "</dt><dd>" + p[1] + "</dd></div>"; }).join("") + "</dl>" +
+      '<button class="btn btn-secondary btn-sm" style="margin-top:8px" data-act="nav" data-view="info">设备详情</button>'
+    : '<div style="font-weight:600;margin-bottom:6px">未连接设备</div>' +
+      '<p style="font-size:var(--fs-12);color:var(--muted);margin-bottom:8px">用数据线连接 Android 设备并授权。</p>' +
+      '<button class="btn btn-primary btn-sm" data-act="nav" data-view="connect">去连接</button>');
+}
+function themePopover() {
+  showPopover($("#theme-btn"), THEME_ORDER.map(function (k) {
+    var t = THEMES[k];
+    return '<button class="menu-item" role="menuitemradio" aria-checked="' + (state.theme === k) + '" data-act="theme-set" data-arg="' + k + '">' +
+      '<span class="swatch" style="background:' + t.dots[1] + '"></span>' + t.name + "</button>";
+  }).join(""));
+}
+
+/* ==================== 动作分发 ==================== */
+function runAct(act, arg, btn) {
+  switch (act) {
+    case "nav": switchView(arg); break;
+    case "demo":
+      state.demo = !state.demo;
+      if (!state.demo) { state.mirrorOn = false; stopRec(false); }
+      render();
+      showToast(state.demo ? "已开启预览演示数据（仅预览，不代表真实状态）" : "已关闭演示数据，回到真实空态", { type: "ok" });
+      break;
+    case "side": toggleSide(); break;
+    case "drawer-open": openDrawer(); break;
+    case "overlay-close":
+      if (state.drawer) closeDrawer();
+      else if (state.sideAlt) { state.sideAlt = false; syncShellClasses(); $("#side-toggle").textContent = "折叠"; }
+      hidePopover();
+      break;
+    case "cmdk-open": openCmdk(); break;
+    case "pill": devicePopover(); break;
+    case "theme-menu": themePopover(); break;
+    case "theme-set": applyTheme(arg); hidePopover(); break;
+    case "refresh": showToast(state.demo ? "检查完成：1 台设备在线" : "检查完成：未发现设备，请检查数据线与 USB 调试", { type: state.demo ? "ok" : "error" }); break;
+    case "alert-detail": {
+      var d = btn.closest(".alert").querySelector("[data-detail]");
+      if (d) d.hidden = !d.hidden;
+      break;
+    }
+    case "brand": showToast("原型演示：打开 " + arg + " 品牌连接排查指引（跳转帮助中心）"); break;
+    case "conn-tab": state.connTab = arg; render(); break;
+    case "pair": showToast("原型演示：配对请求已发送，请在手机上确认"); break;
+    case "trust-revoke": armDanger(btn, "确认移除？", function () { showToast("已移除受信设备（演示）", { type: "ok" }); render(); }); break;
+    case "copy-diag":
+      showToast("已复制诊断摘要（演示）", { type: "ok" });
+      break;
+    case "toast": showToast(arg || "原型演示"); break;
+    /* 镜像 */
+    case "mirror-start":
+      state.mirrorOn = true; render();
+      showToast("镜像会话已建立（演示）", { type: "ok" });
+      break;
+    case "mirror-end":
+      state.mirrorOn = false; render();
+      showToast("镜像已结束", { type: "ok", duration: 5000, action: { label: "重新开始", act: "mirror-start" } });
+      break;
+    case "mirror-pause": showToast("原型演示：画面已暂停"); break;
+    case "end-all":
+      openModal({ id: "end-all", title: "结束全部镜像会话？", body: "<p>将结束 <b>1</b> 个进行中的镜像会话。</p>", okLabel: "结束全部", danger: true, wide: true });
+      break;
+    /* 录像 */
+    case "record-start":
+      state.recording = true; state.recSec = 0; render(); startRecTimer();
+      showToast("录制已开始（演示）", { type: "ok" });
+      break;
+    case "record-stop": stopRec(true); break;
+    /* 截图 */
+    case "shot-now":
+      state.shots.unshift("11-24 " + new Date().toTimeString().slice(0, 5));
+      render();
+      showToast("已保存截图到 MirrorDock 目录（演示）", { type: "ok" });
+      break;
+    case "shot-del":
+      armDanger(btn, "确认删除？", function () {
+        state.shots.splice(Number(arg), 1);
+        render();
+        showToast("已删除截图（演示）", { type: "ok" });
+      });
+      break;
+    case "shot-view": showToast("原型演示：放大预览 " + state.shots[Number(arg)]); break;
+    /* 相册 */
+    case "album-dir": state.albumDir = Number(arg); state.albumSel = {}; render(); break;
+    case "album-refresh": showToast(state.demo ? "相册已刷新（演示）" : "未连接设备：请先连接", { type: state.demo ? "ok" : "error" }); render(); break;
+    case "album-fetch":
+      if (Object.keys(state.albumSel).length) showToast("已开始取回所选 " + Object.keys(state.albumSel).length + " 项（演示）", { type: "ok" });
+      break;
+    /* 文件 */
+    case "file-refresh": showToast(state.demo ? "文件列表已刷新（演示）" : "读取失败：未连接设备", { type: state.demo ? "ok" : "error" }); break;
+    case "file-push":
+      if (!state.demo) { showToast("连接后可用：请先连接设备", { type: "error" }); break; }
+      showToast("已加入推送队列，等待手机确认（演示）", { type: "ok" });
+      break;
+    /* 安装 */
+    case "install-add":
+      if (!state.demo) { showToast("连接设备后可用", { type: "error" }); break; }
+      state.installQueue.push({ name: "app-release-0" + (state.installQueue.length + 1) + ".apk", size: "12.8 MB", state: "wait" });
+      render();
+      showToast("已加入安装队列，等待手机确认（演示）", { type: "ok" });
+      break;
+    case "install-mode": state.installMode = arg; break;
+    case "install-run":
+      if (!state.demo) { showToast("需要设备已连接", { type: "error" }); break; }
+      state.installQueue.forEach(function (q) { q.state = "done"; });
+      render();
+      showToast("队列安装完成（演示）", { type: "ok" });
+      break;
+    case "install-clear":
+      armDanger(btn, "确认清空？", function () { state.installQueue = []; render(); showToast("已清空安装队列（演示）", { type: "ok" }); });
+      break;
+    /* 应用 */
+    case "apps-refresh":
+      state.apps = DEMO_APPS.slice(); state.appsQuery = ""; render();
+      showToast("应用清单已刷新（演示）", { type: "ok" });
+      break;
+    case "apps-sort": state.appsSort = arg; render(); break;
+    case "app-uninstall": {
+      var i = Number(arg);
+      state.apps._pendingRemove = i;
+      var a = state.apps[i];
+      openModal({ id: "uninstall-app", title: "卸载 " + a.name + "？", body: "<p>应用数据将一并删除，无法恢复。</p><p style='margin-top:6px;color:var(--muted);font-size:var(--fs-12)'>包名 " + esc(a.pkg) + " · 设备端会弹出确认。</p>", okLabel: "卸载", danger: true });
+      break;
+    }
+    /* 通知 */
+    case "notify-clear":
+      openModal({ id: "clear-notis", title: "清空 " + state.notis.length + " 条通知？", body: "<p>通知正文默认不持久化，清空后无法找回。</p>", okLabel: "清空", danger: true });
+      break;
+    case "notify-keep":
+      state.notifyKeep = !state.notifyKeep;
+      btn.setAttribute("aria-checked", String(state.notifyKeep));
+      break;
+    /* 方案 / 计划 / 脚本 */
+    case "plan-new": {
+      var isKeymap = state.view === "keymap";
+      var list = isKeymap ? state.keymapPlans : state.replayScripts;
+      list.push({ name: (isKeymap ? "方案 " : "脚本 ") + (list.length + 1), steps: [] });
+      render();
+      showToast("已新建，可直接添加步骤（演示）", { type: "ok" });
+      break;
+    }
+    case "step-add": {
+      var pi = Number(arg);
+      var prefix = state.view === "keymap" ? "km" : "rp";
+      var actEl = $("#" + prefix + "-act-" + pi), keyEl = $("#" + prefix + "-key-" + pi), xyEl = $("#" + prefix + "-xy-" + pi);
+      var action = actEl ? actEl.value.trim() : "", key = keyEl ? keyEl.value.trim() : "", xy = xyEl ? xyEl.value.trim() : "0, 0";
+      if (!action || !key) { showToast("请填写动作与按键", { type: "error" }); break; }
+      var xyParts = xy.split(/[,\s]+/).filter(Boolean);
+      var list2 = state.view === "keymap" ? state.keymapPlans : state.replayScripts;
+      list2[pi].steps.push({ action: action, key: key, x: xyParts[0] || "0", y: xyParts[1] || "0" });
+      render();
+      showToast("已添加步骤（演示）", { type: "ok" });
+      break;
+    }
+    case "step-del": {
+      var parts2 = arg.split(":");
+      var pi2 = Number(parts2[0]), si2 = Number(parts2[1]);
+      var list3 = state.view === "keymap" ? state.keymapPlans : state.replayScripts;
+      list3[pi2].steps.splice(si2, 1);
+      render();
+      break;
+    }
+    case "plan-del": {
+      var parts3 = arg.split(":");
+      var kind = parts3[0], pi3 = Number(parts3[1]);
+      var doDel = function () {
+        if (kind === "keymap") state.keymapPlans.splice(pi3, 1);
+        else if (kind === "replay") state.replayScripts.splice(pi3, 1);
+        else state.schedulePlans.splice(pi3, 1);
+        render();
+        showToast("已删除（演示）", { type: "ok" });
+      };
+      if (btn) armDanger(btn, "确认删除？", doDel); else doDel();
+      break;
+    }
+    case "sched-focus": { var n = $("#sch-name"); if (n) n.focus(); break; }
+    case "sched-add": {
+      var nameEl = $("#sch-name"), timeEl = $("#sch-time"), durEl = $("#sch-dur"), errEl = $("#sch-err");
+      var name = nameEl ? nameEl.value.trim() : "";
+      if (!name) {
+        if (errEl) { errEl.textContent = "请输入计划名称"; errEl.hidden = false; }
+        break;
+      }
+      state.schedulePlans.push({ name: name, time: timeEl ? timeEl.value : "09:30", dur: durEl ? (durEl.value || 10) : 10, enabled: true });
+      render();
+      showToast("计划已添加（演示）", { type: "ok" });
+      break;
+    }
+    case "sched-toggle": {
+      var p = state.schedulePlans[Number(arg)];
+      if (p) p.enabled = !p.enabled;
+      render();
+      break;
+    }
+    /* 设置 / 帮助 / Pro */
+    case "set-switch": {
+      var k = arg;
+      state.settings[k] = !state.settings[k];
+      btn.setAttribute("aria-checked", String(state.settings[k]));
+      showToast("已保存（演示）", { type: "ok" });
+      break;
+    }
+    case "settings-reset":
+      state.settings = { autoStart: true, minToTray: false, updateCheck: true, desktopMode: false, openAfter: false, notifyPersist: false, replay: false };
+      applyTheme("soft", true);
+      render();
+      showToast("已恢复默认设置（演示）", { type: "ok" });
+      break;
+    case "help-toggle": {
+      var items = $$(".help-item");
+      var anyClosed = items.some(function (d) { return !d.open; });
+      items.forEach(function (d) { d.open = anyClosed; });
+      btn.textContent = anyClosed ? "收起全部" : "展开全部";
+      btn.setAttribute("aria-expanded", String(anyClosed));
+      break;
+    }
+    case "pro-activate": {
+      var code = $("#pro-code");
+      var err = $("#pro-err");
+      state.proInput = code ? code.value.trim() : "";
+      if (!state.proInput) {
+        if (err) { err.textContent = "请输入激活码后再激活"; err.hidden = false; }
+        break;
+      }
+      if (state.proInput.length < 8) {
+        if (err) { err.textContent = "激活码格式不正确（演示环境可输入 8 位以上任意字符串）"; err.hidden = false; }
+        break;
+      }
+      var b = $("#pro-btn");
+      if (b) {
+        b.classList.add("is-loading");
+        b.disabled = true;
+        setTimeout(function () {
+          state.proActive = true;
+          render();
+          showToast("激活成功（演示）", { type: "ok" });
+        }, 800);
+      }
+      break;
+    }
+    case "revoke":
+      openModal({ id: "revoke", title: "撤销本机授权？", body: "<p>撤销后本机回到免费版，激活码仍可用于再次激活。</p>", okLabel: "撤销授权", danger: true });
+      break;
+    /* Context Panel 1000–1199 浮层 */
+    case "ctx-open": {
+      var c = ctxContent(state.view);
+      showPopover(btn, c || '<p style="font-size:var(--fs-12);color:var(--muted)">本视图没有上下文信息。</p>');
+      break;
+    }
+    /* modal */
+    case "modal-cancel": closeModal(); break;
+    case "modal-ok": confirmModal(); break;
+  }
+}
+
+/* ==================== 录制计时 ==================== */
+function startRecTimer() {
+  stopRecTimer();
+  state.recTimer = setInterval(function () {
+    state.recSec++;
+    var el = $("#rec-timer");
+    if (el) {
+      var m = Math.floor(state.recSec / 60), s = state.recSec % 60;
+      el.textContent = (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+    }
+  }, 1000);
+}
+function stopRecTimer() { if (state.recTimer) { clearInterval(state.recTimer); state.recTimer = null; } }
+function stopRec(notify) {
+  stopRecTimer();
+  if (state.recording && notify) showToast("录制已停止，已保存到 Recordings（演示）", { type: "ok" });
+  state.recording = false;
+  if (notify) render();
+}
+
+/* ==================== 事件绑定 ==================== */
+document.addEventListener("click", function (e) {
+  var t = e.target;
+  var actEl = t.closest("[data-act]");
+  /* popover 外点关闭 */
+  var pop = $("#popover");
+  if (!pop.hidden && !pop.contains(t) && !(actEl && (actEl.dataset.act === "pill" || actEl.dataset.act === "theme-menu" || actEl.dataset.act === "ctx-open"))) {
+    hidePopover();
+  }
+  if (!actEl) return;
+  var act = actEl.dataset.act;
+  var arg = actEl.dataset.arg || actEl.dataset.view || "";
+  if (act === "modal-cancel" || act === "modal-ok") { runAct(act); return; }
+  runAct(act, arg, actEl);
+});
+/* Enter/Space 激活 role=button 元素（缩略图） */
+document.addEventListener("keydown", function (e) {
+  var t = e.target;
+  if ((e.key === "Enter" || e.key === " ") && t.matches && t.matches('.thumb[role="button"]')) {
+    e.preventDefault();
+    runAct("shot-view", t.dataset.arg);
+  }
+});
+/* 输入过滤（应用搜索 / 帮助搜索） */
+document.addEventListener("input", function (e) {
+  var t = e.target;
+  if (t.dataset.filter === "apps") {
+    state.appsQuery = t.value;
+    var q = t.value.toLowerCase();
+    $$("#content tbody tr").forEach(function (row) {
+      if (!row.dataset.rowStatic) row.hidden = !!q && !row.textContent.toLowerCase().includes(q);
+    });
+  } else if (t.dataset.filter === "help") {
+    state._helpQuery = t.value;
+    var cur = t.selectionStart;
+    render();
+    var next = $('[data-filter="help"]');
+    if (next) { next.focus(); next.setSelectionRange(cur, cur); }
+  } else if (t.id === "pro-code") {
+    state.proInput = t.value.trim();
+    var b = $("#pro-btn");
+    if (b) b.textContent = state.proInput ? "激活" : "输入激活码后激活";
+  }
+});
+/* 相册选择 / select 分发 */
+document.addEventListener("change", function (e) {
+  var t = e.target;
+  if (t.matches("select") && t.dataset.act) { runAct(t.dataset.act, t.value, t); return; }
+  if (t.dataset.act === "album-check") {
+    if (t.checked) state.albumSel[t.getAttribute("aria-label")] = true;
+    else delete state.albumSel[t.getAttribute("aria-label")];
+    var n = Object.keys(state.albumSel).length;
+    var btns = $$('#content [data-act="album-fetch"]');
+    btns.forEach(function (b) {
+      b.disabled = n === 0;
+      b.title = n === 0 ? "请先选择缩略图" : "";
+      b.textContent = "取回所选" + (n ? "（" + n + "）" : "");
+    });
+    var hb = $("#vh-actions [data-act='album-fetch']");
+    if (hb) hb.disabled = n === 0;
+  }
+});
+/* select 分发（合并于上方 change 监听） */
+
+/* ==================== 键盘快捷键（UX §5.2） ==================== */
+var DIGIT_VIEWS = ["home", "connect", "info", "multi", "mirror", "present", "keymap", "schedule", "replay"];
+function trapFocus(container, e) {
+  var focusables = container.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+  if (!focusables.length) return;
+  var first = focusables[0], last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+document.addEventListener("keydown", function (e) {
+  var modalOpen = !$("#modal-mask").hidden;
+  var cmdkOpen = !$("#cmdk-mask").hidden;
+  /* Esc：关闭对话框/抽屉/命令面板，焦点归还 */
+  if (e.key === "Escape") {
+    if (modalOpen) { closeModal(); e.preventDefault(); }
+    else if (cmdkOpen) { closeCmdk(); e.preventDefault(); }
+    else if (!$("#popover").hidden) { hidePopover(); e.preventDefault(); }
+    else if (state.drawer) { closeDrawer(); e.preventDefault(); }
+    else if (state.sideAlt && window.innerWidth >= 1000 && window.innerWidth <= 1199) {
+      state.sideAlt = false; syncShellClasses(); $("#side-toggle").textContent = "折叠"; e.preventDefault();
+    }
+    return;
+  }
+  if (cmdkOpen) {
+    if (e.key === "ArrowDown") { e.preventDefault(); cmdkMove(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); cmdkMove(-1); }
+    else if (e.key === "Enter") { e.preventDefault(); cmdkRun(state.cmdkIndex); }
+    else if (e.key === "Tab") { trapFocus($("#cmdk"), e); }
+    return;
+  }
+  if (modalOpen) {
+    if (e.key === "Tab") trapFocus($("#modal"), e);
+    return;
+  }
+  if (state.drawer && e.key === "Tab") { trapFocus($("#sidebar"), e); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCmdk(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSide(); return; }
+  /* 1–9 跳页（无修饰，且焦点不在输入框） */
+  if (!e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+    var tag = document.activeElement ? document.activeElement.tagName : "";
+    if (tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") {
+      switchView(DIGIT_VIEWS[Number(e.key) - 1]);
+    }
+  }
+});
+$("#cmdk-input").addEventListener("input", function (e) { buildCmdkList(e.target.value); });
+$("#cmdk-list").addEventListener("click", function (e) {
+  var item = e.target.closest(".cmdk-item");
+  if (item) cmdkRun(Number(item.dataset.cmdIndex));
+});
+$("#cmdk-list").addEventListener("mousemove", function (e) {
+  var item = e.target.closest(".cmdk-item");
+  if (item && Number(item.dataset.cmdIndex) !== state.cmdkIndex) cmdkMove(Number(item.dataset.cmdIndex) - state.cmdkIndex);
+});
+$("#modal-mask").addEventListener("mousedown", function (e) {
+  if (e.target === this) closeModal();
+});
+$("#cmdk-mask").addEventListener("mousedown", function (e) {
+  if (e.target === this) closeCmdk();
+});
+window.addEventListener("resize", function () {
+  render();
+});
+
+/* ==================== 初始化 ==================== */
+(function init() {
+  var saved = null;
+  try { saved = localStorage.getItem("md-theme"); } catch (e) {}
+  applyTheme(saved || "soft", true);
+  render();
+})();
+</script>
+</body>
+</html>
