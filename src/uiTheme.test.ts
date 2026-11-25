@@ -35,7 +35,7 @@ describe("ui theme preference", () => {
   it("keeps theme metadata unique and marks only the dark console as dark", () => {
     expect(new Set(UI_THEMES.map((theme) => theme.key)).size).toBe(UI_THEMES.length);
     expect(UI_THEMES.filter((theme) => theme.colorScheme === "dark").map((theme) => theme.key)).toEqual(["b"]);
-    expect(themeMeta("d").label).toBe("极简留白");
+    expect(themeMeta("d").label).toBe("留白 Paper");
   });
 
   it("reflects the selected theme on the document root", () => {

@@ -587,7 +587,9 @@ describe("App rendering", () => {
     render(<App />);
     const functionNav = screen.getByRole("navigation", { name: "功能导航" });
     fireEvent.click(within(functionNav).getByRole("button", { name: "设置" }));
-    fireEvent.click(await screen.findByRole("button", { name: /深空控制台/ }));
+    // v2.5：主题切换入口在顶栏「主题 · …」菜单里（menuitemradio）。
+    fireEvent.click(await screen.findByRole("button", { name: /切换外观主题/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /深空 Midnight/ }));
 
     expect(document.documentElement.dataset.theme).toBe("b");
     expect(localStorage.getItem("mirrordock.uiTheme")).toBe("b");
@@ -599,7 +601,8 @@ describe("App rendering", () => {
     render(<App />);
     const functionNav = screen.getByRole("navigation", { name: "功能导航" });
 
-    fireEvent.click(screen.getByRole("button", { name: "一级模块：智能工具" }));
+    // v2.5：顶栏模块 Tab 移除，直接从侧栏功能树跳到镜像控制。
+    fireEvent.click(within(functionNav).getByRole("button", { name: "镜像控制" }));
     expect(await screen.findByRole("heading", { name: "会话参数" })).toBeInTheDocument();
 
     fireEvent.click(within(functionNav).getByRole("button", { name: "投屏演示" }));

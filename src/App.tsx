@@ -2,10 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { AppSelect } from "./AppSelect";
 import {
   ASSISTANT_GROUPS,
-  ASSISTANT_MODULES,
   ASSISTANT_VIEWS,
   AssistantViewPage,
-  assistantModuleForView,
   type AssistantSection,
   type AssistantViewKey,
 } from "./assistantViews";
@@ -714,6 +712,23 @@ const stateCopy: Record<DeviceState, { label: string; detail: string }> = {
 type TabKey = "home" | "tools" | "wireless" | "settings" | "help";
 const LEGACY_VIEWS = new Set<AssistantViewKey>(["home", "connect", "settings", "help"]);
 
+// 顶栏主题菜单的小色点：取各主题的签名色（重设计 v2.5）。
+const THEME_DOT: Record<UiThemeKey, string> = {
+  a: "#4a7cf3",
+  b: "#101216",
+  c: "#7a5cf0",
+  d: "#ffffff",
+  e: "#8fb4ff",
+};
+
+// 命令面板里可执行的页头过滤视图：这些页面才有可筛选的表格行。
+const FILTERABLE_VIEWS = new Set<AssistantViewKey>([
+  "multi", "mirror", "keymap", "replay", "apps", "shot", "album", "notify", "help",
+]);
+
+// Context Panel（右栏）只在设备相关的视图渲染（重设计 §4：右栏从全量降级为情境面板）。
+const RAIL_VIEWS = new Set<AssistantViewKey>(["home", "info", "multi", "mirror", "files", "apps"]);
+
 function tabForAssistantView(view: AssistantViewKey): TabKey {
   if (view === "home") return "home";
   if (view === "connect") return "wireless";
@@ -794,6 +809,12 @@ function App() {
     Object.fromEntries(ASSISTANT_GROUPS.map((group) => [group.name, group.openByDefault])),
   );
   const [uiTheme, setUiTheme] = useState<UiThemeKey>(() => readUiTheme());
+  // 重设计 v2.5：⌘K 命令面板、顶栏主题菜单、⌘B 侧栏折叠。
+  const [cmdkOpen, setCmdkOpen] = useState(false);
+  const [cmdkQuery, setCmdkQuery] = useState("");
+  const [cmdkIndex, setCmdkIndex] = useState(0);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(false);
 
   function openView(next: AssistantViewKey) {
     setView(next);
@@ -805,6 +826,24 @@ function App() {
   useEffect(() => {
     applyUiTheme(uiTheme);
   }, [uiTheme]);
+
+  // ⌘K / Ctrl+K 打开命令面板；⌘B / Ctrl+B 折叠侧栏（重设计 v2.5）。
+  useEffect(() => {
+    const onShellHotkey = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === "k") {
+        event.preventDefault();
+        setCmdkOpen((open) => !open);
+        setCmdkQuery("");
+        setCmdkIndex(0);
+      } else if ((event.metaKey || event.ctrlKey) && key === "b") {
+        event.preventDefault();
+        setRailCollapsed((collapsed) => !collapsed);
+      }
+    };
+    window.addEventListener("keydown", onShellHotkey);
+    return () => window.removeEventListener("keydown", onShellHotkey);
+  }, []);
 
   const chooseUiTheme = (next: UiThemeKey) => {
     setUiTheme(next);
@@ -4178,8 +4217,85 @@ function App() {
     }
   }
 
+  // ⌘K 命令清单：19 个跳页 + 7 个真实动作（复用既有 invoke 函数，不新增假能力）。
+  const cmdkCommands: { id: string; icon: ReactElement; label: string; hint: string; keywords: string; run: () => void }[] = [
+    ...(Object.keys(ASSISTANT_VIEWS) as AssistantViewKey[]).map((key) => ({
+      id: `view-${key}`,
+      icon: assistantViewIcons[key],
+      label: ASSISTANT_VIEWS[key].title,
+      hint: "跳转",
+      keywords: ASSISTANT_VIEWS[key].subtitle,
+      run: () => openView(key),
+    })),
+    {
+      id: "action-refresh",
+      icon: assistantViewIcons.multi,
+      label: "重新检查设备",
+      hint: "动作",
+      keywords: "刷新 adb devices 检查",
+      run: () => void refreshDevices(),
+    },
+    {
+      id: "action-shot",
+      icon: assistantViewIcons.shot,
+      label: "立即截图",
+      hint: "动作",
+      keywords: "截图 screenshot 保存",
+      run: () => { if (readyDevice) void captureScreen(readyDevice.serial); else openView("connect"); },
+    },
+    {
+      id: "action-record",
+      icon: assistantViewIcons.record,
+      label: recording?.active ? "停止录制" : "开始录制",
+      hint: "动作",
+      keywords: "录制 record 录屏",
+      run: () => void toggleRecording(),
+    },
+    {
+      id: "action-reveal",
+      icon: assistantViewIcons.files,
+      label: "打开截图文件夹",
+      hint: "动作",
+      keywords: "输出 文件夹 打开 图片",
+      run: () => void revealCapture(),
+    },
+    {
+      id: "action-diagnostic",
+      icon: assistantViewIcons.info,
+      label: "复制诊断摘要",
+      hint: "动作",
+      keywords: "诊断 复制 摘要 debug",
+      run: () => void previewDiagnostics(),
+    },
+    {
+      id: "action-collapse",
+      icon: assistantViewIcons.settings,
+      label: railCollapsed ? "展开侧栏" : "折叠侧栏",
+      hint: "动作",
+      keywords: "侧栏 折叠 展开 隐藏",
+      run: () => setRailCollapsed((collapsed) => !collapsed),
+    },
+    {
+      id: "action-theme",
+      icon: assistantViewIcons.settings,
+      label: "切换下一套主题",
+      hint: "动作",
+      keywords: "主题 外观 换肤",
+      run: () => {
+        const order = UI_THEMES.map((theme) => theme.key);
+        const next = order[(order.indexOf(uiTheme) + 1) % order.length];
+        setUiTheme(next);
+        writeUiTheme(next);
+      },
+    },
+  ];
+  const cmdkQueryLower = cmdkQuery.trim().toLowerCase();
+  const cmdkResults = cmdkQueryLower
+    ? cmdkCommands.filter((command) => `${command.label} ${command.keywords}`.toLowerCase().includes(cmdkQueryLower))
+    : cmdkCommands;
+
   return (
-    <div className="app-shell" data-theme={uiTheme}>
+    <div className={`app-shell ${railCollapsed ? "rail-collapsed" : ""}`} data-theme={uiTheme}>
       {/* X10-127 外观层：顶部一级导航 + 工具栏 + 设备树 + 工作区 + 右侧状态栏。
           只是外壳与视觉；设备选择、页签、镜像按钮仍走原有状态机。 */}
       <header className="titlebar">
@@ -4188,62 +4304,57 @@ function App() {
           <strong>MirrorDock</strong>
           <small>ANDROID DEVICE ASSISTANT</small>
         </div>
-        <nav className="module-nav" aria-label="一级模块">
-          {ASSISTANT_MODULES.map((module) => (
-            <button
-              key={module.key}
-              type="button"
-              className="module-button"
-              aria-label={`一级模块：${module.label}`}
-              aria-current={assistantModuleForView(view) === module.key ? "page" : undefined}
-              onClick={() => openView(module.view)}
-            >
-              <span aria-hidden="true">{assistantViewIcons[module.view]}</span>
-              <span aria-hidden="true">{module.label}</span>
-            </button>
-          ))}
-        </nav>
+        <button
+          type="button"
+          className="cmdk-trigger"
+          aria-label="打开命令面板"
+          onClick={() => { setCmdkOpen(true); setCmdkQuery(""); setCmdkIndex(0); }}
+        >
+          <span aria-hidden="true">⌕</span>
+          搜索功能或执行命令
+          <kbd aria-hidden="true">⌘K</kbd>
+        </button>
         <div className="title-right">
-          <label className="assistant-title-search">
-            <span aria-hidden="true">⌕</span>
-            <input
-              type="search"
-              aria-label="搜索设备、应用或文件"
-              placeholder="搜索功能"
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                const query = event.currentTarget.value.trim().toLowerCase();
-                if (!query) return;
-                const hit = Object.values(ASSISTANT_VIEWS).find((item) => item.title.toLowerCase().includes(query));
-                if (hit) openView(hit.key);
-              }}
-            />
-          </label>
-          <span className="theme-chip" title="外观主题仅在设置中调整">主题 · {themeMeta(uiTheme).label}</span>
+          <span className="title-device-pill" title={topbarStatus}>
+            <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
+            <span>{currentDeviceLabel ?? topbarStatus}</span>
+          </span>
+          <div className="theme-menu">
+            <button
+              type="button"
+              className="title-button"
+              aria-haspopup="menu"
+              aria-expanded={themeMenuOpen}
+              aria-label="切换外观主题"
+              onClick={() => setThemeMenuOpen((open) => !open)}
+            >
+              主题 · {themeMeta(uiTheme).label}
+            </button>
+            {themeMenuOpen && (
+              <div className="theme-menu-pop" role="menu" aria-label="外观主题">
+                {UI_THEMES.map((theme) => (
+                  <button
+                    key={theme.key}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={uiTheme === theme.key}
+                    className="theme-menu-item"
+                    onClick={() => {
+                      setUiTheme(theme.key);
+                      writeUiTheme(theme.key);
+                      setThemeMenuOpen(false);
+                    }}
+                  >
+                    <span className="theme-dot" aria-hidden="true" style={{ background: THEME_DOT[theme.key] }} />
+                    {theme.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button className="title-button" type="button" aria-label="打开帮助中心" onClick={() => openView("help")}>帮助</button>
         </div>
       </header>
-
-      <div className="subbar">
-        <span className="crumb">
-          {ASSISTANT_MODULES.find((module) => module.key === assistantModuleForView(view))?.label} / <b>{ASSISTANT_VIEWS[view].title}</b>
-        </span>
-        <span className="subbar-status">
-          <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />
-          {topbarStatus}
-        </span>
-        <div className="subbar-actions">
-          <button className="secondary-button" type="button" onClick={() => openView("connect")}>连接设备</button>
-          <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
-            {isChecking ? "检查中…" : "重新检查"}
-          </button>
-          {activeSessionCount > 1 && (
-            <button className="secondary-button" type="button" onClick={() => void stopMirroring()} disabled={isStopping}>
-              {isStopping ? "正在结束…" : `结束全部（${activeSessionCount} 台）`}
-            </button>
-          )}
-        </div>
-      </div>
 
       <div className="workspace">
         <aside className="sidebar">
@@ -4334,16 +4445,18 @@ function App() {
           <h1>{ASSISTANT_VIEWS[view].title}</h1>
           <span>{ASSISTANT_VIEWS[view].subtitle}</span>
           <div className="assistant-work-spacer" />
-          <label className="assistant-work-search">
-            <span aria-hidden="true">⌕</span>
-            <input
-              type="search"
-              aria-label="筛选当前表格"
-              placeholder="筛选当前表格"
-              value={viewFilter}
-              onChange={(event) => setViewFilter(event.target.value)}
-            />
-          </label>
+          {FILTERABLE_VIEWS.has(view) && (
+            <label className="assistant-work-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                type="search"
+                aria-label="筛选本页内容"
+                placeholder="筛选本页内容"
+                value={viewFilter}
+                onChange={(event) => setViewFilter(event.target.value)}
+              />
+            </label>
+          )}
           <button className="assistant-btn primary sm" type="button" aria-label={`页面操作：${ASSISTANT_VIEWS[view].action}`} onClick={runViewAction}>{ASSISTANT_VIEWS[view].action}</button>
         </div>
 
@@ -5631,6 +5744,7 @@ function App() {
         </div>
         </div>
 
+        {RAIL_VIEWS.has(view) && (
         <aside className="right-rail" aria-label="设备状态与快捷工具">
           <section className="rail-card">
             <h3>设备状态</h3>
@@ -5673,7 +5787,56 @@ function App() {
             <button className="rail-link" type="button" onClick={() => openView("settings")}>外观主题 · {themeMeta(uiTheme).label} →</button>
           </section>
         </aside>
+        )}
       </div>
+
+        {/* ⌘K 命令面板：19 个跳页 + 7 个真实动作；无设备的动作跳连接页（如实降级）。 */}
+        {cmdkOpen && (
+          <div className="cmdk-mask" onClick={(event) => { if (event.target === event.currentTarget) setCmdkOpen(false); }}>
+            <div className="cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
+              <input
+                className="cmdk-input"
+                type="text"
+                autoFocus
+                role="combobox"
+                aria-expanded="true"
+                aria-controls="cmdk-listbox"
+                placeholder="输入功能名或动作…"
+                value={cmdkQuery}
+                onChange={(event) => { setCmdkQuery(event.target.value); setCmdkIndex(0); }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") { event.preventDefault(); setCmdkIndex((i) => Math.min(i + 1, cmdkResults.length - 1)); }
+                  else if (event.key === "ArrowUp") { event.preventDefault(); setCmdkIndex((i) => Math.max(i - 1, 0)); }
+                  else if (event.key === "Enter") { event.preventDefault(); cmdkResults[cmdkIndex]?.run(); setCmdkOpen(false); }
+                  else if (event.key === "Escape") { event.preventDefault(); setCmdkOpen(false); }
+                }}
+              />
+              <ul className="cmdk-list" id="cmdk-listbox" role="listbox" aria-label="命令列表">
+                {cmdkResults.length === 0 && <li className="cmdk-empty">没有匹配「{cmdkQuery}」的命令</li>}
+                {cmdkResults.map((command, index) => (
+                  <li key={command.id} role="option" aria-selected={index === cmdkIndex}>
+                    <button
+                      type="button"
+                      className="cmdk-item"
+                      onMouseEnter={() => setCmdkIndex(index)}
+                      onClick={() => { command.run(); setCmdkOpen(false); }}
+                    >
+                      <span className="cmdk-icon" aria-hidden="true">{command.icon}</span>
+                      {command.label}
+                      <small>{command.hint}</small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="cmdk-foot" aria-hidden="true">
+                <span><kbd>↑↓</kbd> 选择</span>
+                <span><kbd>回车</kbd> 执行</span>
+                <span><kbd>Esc</kbd> 关闭</span>
+                <span style={{ marginInlineStart: "auto" }}>本地处理 · 无遥测</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         <footer className="statusbar">
           <span className={`status-dot ${readyDevice ? "ready" : sessionActive ? "ready" : "idle"}`} aria-hidden="true" />

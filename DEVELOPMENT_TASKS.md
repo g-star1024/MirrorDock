@@ -1351,3 +1351,14 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - `inputAutomation.ts` 重构：`readKeymaps`/`readReplays` 抽出 `parseKeymapsValue`/`parseReplaysValue` 供导入复用，行为不变。
 - **验证**：cargo test **229/229**（+1：导出路径只收 .json/拒绝空串与超长）+ clippy/fmt 干净（fmt 差异均为既有无关文件，未触碰）；vitest **123/123**（+7：导入导出往返、坏数据拒绝、坏条目丢弃、批量截图文件名序列号去重与冒号替换）；浏览器验证 multi/album/keymap/replay 四视图新按钮齐全、无设备时禁用态正确（一键截图无设备点出如实结论）、0 横向溢出、控制台 0 错误。
 - **状态**：代码在本地 `feat/phone-assistant-ui`；**未打 tag、未推远端、未触发 CI**。拖拽入队 / 一键取回 / 批量截图 / 导入导出的真机与真实文件行为待用户验收。
+
+### X10-141 UI 重设计落地：预览版「安静的诊断台」移植进真实客户端（2026-11-25）
+
+用户验收 HTML 预览（docs/ui-redesign/mirrordock-redesign-preview.html，v2.5 终稿：统一 12px 圆角、柔化色板、粉彩 prism 分类色）后，按预览版升级真实客户端代码：
+
+- **Token 基座（App.css）**：5 套主题按预览 §3/§9 重写——云鲸 Soft Light（默认 `#4a7cf3` 提亮降饱和）/ 深空 Midnight（中性近黑）/ 磁贴 Prism（紫 accent + 6 个粉彩分类色 soft token）/ 留白 Paper（细线无阴影）/ 玻璃 Aurora（光斑 + 浮层 blur）；顶栏由高饱和蓝渐变改中性极淡蓝调；**圆角唯一语言 = 12px**（v2.4/v2.5 定稿，全 CSS 已无 999px）；卡片改「无边框 + 双层柔影」，深色主题保留淡描边、paper 保留细线签名；assistant-btn primary 微渐变 + 同色柔影；工具图标粉彩化（accent-soft 底 + 深色图标）。
+- **外壳重构（App.tsx）**：①顶栏 44px 去一级模块 Tab，改 ⌘K 触发器 + 设备状态 pill + 主题菜单（menuitemradio 5 套即时切换并持久化）+ 帮助；②删除 subbar 面包屑行（标题三重复之一），网格降为 3 行；③View Header 保留为标题唯一出处，筛选框只在有可筛选行的 9 个视图渲染（FILTERABLE_VIEWS，文案改「筛选本页内容」）；④右栏降级为 Context Panel——只在 6 个设备相关视图渲染（RAIL_VIEWS），<1200px CSS 隐藏；⑤⌘B 折叠侧栏至 56px 图标态（rail-collapsed）。
+- **⌘K 命令面板**：26 条 = 19 跳页 + 7 真实动作（重新检查设备 / 立即截图 / 开始停止录制 / 打开截图文件夹 / 复制诊断摘要 / 折叠侧栏 / 切换下一套主题），全部复用既有 invoke 函数；关键词过滤、↑↓/回车/Esc、无设备的动作命令跳连接页（如实降级）；⌘K/Ctrl+K 全局快捷键。
+- **诚实边界**：预览版「预览演示数据」开关属预览专用，未移植（真实客户端只显示真实状态）；空态三件套全面重构与危险操作自定义对话框未在本轮完成（现有空态/confirm 保持真实行为），记为后续打磨。
+- **质量门**：vitest 123/123（契约测试同步：主题菜单 menuitemradio、模块 Tab 移除改侧栏跳转、留白 Paper 新名）、`pnpm build` 通过、cargo test **229/229**（后端 0 改动 0 破坏）、浏览器走查 19 视图全 0 横向溢出 + ⌘K 过滤执行 + 主题切换持久化 + ⌘B 折叠 + 1100/950px 响应式 0 溢出 + 控制台 0 错误。
+- **状态**：代码在本地 `feat/phone-assistant-ui`；**未打 tag、未推远端、未触发 CI**。真机视觉验收待用户。

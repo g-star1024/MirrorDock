@@ -12,11 +12,11 @@ export type UiThemeMeta = {
 export const UI_THEME_STORAGE_KEY = "mirrordock.uiTheme";
 
 export const UI_THEMES: readonly UiThemeMeta[] = [
-  { key: "a", label: "云鲸桌台", description: "柔和浅色，大圆角轻阴影", colorScheme: "light" },
-  { key: "b", label: "深空控制台", description: "深色紧凑，等宽数据感", colorScheme: "dark" },
-  { key: "c", label: "彩色磁贴", description: "彩色语义磁贴，最像手机助手", colorScheme: "light" },
-  { key: "d", label: "极简留白", description: "细线无阴影，内容优先", colorScheme: "light" },
-  { key: "e", label: "玻璃 HUD", description: "毛玻璃，渐变光斑", colorScheme: "light" },
+  { key: "a", label: "云鲸 Soft Light", description: "柔和浅色，柔影分层，默认主题", colorScheme: "light" },
+  { key: "b", label: "深空 Midnight", description: "中性深色，柔影与淡描边", colorScheme: "dark" },
+  { key: "c", label: "磁贴 Prism", description: "分类粉彩色，强调紫", colorScheme: "light" },
+  { key: "d", label: "留白 Paper", description: "细线无阴影，内容优先", colorScheme: "light" },
+  { key: "e", label: "玻璃 Aurora", description: "光斑背景，毛玻璃浮层", colorScheme: "light" },
 ] as const;
 
 export function isUiThemeKey(value: unknown): value is UiThemeKey {
