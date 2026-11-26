@@ -1528,3 +1528,11 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - `.card-head.connection-heading/.wireless-heading > div` 改 flex 横排（gap 8px、可换行），eyebrow badge margin 归零，说明行 `p` flex-basis:100% 独占第二行。
 - **验证**：`pnpm build`（tsc+vite）0 error；vitest **125/125**；cargo check 通过；客户端 Playwright 走查——设备中心连接卡头与无线页三卡头标签/标题同行、说明行第二行；全页签自动走查 0 堆叠/0 重复/0 溢出；预览端 19 视图 × 两态 × 1000px 走查同上全绿；node --check 校验预览内嵌脚本。
 - **诚实边界**：Hero 电量列宽修复依赖真实电池读取，真机最终观感待用户验收；`docs/ui-redesign/audit/` 审计报告与预览 HTML 尚未入库（本版一并提交）。
+
+### v0.4.31-beta 发版闭环（2026-11-26 20:31，commit 4331692，Release id 459386839）
+
+- 内容 = X10-151（预览评审 4 项反馈：卡头标签横排 + Hero 电量防错行；文案重复/正文贴边经复核分别为已修/误报）。
+- 版本号四处升级（package.json / tauri.conf.json / Cargo.toml / Cargo.lock）+ 官网 site/index.html 29 处同步，0.4.30 引用归零。
+- CI run 45818330843 全绿：verify ✅、伴侣 APK ✅（真编译）、四平台打包 ✅、Release 发布 ✅（约 14 分钟完成）。
+- Release 核验：34 资产全齐——exe/msi/dmg×2/app.tar.gz×2/AppImage/deb/rpm 全带 .sig、companion-0.4.31.apk（4.5MB）、latest.json、SHA256SUMS×4、SBOM×8、version-check×4；Release body「## 本版更新内容」注入正确无重复标题。
+- HEAD = v0.4.31-beta；用户侧需更新客户端后按截图逐项复核。
