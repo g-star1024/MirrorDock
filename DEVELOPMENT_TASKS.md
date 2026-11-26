@@ -1481,3 +1481,10 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **预览**（`mirrordock-redesign-preview.html`）：vMirror/vPresent 删画布（两态），加 `.mirror-state`；`.kv dd` 同步允许换行。
 - **证据**：tsc 0 error；vitest 125/125；vite build 通过；Playwright 多宽度审计（1000/1280/1848）：19 视图统一 24px 边距、0 裁切、0 溢出、0 控制台错误（仅预览站 favicon 404 无害）；镜像/按键映射/文件传输截图目检通过；缩放验证 contentW 732→776→1344 随窗口增长。
 - **诚实边界**：纯视觉与布局修正，无功能增删、无权限/数据/连接方式变更；未打 tag、未推远端。
+
+### X10-147 发版补记：v0.4.29-beta 已真实发布（2026-11-26 11:43-12:05）
+
+- 版本号三处升 0.4.29（tauri.conf/package.json/Cargo.toml+lock）+ 官网 21 处引用同步（commit `d723bb9`）；发版文档 `docs/releases/v0.4.29-beta.md` 按「只写 ## 小节」约定撰写。
+- tag `v0.4.29-beta` → run `45750995191` 全绿：verify / 四平台打包 / 伴侣 APK / Release 全部 success。
+- Release 实体核验（id `458932820`，非 draft、prerelease）：34 资产全齐，关键项（四平台安装包 + 各自 .sig、companion-0.4.29.apk、latest.json）逐一确认存在；body 以 CI 注入「## 本版更新内容」开头，无重复标题。
+- 待真机：镜像控制页新状态卡观感与「窗口放大内容跟随放大」的外接大屏实测由产品负责人验收。
