@@ -990,16 +990,18 @@ button, input, select { font-family: inherit; }
 .tool-ico.c5 { background: var(--cat-amber-soft); color: var(--cat-amber); }
 .tool-ico.c6 { background: var(--cat-green-soft); color: var(--cat-green); }
 .device-hero {
-  display: grid; grid-template-columns: 64px minmax(0, 1fr) 1px minmax(180px, 1fr) auto; gap: 16px;
+  display: grid; grid-template-columns: 84px minmax(0, 1fr) 1px minmax(180px, 1fr) auto; gap: 16px;
   align-items: center; padding: 18px; border-radius: var(--radius); background: var(--accent-soft);
   margin-bottom: 14px;
 }
+/* X10-151：电量文本（如「78% · 充电中」）加宽列并禁止换行，修复错行溢出。 */
 .hero-phone {
-  width: 60px; height: 100px; border: 2px solid var(--accent); border-radius: 12px;
+  width: 76px; height: 100px; border: 2px solid var(--accent); border-radius: 12px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   color: var(--accent); background: var(--surface); font-size: 12px; font-weight: 700;
 }
 .hero-phone svg { width: 26px; height: 26px; }
+.hero-phone small { font-size: 11px; font-weight: 600; white-space: nowrap; }
 .hero-id { min-width: 0; }
 .hero-id b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .hero-id > span { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
@@ -1013,7 +1015,7 @@ button, input, select { font-family: inherit; }
 .hero-actions .device-card-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; white-space: normal; }
 .hero-actions .primary-button, .hero-actions .secondary-button { margin: 0; }
 @media (max-width: 1199px) {
-  .device-hero { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .device-hero { grid-template-columns: 84px minmax(0, 1fr) auto; }
   .hero-divider, .hero-media { display: none; }
 }
 @media (max-width: 859px) { .device-hero { grid-template-columns: 1fr; } .hero-phone { display: none; } }
@@ -1201,6 +1203,18 @@ ol.wireless-steps.steps > li.step-line { font-size: 13px; }
 .help-article .card-head.help-article-head .help-article-title { font-weight: 600; }
 .card-body > .hint { margin: 0 0 14px; }
 .card-body > span { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+
+/* X10-151：卡头「标签 + 标题」横排（对齐预览 head-row，修复标签堆叠在标题上方）。
+   保真：只改布局类，文案、条件分支与事件不动；说明行（p）独占第二行。 */
+.card-head.connection-heading > div,
+.card-head.wireless-heading > div {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;
+}
+.card-head.connection-heading .eyebrow.badge,
+.card-head.wireless-heading .eyebrow.badge { margin: 0; }
+.card-head.wireless-heading > div > p:not(.eyebrow) { flex-basis: 100%; margin: 0; text-align: left; }
+.card-head.connection-heading h2.card-title,
+.card-head.wireless-heading h2.card-title { overflow-wrap: anywhere; }
 
 /* ==================== 重设计 v2.5：⌘K 命令面板 / 主题菜单 / 侧栏折叠 ==================== */
 .cmdk-mask {

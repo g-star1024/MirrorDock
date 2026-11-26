@@ -1506,3 +1506,25 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - 「真实状态原则」遵守：Hero 电量来自真实电池读取（进入设备中心自动读取，复用 info 视图机制）；预览演示数据（38ms 延迟/媒体播放/演示任务表）一律不进客户端。
 - **证据**：`pnpm exec tsc --noEmit` 0 error；vitest **125/125**；Playwright + Tauri mock 走查（1080/859px）：设备中心整页（Hero/工具/任务/安全边界）截图目检对齐模板，多端表格按钮横排，设置导航整齐无重复标题，0 横向溢出；镜像启动失败时状态卡显示错误原文（模拟 reject 验证）；截图成功后最近任务出现真实记录（模拟 capture 验证）。
 - **诚实边界**：镜像窗口在模拟器上不显示的真实根因仍待用户在新版上看错误原文后定位（音频/编码器/授权均有可能）；未改 Rust/伴侣端；「最近任务」不含文件传输记录（传输结果已有专属页反馈，避免双处记账）；未打 tag、未发版。
+
+### v0.4.30-beta 发版闭环（2026-11-26 15:10，commit ae0688a，Release id 459069901）
+
+- 内容 = X10-148/149/150（实测细节修复 + 设备中心按模板重构）。
+- 版本号四处升级：tauri.conf.json / package.json / Cargo.toml / **Cargo.lock（mirrordock 包版本，perl 定点替换）**；官网 site/index.html 21 处引用同步（含 `v0.4.30 测试版` 文案与 `MirrorDock-companion-0.4.30.apk` 大写形态，perl 两轮替换后 0.4.29 引用归零）。
+- 发版文档 `docs/releases/v0.4.30-beta.md`（无顶级 # 标题约定，Release body 注入「## 本版更新内容」正确）。
+- CI：main verify（45771744297）+ tag 发版构建（45771752832）+ pages（45771744292）全绿。
+- Release 核验：34 资产全齐——四平台安装包全部带 .sig（exe/msi/dmg×2/app.tar.gz×2/AppImage/deb/rpm）、companion-0.4.30.apk（4.3MB，真编译）、latest.json、SHA256SUMS×4、SBOM×8、version-check×4。
+
+### X10-151 卡头标签横排 + Hero 电量防错行（2026-11-26 20:20，预览评审 4 项反馈闭环）
+
+- **背景**：用户评审重构预览（mirrordock-rebuild-preview.html）反馈 4 项：①主设备卡电量「78% · 充电中」列宽不足折两行错位；②设备中心卡头徽标与标题同文重复（demo 态）；③连接与授权页三卡头标签堆叠在标题上方；④帮助中心展开正文贴边。
+- **预览端修复**（`docs/ui-redesign/mirrordock-rebuild-preview.html`）：
+  - `.hero-phone` 56→76px + `small` nowrap（电量单行）。
+  - 新增 `.head-row/.head-title` 横排组件类；5 处堆叠卡头（home 非 demo/demo connHead、connect 三卡）改横排。
+  - demo 态 connHead 徽标文案去重：未镜像时徽标固定「第一步：连接手机」（对齐客户端真实分支），标题保留状态文案。
+  - ④经放大截图 + DOM 双重复核为旧渲染状态误报：当前文件 `.help-item p` 左右留白 20px 正常，未改动。
+- **客户端落地**（`src/App.css`，保真：只改布局类不动文案/事件）：
+  - `.device-hero` grid 首列 64→84px（含 1199px 断点）、`.hero-phone` 60→76px + `small` 11px/nowrap。
+  - `.card-head.connection-heading/.wireless-heading > div` 改 flex 横排（gap 8px、可换行），eyebrow badge margin 归零，说明行 `p` flex-basis:100% 独占第二行。
+- **验证**：`pnpm build`（tsc+vite）0 error；vitest **125/125**；cargo check 通过；客户端 Playwright 走查——设备中心连接卡头与无线页三卡头标签/标题同行、说明行第二行；全页签自动走查 0 堆叠/0 重复/0 溢出；预览端 19 视图 × 两态 × 1000px 走查同上全绿；node --check 校验预览内嵌脚本。
+- **诚实边界**：Hero 电量列宽修复依赖真实电池读取，真机最终观感待用户验收；`docs/ui-redesign/audit/` 审计报告与预览 HTML 尚未入库（本版一并提交）。
