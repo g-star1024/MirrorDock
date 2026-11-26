@@ -1536,3 +1536,15 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - CI run 45818330843 全绿：verify ✅、伴侣 APK ✅（真编译）、四平台打包 ✅、Release 发布 ✅（约 14 分钟完成）。
 - Release 核验：34 资产全齐——exe/msi/dmg×2/app.tar.gz×2/AppImage/deb/rpm 全带 .sig、companion-0.4.31.apk（4.5MB）、latest.json、SHA256SUMS×4、SBOM×8、version-check×4；Release body「## 本版更新内容」注入正确无重复标题。
 - HEAD = v0.4.31-beta；用户侧需更新客户端后按截图逐项复核。
+
+### X10-152 重构预览 v3.0 设计系统落地客户端（2026-11-26 22:00，用户反馈「0.4.31 未按预览开发」闭环）
+
+- **背景**：用户 0.4.31 更新后指出「完全没有按照预览版去开发」。核实：0.4.31 仅含 X10-151（4 项截图修复），整体重构预览（v3.0 安静诊断台）未落地。
+- **落地**：`src/App.css` 追加 v3.0 采纳块（级联覆盖，零 JSX 改动）：
+  - 差异化圆角 5 档（surface 2 / control 4 / card 6 / panel 8 / 药丸 999），旧 --radius→--r-card、--radius-sm→--r-control 自动带动全部旧规则。
+  - 7 档字号（11–28px）+ 4px 间距标尺 + hairline；正文基准 13px。
+  - 5 套主题色板按预览逐套覆盖（a→mist 云鲸 / b→midnight 深空 / c→porcelain 磁贴 / d→ember 留白 / e→frost 玻璃），保留 data-theme 键与用户可见名称。
+  - 顶栏扁平（--titlebar-bg，去渐变）、卡片 6px+hairline 无重影、按钮纯色无渐变、步骤点线式、kv 无盒贴面、表格发丝线+mono 数值右对齐。
+  - 骨架：左栏 232px（折叠 56）、右栏 280px、内容 1600 上限、顶栏 44、状态条 28。
+- **验证**：pnpm build 0 error；vitest 125/125；cargo check 过；客户端 26 导航视图自动走查 0 横向溢出；浅色云鲸+深色深空截图目视核对通过。
+- **诚实边界**：视觉语言已按预览采纳，客户端信息架构（设备树+分组侧栏、常驻右栏）按 X10-146 保真原则保留未改；设置中心仅重排、零丢项。
