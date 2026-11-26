@@ -53,6 +53,21 @@ class NotificationMirrorService : NotificationListenerService() {
         }
 
         /**
+         * P0-2 清除入口：常驻连接读到 `notification_clear` 下行后调用。
+         * key 为 null = 清空全部；非空 = 只清对应通知。
+         * 通知使用权只授予本已配对电脑的 TLS 通道；清除是用户主动操作，
+         * 手机状态栏同步变化（可见，不是隐藏操作）。日志只记结果不记正文。
+         */
+        @JvmStatic
+        fun handleClear(key: String?) {
+            val service = activeInstance ?: run {
+                android.util.Log.w("NotifyMirror", "clear dropped: listener not active")
+                return
+            }
+            service.handleClearInternal(key)
+        }
+
+        /**
          * 本机是否已取得「读取通知」授权（系统设置手动授予，无运行时弹窗）。
          * 读 Settings.Secure 的授权清单，与应用内开关无关。
          */
@@ -170,5 +185,26 @@ class NotificationMirrorService : NotificationListenerService() {
             action.actionIntent.send(this, android.app.Activity.RESULT_OK, fillIn)
         }.isSuccess
         android.util.Log.i("NotifyMirror", "reply pkg=${sbn.packageName} sent=$ok")
+    }
+
+    /**
+     * 清除的落地实现（只在 companion object 的 handleClear 里被调用）。
+     * key 非空时必须与 activeNotifications 精确匹配，失效 key 直接忽略，
+     * 防止对已撤回通知的误操作；日志只记结果不记标题正文。
+     */
+    private fun handleClearInternal(key: String?) {
+        if (key.isNullOrEmpty()) {
+            runCatching { cancelAllNotifications() }
+                .onSuccess { android.util.Log.i("NotifyMirror", "clear all ok") }
+                .onFailure { android.util.Log.w("NotifyMirror", "clear all failed") }
+            return
+        }
+        val sbn = activeNotifications?.firstOrNull { it.key == key }
+        if (sbn == null) {
+            android.util.Log.i("NotifyMirror", "clear dropped: notification gone")
+            return
+        }
+        val ok = runCatching { cancelNotification(key) }.isSuccess
+        android.util.Log.i("NotifyMirror", "clear pkg=${sbn.packageName} sent=$ok")
     }
 }

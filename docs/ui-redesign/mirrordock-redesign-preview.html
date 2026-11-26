@@ -290,6 +290,7 @@ button { font: inherit; color: inherit; }
 .btn-ghost.danger { color: var(--danger); }
 .btn-ghost.danger:hover { background: var(--danger-soft); }
 .btn-sm { height: 26px; padding: 0 10px; font-size: var(--fs-12); }
+.action-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .btn.is-loading { position: relative; color: transparent !important; pointer-events: none; }
 .btn.is-loading::before {
   content: ""; position: absolute; left: 12px; top: 50%; width: 14px; height: 14px; margin-top: -7px;
@@ -684,6 +685,45 @@ html[data-theme="prism"] .tool-ico.c6 { background: var(--cat-green-soft); color
 }
 @media (min-width: 1000px) { .drawer-only { display: none !important; } }
 
+/* ===== NectarLink 基准升级（2026-11-25）：设备 Hero / 通知内联操作 / 设置分组导航 ===== */
+.device-hero { display: grid; grid-template-columns: 64px minmax(0, 1fr) 1px minmax(180px, 1fr); gap: var(--sp-4); align-items: center; padding: var(--sp-4); border-radius: var(--r-md); background: var(--accent-soft); margin-bottom: var(--sp-3); }
+.hero-phone { width: 60px; height: 100px; border: 2px solid var(--accent); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--accent); background: var(--surface); }
+.hero-phone .ic { width: 26px; height: 26px; }
+.hero-phone small { font-size: var(--fs-12); font-weight: 700; }
+.hero-id { min-width: 0; }
+.hero-id b { display: block; font-size: var(--fs-28); font-weight: 700; letter-spacing: -.02em; }
+.hero-id > span { display: block; font-size: var(--fs-12); color: var(--muted); margin-top: 2px; }
+.hero-chips { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
+.hero-chips .badge { display: inline-flex; align-items: center; gap: 6px; }
+.hero-divider { width: 1px; height: 72px; background: var(--line); }
+.hero-media { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.hero-media b { display: block; font-size: var(--fs-13); }
+.hero-media small { display: block; color: var(--muted); font-size: var(--fs-12); margin-top: 2px; }
+@media (max-width: 1199px) { .device-hero { grid-template-columns: 64px minmax(0, 1fr); } .hero-divider, .hero-media { display: none; } }
+@media (max-width: 859px) { .device-hero { grid-template-columns: 1fr; } .hero-phone { display: none; } }
+
+.notify-row .icon-btn { flex: none; margin-inline-start: auto; }
+.notify-inline { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-2); }
+.notify-inline .btn .ic { width: 14px; height: 14px; vertical-align: -2px; margin-inline-end: 3px; }
+.notify-inline details { display: inline-flex; }
+.notify-inline details > summary { list-style: none; }
+.notify-inline details > summary::-webkit-details-marker { display: none; }
+
+.settings-split { display: grid; grid-template-columns: 184px minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2); border-radius: var(--r-md); background: var(--surface-2); }
+.settings-nav-item { display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 46px; padding: 6px var(--sp-3); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2); font-size: var(--fs-13); cursor: pointer; text-align: start; }
+.settings-nav-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.settings-nav-text small { color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); }
+.settings-nav-item:hover { background: var(--surface); }
+.settings-nav-item.active { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow-1); }
+.settings-nav-item.active .settings-nav-text { color: var(--text); }
+.settings-nav-item .ic { width: 15px; height: 15px; flex: none; }
+.settings-card { min-height: 240px; }
+@media (max-width: 1199px) { .settings-split { grid-template-columns: 1fr; } .settings-nav { flex-direction: row; flex-wrap: wrap; } .settings-nav-item { min-height: 32px; } }
+
+.alt-hint { display: flex; align-items: flex-start; gap: var(--sp-2); color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); }
+.alt-hint .ic { width: 15px; height: 15px; flex: none; margin-top: 1px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -856,6 +896,7 @@ var DEMO_FILES = [
   { name: "recording_1122.mp4", size: "86.7 MB", date: "11-22 21:36" }
 ];
 var DEMO_NOTIS = [
+  { app: "验证码 · 126 邮箱", icon: "码", time: "14:35", text: "您的验证码是 492817，5 分钟内有效。", code: "492817" },
   { app: "微信", icon: "信", time: "14:32", text: "张工：日志我看到了，晚点同步结论" },
   { app: "系统更新", icon: "系", time: "13:05", text: "安全补丁可下载，建议连接 Wi-Fi 后安装" },
   { app: "MirrorDock", icon: "M", time: "10:24", text: "APK 安装完成：companion-v0.4.27" }
@@ -918,7 +959,9 @@ var state = {
   proInput: "",
   recentCmds: [],
   cmdkIndex: 0,
-  settings: { autoStart: true, minToTray: false, updateCheck: true, desktopMode: false, openAfter: false, notifyPersist: false, replay: false }
+  // X10-144：设置项与真实客户端 1:1 对齐（键名即真实设置语义；旧键保留兼容其它演示分支）。
+  settings: { autoStart: true, hideDock: false, autoReconnect: true, cameraSource: false, fullscreen: false, alwaysOnTop: false, keepAwake: true, record: false, clipboardSync: true, keyboardUh: false, audio: false, showTouches: false, readOnly: false, desktopMode: false, openAfter: false, notifyPersist: false, replay: false, updateCheck: true, minToTray: false },
+  settingsGroup: "appearance"
 };
 
 /* ==================== Toast ==================== */
@@ -1175,8 +1218,15 @@ function vHome() {
       BRAND_CHIPS.map(function (b) { return '<button class="chip" data-act="brand" data-arg="' + b + '">' + b + "</button>"; }).join("") +
       "</div></div></div>";
   }
-  return '<div class="device-tiles">' +
-    '<div class="device-tile"><span class="tile-ico">' + ico("i-phone") + "</span><div><b>小狸 · USB 已授权</b><p>Redmi K40 · Android 13 · 78%</p></div></div>" +
+  // NectarLink 基准 §2.1：主设备 Hero 卡（身份 + 连接质量 + 电量一眼可见），其余设备降权为小卡。
+  return '<div class="device-hero">' +
+    '<div class="hero-phone">' + ico("i-phone") + '<small>78%</small></div>' +
+    '<div class="hero-id"><b>小狸</b><span>Redmi M2104K10AC · Android 13</span>' +
+    '<div class="hero-chips"><span class="badge ok"><span class="dot ok"></span> USB 已授权 · 38 ms</span><span class="badge neutral">主设备</span></div></div>' +
+    '<div class="hero-divider"></div>' +
+    '<div class="hero-media"><span class="tool-ico c2">' + ico("i-mirror") + "</span><div><b>镜像会话</b><small>画面在独立窗口渲染 · 本机直连</small></div></div>" +
+    "</div>" +
+    '<div class="device-tiles">' +
     '<div class="device-tile"><span class="tile-ico">' + ico("i-phone") + "</span><div><b>平板 · 无线已连接</b><p>小米平板 5 · Android 12 · 52%</p></div></div>" +
     '<div class="device-tile"><span class="tile-ico" style="background:var(--surface-2);color:var(--muted)">' + ico("i-phone") + "</span><div><b>备用机 · 离线</b><p>Pixel 6 · 昨天</p></div></div>" +
     "</div>" +
@@ -1211,9 +1261,16 @@ function vConnect() {
     wifi: ["手机与电脑连入同一局域网。", "先完成一次 USB 授权，再在设备页开启无线调试。", "输入手机显示的 IP 与端口完成配对。"],
     pair: ["手机上打开「无线调试 · 使用配对码配对」。", "在本页输入 6 位配对码与端口。", "配对成功后设备进入已信任列表。"]
   };
+  // NectarLink 基准 §2.2：每条路径都给出明确的替代方案，不把用户卡在死路上。
+  var alts = {
+    usb: "插线没反应？换一根数据线，或在手机上撤销授权后重新连接；仍失败可改用无线连接。",
+    wifi: "同一 Wi-Fi 发现不了设备？确认路由器未开启 AP 隔离，或先用 USB 完成一次授权。",
+    pair: "拿不到配对码？插上数据线走 USB 授权，同样可以建立连接。"
+  };
   var body = tabs + '<div class="card"><div class="card-body"><div class="steps">' +
     guides[tab].map(function (s) { return '<div class="step-line">' + s + "</div>"; }).join("") +
     "</div>" + (tab === "pair" ? '<div style="display:flex;gap:8px;margin-top:12px"><input class="input" placeholder="6 位配对码" style="width:140px" aria-label="配对码"><input class="input mono" placeholder="端口" style="width:110px" aria-label="端口"><button class="btn btn-primary" data-act="pair">配对</button></div>' : "") +
+    '<p class="hint alt-hint" style="margin-top:14px">' + ico("i-help") + "<span>替代方案：" + alts[tab] + "</span></p>" +
     "</div></div>";
   if (state.demo) {
     body = '<div class="alert alert-info" role="status">' + ico("i-check") + "<div class='alert-text'><b>已连接 · 小狸</b>，USB 已授权。</div><div class='alert-actions'><button class='btn btn-sm btn-secondary' data-act='nav' data-view='home'>打开设备中心</button></div></div>" + body;
@@ -1229,6 +1286,11 @@ function vConnect() {
   }
   body += "</div>";
   if (!state.demo) body += alertBox("danger", "i-alert", "读取已保存设备列表失败。", [{ label: "重试", act: "refresh" }]);
+  // X10-146：真实连接页有厂商知识库；预览补入口，避免改造后丢失排查路径。
+  body += '<div class="card"><div class="card-head">品牌排查 <span class="badge neutral">连接失败时按品牌查看指引</span></div><div class="card-body tight">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;padding:8px 0">' +
+    BRAND_CHIPS.map(function (b) { return '<button class="chip" data-act="brand" data-arg="' + b + '">' + b + "</button>"; }).join("") +
+    "</div></div></div>";
   return body;
 }
 
@@ -1237,7 +1299,8 @@ function vInfo() {
     ["型号", DEMO_DEVICE.model.replace(" · M2104K10AC", "")], ["系统版本", DEMO_DEVICE.os],
     ["分辨率", DEMO_DEVICE.resolution], ["存储", DEMO_DEVICE.storage],
     ["电量", DEMO_DEVICE.battery + " · " + DEMO_DEVICE.channel], ["序列号", "M2104K10AC"],
-    ["安全补丁", "2025-11-01"], ["镜像延迟", DEMO_DEVICE.latency]
+    ["安全补丁", "2025-11-01"], ["镜像延迟", DEMO_DEVICE.latency],
+    ["电池 / 温度", "78% · 未充电 · 28.4°C"], ["本机存储", "总 128 GB · 可用 46 GB"]
   ];
   var items = kv.map(function (p) {
     var val = state.demo ? esc(p[1]) : '<div class="skeleton" style="width:70%"></div>';
@@ -1245,7 +1308,7 @@ function vInfo() {
   }).join("");
   return '<div class="card"><div class="card-head">只读设备摘要 <span class="badge neutral">不上传</span></div><div class="card-body"><dl class="kv-grid">' + items + "</dl></div></div>" +
     (state.demo
-      ? '<div class="card"><div class="card-head">诊断摘要</div><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-act="copy-diag">' + ico("i-copy") + "复制诊断摘要</button><button class='btn btn-secondary' data-act='toast' data-arg='原型演示：查看 adb 日志'>查看 adb 日志</button></div></div></div>"
+      ? '<div class="card"><div class="card-head">诊断摘要 <span class="badge neutral">仅本机 · 不上传</span></div><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-act="copy-diag">' + ico("i-copy") + "复制诊断摘要</button><button class='btn btn-secondary' data-act='toast' data-arg='原型演示：导出诊断包'>导出诊断包</button><button class='btn btn-secondary' data-act='toast' data-arg='原型演示：查看 adb 日志'>查看 adb 日志</button></div><p class=\"hint\">诊断包不含剪贴板、口令或画面帧；导出前可先预览内容。</p></div></div>"
       : "") +
     alertBox("info", "i-shield", "设备信息为只读诊断摘要，全部数据保留在本机，不上传任何字段。", []);
 }
@@ -1262,7 +1325,8 @@ function vMulti() {
   return '<div class="card"><div class="card-head">设备与会话 <span class="badge neutral">2 台在线 · 1 个会话</span></div>' +
     '<div class="table-wrap"><table class="table"><thead><tr><th>设备</th><th data-col="secondary">状态</th><th data-col="meta">会话阶段</th><th data-col="ops">操作</th></tr></thead><tbody>' +
     rows + "</tbody></table></div>" +
-    '<div class="card-foot"><button class="btn btn-danger" data-act="end-all">结束全部会话</button><span class="hint" style="color:var(--muted);font-size:var(--fs-12)">镜像会话结束后可在镜像控制页重新开始</span></div></div>';
+    '<div class="card-foot"><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：逐台截图，文件名带序列号">' + ico("i-camera") + "一键全部截图</button>" +
+    '<button class="btn btn-danger" data-act="end-all">结束全部会话</button><span class="hint" style="color:var(--muted);font-size:var(--fs-12)">逐台截图不互相覆盖；会话结束后可在镜像控制页重新开始</span></div></div>';
 }
 
 function vMirror() {
@@ -1284,7 +1348,21 @@ function vMirror() {
       ? '<button class="btn btn-secondary" data-act="mirror-pause">暂停</button><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：旋转画面">旋转</button>'
       : "") +
     '<span style="font-size:var(--fs-12);color:var(--muted)">' +
-    (state.demo && state.mirrorOn ? "UHID 键鼠直输 · 无需手机输入法" : "画质与桌面模式在会话参数中调整") + "</span></div>";
+    (state.demo && state.mirrorOn ? "UHID 键鼠直输 · 无需手机输入法" : "画质与桌面模式在会话参数中调整") + "</span></div>" +
+    '<div class="card"><div class="card-head">会话参数</div><div class="card-body"><dl class="kv-grid two">' +
+    [["目标设备", state.demo ? "小狸 · USB" : "未选择设备"],
+     ["首选通道", state.demo ? "USB" : "—"],
+     ["画质", "均衡 · 1920 / 8 Mbps"],
+     ["桌面模式", "关闭"],
+     ["视频录制", "专业版未激活"]].map(function (p) {
+      return '<div class="kv"><dt>' + p[0] + "</dt><dd>" + p[1] + "</dd></div>";
+    }).join("") + "</dl></div></div>" +
+    '<div class="card"><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    (state.demo && state.mirrorOn
+      ? '<button class="btn btn-danger" data-act="mirror-end">结束镜像</button>'
+      : '<button class="btn btn-primary" data-act="mirror-start">' + (state.demo ? "开始镜像" : "连接后开始镜像") + "</button>") +
+    '<button class="btn btn-secondary" data-act="nav" data-view="info">设备信息</button>' +
+    "</div></div></div>";
 }
 
 function vPresent() {
@@ -1305,7 +1383,12 @@ function vPresent() {
     ? '<div class="canvas16"><div class="canvas-screen"><div class="phone-frame" aria-hidden="true"><i></i></div></div><div class="canvas-hud">演示就绪 · 投屏画面只在本机渲染</div></div>'
     : '<div class="canvas16">' + emptyState("i-present", "未连接设备", "连接设备并通过就绪检查后即可开始演示。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
   return '<div class="card"><div class="card-head">就绪检查</div><div class="card-body"><div class="check-list">' + list + "</div></div></div>" + canvas +
-    '<p style="font-size:var(--fs-12);color:var(--muted)">标注图层可导出为 PNG，不写入手机相册。 <button class="btn-ghost" data-act="toast" data-arg="原型演示：查看演示能力边界">了解更多</button></p>';
+    '<div class="card"><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" data-act="mirror-start">开始演示</button>' +
+    '<button class="btn btn-secondary" data-act="mirror-end">结束演示</button>' +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：切换桌面模式">开启桌面模式</button>' +
+    "</div></div></div>" +
+    '<p style="font-size:var(--fs-12);color:var(--muted)">演示 = 按当前画质与桌面模式发起真实镜像会话，画面在独立窗口全屏投到外部显示器。激光笔 / 白板标注、演示文稿管理尚未实现，不伪装。 <button class="btn-ghost" data-act="toast" data-arg="原型演示：查看演示能力边界">了解更多</button></p>';
 }
 
 function vKeymap() {
@@ -1329,22 +1412,32 @@ function vKeymap() {
         '<span><input class="input mono" placeholder="按键" style="width:100%" id="km-key-' + pi + '" aria-label="按键"></span>' +
         '<span><input class="input mono" placeholder="x, y" style="width:100%" id="km-xy-' + pi + '" aria-label="坐标"></span>' +
         '<button class="btn btn-secondary btn-sm" data-act="step-add" data-arg="' + pi + '">添加</button></div>' +
-        '<div class="plan-foot"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导出方案（需要已有方案）">导出</button>' +
+        '<div class="plan-foot"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导出方案">导出方案</button>' +
+        '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导入方案">导入方案</button>' +
         '<button class="btn-ghost danger" data-act="plan-del" data-arg="keymap:' + pi + '" style="margin-inline-start:auto">删除方案</button></div></div>';
     }).join("") + "</div>";
   }
   html += '<div class="card"><div class="card-head">全局快捷键</div><div class="table-wrap"><table class="table">' +
     '<thead><tr><th>动作</th><th style="width:220px">快捷键</th></tr></thead><tbody>' +
-    [["返回", "Esc"], ["主页", "H"], ["多任务", "Tab"], ["音量+", "↑"], ["音量−", "↓"]].map(function (r) {
+    [["截图", "⌘/Ctrl + Alt + S"], ["录制开关", "⌘/Ctrl + Alt + R"], ["旋转画面", "⌘/Ctrl + Alt + D"]].map(function (r) {
       return "<tr><td>" + r[0] + '</td><td><kbd class="kbd">' + r[1] + "</kbd></td></tr>";
     }).join("") + "</tbody></table></div></div>";
-  html += '<div style="display:flex;gap:8px"><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：导入配置">导入配置</button>' +
+  html += '<div class="card"><div class="card-head">测试面板</div><div class="card-body"><p class="hint">点面板获得焦点后按已映射的物理键，动作经 adb 注入到已授权设备；未映射的键不会发送。焦点在镜像窗口时由 scrcpy 直输。</p>' +
+    '<div class="card-section" style="margin-top:8px">等待按键…（演示）</div></div></div>';
+  html += '<div style="display:flex;gap:8px"><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：导入方案">导入方案</button>' +
     '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：打开键盘设置">打开键盘设置</button></div>';
   return html;
 }
 
 function vSchedule() {
-  var html = "";
+  // X10-146：补齐客户端已有的录制状态与运行日志入口（预览同样可演示）。
+  var html = '<div class="card"><div class="card-head">录制状态</div><div class="card-body"><dl class="kv-grid two">' +
+    [["录制", state.recording ? "进行中" : "未开始"],
+     ["计时", state.recording ? "<span id='rec-timer'>00:" + String(state.recSec || 0).padStart(2, "0") + "</span>" : "—"],
+     ["计划停止", "无"],
+     ["设备授权", "经既有会话，不绕过授权"]].map(function (p) {
+      return '<div class="kv"><dt>' + p[0] + "</dt><dd>" + p[1] + "</dd></div>";
+    }).join("") + "</dl></div></div>";
   if (state.schedulePlans.length === 0) {
     html += '<div class="card"><div class="empty hint">' +
       '<span class="empty-icon">' + ico("i-clock") + "</span><h3>还没有录制计划</h3>" +
@@ -1371,6 +1464,11 @@ function vSchedule() {
     '<button class="btn btn-primary" data-act="sched-add">添加计划</button>' +
     '<span class="field-error" id="sch-err" hidden></span></div>' +
     "</div></div></div>";
+  html += '<div class="card"><div class="card-head">运行日志</div><div class="card-body"><p class="hint">计划只在本应用运行时触发；到点若没有镜像会话或设备未授权，原因会写在这里，不会伪装成已录制。</p></div></div>';
+  html += '<div class="card"><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" data-act="record-start">开始录制</button>' +
+    '<button class="btn btn-secondary" data-act="record-stop">结束录制</button>' +
+    "</div></div></div>";
   return html;
 }
 /* 表单内提交按钮用 primary；页头「添加计划」为聚焦入口（btn-secondary） */
@@ -1396,12 +1494,22 @@ function vReplay() {
         '<span><input class="input mono" placeholder="按键" style="width:100%" id="rp-key-' + pi + '" aria-label="按键"></span>' +
         '<span><input class="input mono" placeholder="x, y" style="width:100%" id="rp-xy-' + pi + '" aria-label="坐标"></span>' +
         '<button class="btn btn-secondary btn-sm" data-act="step-add" data-arg="' + pi + '">添加</button></div>' +
-        '<div class="plan-foot"><button class="btn-ghost danger" data-act="plan-del" data-arg="replay:' + pi + '" style="margin-inline-start:auto">删除脚本</button></div></div>';
+        '<div class="plan-foot"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导出脚本">导出脚本</button>' +
+        '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导入脚本">导入脚本</button>' +
+        '<button class="btn-ghost danger" data-act="plan-del" data-arg="replay:' + pi + '" style="margin-inline-start:auto">删除脚本</button></div></div>';
     }).join("") + "</div>";
   }
+  if (state.replayScripts.length === 0) {
+    html += '<div class="action-row" style="margin-top:8px"><button class="btn btn-secondary btn-sm" disabled>导出脚本</button>' +
+      '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：导入脚本">导入脚本</button></div>';
+  }
+  html += '<div class="card"><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" data-act="toast" data-arg="原型演示：开始回放">开始回放</button>' +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：停止回放">停止</button>' +
+    "</div></div></div>";
   html += '<div class="details-block"><details class="card"><summary class="card-head" style="cursor:pointer">能力边界</summary>' +
     '<div class="card-body" style="font-size:var(--fs-12);color:var(--muted);line-height:var(--lh-body)">' +
-    "默认禁用操作回放，开启需二次确认；回放文件只保存在本机，不上传；回放期间设备端可见操作，不做静默注入。</div></details></div>";
+    "默认禁用操作回放，开启需二次确认；回放文件只保存在本机，不上传；回放期间设备端可见操作，不做静默注入。录制镜像窗口里的真实触控需要控制通道，尚未实现。</div></details></div>";
   return html;
 }
 
@@ -1425,7 +1533,15 @@ function vFiles() {
     "<small>" + (state.demo ? "推送后需在手机上确认接收" : "连接后可用") + "</small></button>" +
     '<p style="font-size:var(--fs-12);color:var(--muted);margin-top:12px">文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不会伪装成「没有文件」。</p>' +
     "</div></div>";
-  return '<div class="files-split" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">' + left + right + "</div>";
+  // X10-146：补齐客户端已有的手动剪贴板入口（两端都只在点按钮时读写）。
+  var clipboard = '<div class="card"><div class="card-head">剪贴板（手动）<span class="badge neutral">不自动监听</span></div><div class="card-body">' +
+    (state.demo
+      ? '<div class="alert alert-info" role="status"><div class="alert-text"><b>手机发来一段剪贴板文字</b><p class="hint">短信验证码：492817</p></div><div class="alert-actions"><button class="btn btn-primary btn-sm" data-act="toast" data-arg="原型演示：复制到本机剪贴板">复制到本机</button><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：忽略">忽略</button></div></div>'
+      : "") +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：发送本机剪贴板到手机">' + ico("i-copy") + "发送本机剪贴板到手机</button>" +
+    '<p class="hint">两端只在点按钮时读写，不后台监听、不上传；写手机剪贴板后手机会有系统提示。</p>' +
+    "</div></div>";
+  return '<div class="files-split" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">' + left + right + "</div>" + clipboard;
 }
 
 function vShot() {
@@ -1464,6 +1580,11 @@ function vRecord() {
   html += '<div class="card"><div class="card-head">录制参数</div><div class="card-body"><dl class="kv-grid two">' +
     kv.map(function (p) { return '<div class="kv"><dt>' + p[0] + "</dt><dd>" + p[1] + "</dd></div>"; }).join("") +
     "</dl></div></div>";
+  html += '<div class="card"><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-primary" data-act="record-start">开始录制</button>' +
+    '<button class="btn btn-secondary" data-act="record-stop">结束录制</button>' +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：打开录像文件夹">在文件夹中显示</button>' +
+    "</div></div></div>";
   html += '<p style="font-size:var(--fs-12);color:var(--muted)">不默认云录制，不读取手机本地录像文件；「结束录制」无确认，误停止可用 ⌘K 重新开始。</p>';
   return html;
 }
@@ -1493,8 +1614,8 @@ function vAlbum() {
     '<div class="card-body" style="padding-top:0">' + grid + "</div>" +
     '<div class="card-foot">' +
     '<button class="btn btn-secondary" data-act="album-fetch"' + (selCount === 0 ? " disabled title=\"请先选择缩略图\"" : "") + ">取回所选" + (selCount ? "（" + selCount + "）" : "") + "</button>" +
-    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：按日期建文件夹">按日期建文件夹</button>' +
-    '<span style="font-size:var(--fs-12);color:var(--muted)">取回中行级进度条可暂停；相册只读，不会修改手机内容</span></div></div>' +
+    '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：逐个取回本目录全部未取回文件">一键取回全部</button>' +
+    '<span style="font-size:var(--fs-12);color:var(--muted)">逐个取回、单个失败不阻断；相册只读，不会修改手机内容</span></div></div>' +
     alertBox("info", "i-eye", "相册为只读浏览；取回是唯一写操作，且只写入本机目录。", []);
 }
 
@@ -1503,10 +1624,8 @@ function vInstall() {
     '<button class="dropzone" data-act="install-add"' + (!state.demo ? ' data-locked="true" title="连接设备后可用"' : "") + ">" +
     ico("i-pkg") + "把 APK 拖到这里，或选择 APK（可多选）" +
     "<small>" + (state.demo ? "每台设备都需在手机上逐次确认，不做静默安装" : "连接设备后可用") + "</small></button>" +
-    '<div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">' +
-    '<span style="font-size:var(--fs-12);color:var(--muted)">确认方式</span>' +
-    '<select class="select" data-act="install-mode" aria-label="确认方式"><option value="phone">手机确认（每个安装包都在手机上确认）</option><option value="auth">仅授权包安装</option></select>' +
-    "</div></div></div>";
+    '<p class="hint" style="margin-top:12px">安装包逐个经 adb 安装，每台设备都需在手机上逐次确认；失败原因来自 adb 的真实输出，不做静默安装。</p>' +
+    "</div></div>";
   if (state.installQueue.length === 0) {
     html += '<div class="card">' + (state.demo
       ? emptyState("i-pkg", "安装队列为空", "选择 APK 后，队列会在这里显示解析与安装状态。", { label: "选择 APK", act: "install-add" })
@@ -1530,14 +1649,14 @@ function vInstall() {
 }
 
 function vApps() {
-  var html = '<div class="card"><div class="card-head">已安装应用（只读）' +
+  var html = '<div class="card"><div class="card-head">已安装应用' +
     '<span class="spacer"></span>' +
     '<span class="search-box">' + ico("i-search") + '<input type="search" placeholder="搜索应用名或包名" data-filter="apps" value="' + esc(state.appsQuery) + '" aria-label="搜索应用名或包名"></span>' +
-    '<select class="select" data-act="apps-sort" aria-label="排序"><option value="name">按名称</option><option value="size">按大小</option></select>' +
+    '<select class="select" data-act="apps-sort" aria-label="排序"><option value="name">按名称</option><option value="package">按包名</option></select>' +
     "</div>";
   if (!state.demo) {
     html += emptyState("i-apps", "尚未读取应用清单",
-      "连接设备并刷新后，这里会列出已安装应用。<br>连接后每行将提供：打开 / 卸载 / 停用。",
+      "连接设备并刷新后，这里会列出已安装应用。<br>连接后每行将提供：打开 / 卸载（卸载需显式确认）。",
       { label: "连接设备 →", act: "nav", view: "connect" });
   } else {
     var apps = state.apps.slice();
@@ -1545,16 +1664,16 @@ function vApps() {
       var q = state.appsQuery.toLowerCase();
       apps = apps.filter(function (a) { return (a.name + a.pkg).toLowerCase().indexOf(q) !== -1; });
     }
-    if (state.appsSort === "size") {
-      apps.sort(function (a, b) { return parseFloat(b.size) - parseFloat(a.size); });
+    if (state.appsSort === "package") {
+      apps.sort(function (a, b) { return a.pkg.localeCompare(b.pkg); });
     }
     html += '<div class="table-wrap"><table class="table">' +
-      '<thead><tr><th>应用</th><th data-col="secondary" data-mid-hide>包名</th><th data-col="meta">大小</th><th data-col="ops">操作</th></tr></thead><tbody>' +
+      '<thead><tr><th>应用</th><th data-col="secondary" data-mid-hide>包名</th><th data-col="meta">类型</th><th data-col="ops">操作</th></tr></thead><tbody>' +
       apps.map(function (a) {
         var idx = state.apps.indexOf(a);
-        return "<tr><td><span style='display:inline-flex;align-items:center;gap:8px'><span class='tool-ico' style='width:32px;height:32px'>" + esc(a.name[0]) + "</span><b>" + esc(a.name) + (a.sys ? ' <span class="badge neutral">系统</span>' : "") + "</b></span></td>" +
+        return "<tr><td><span style='display:inline-flex;align-items:center;gap:8px'><span class='tool-ico' style='width:32px;height:32px'>" + esc(a.name[0]) + "</span><b>" + esc(a.name) + "</b></span></td>" +
           '<td data-col="secondary" data-mid-hide><span class="mono" style="font-size:var(--fs-12);color:var(--muted)">' + esc(a.pkg) + "</span></td>" +
-          '<td data-col="meta">' + a.size + "</td>" +
+          '<td data-col="meta"><span class="badge neutral">' + (a.sys ? "系统" : "应用") + "</span></td>" +
           "<td data-col='ops'><button class='btn-ghost' data-act='toast' data-arg='原型演示：打开 " + esc(a.name) + "'>打开</button> " +
           "<button class='btn-ghost danger' data-act='app-uninstall' data-arg='" + idx + "'>卸载</button></td></tr>";
       }).join("");
@@ -1566,17 +1685,25 @@ function vApps() {
 }
 
 function vNotify() {
-  var html = '<div class="card"><div class="card-head">实时通知</div>';
+  // NectarLink 基准 §2.3：计数 + 清空卡头、验证码一键复制、单条清除 + 清除同步到手机。
+  var html = '<div class="card"><div class="card-head">实时通知' +
+    '<span class="badge neutral">' + state.notis.length + " 条</span><span class='spacer'></span>" +
+    (state.notis.length ? '<button class="btn-ghost danger" data-act="notify-clear">清空</button>' : "") + "</div>";
   if (state.notis.length === 0) {
     html += emptyState("i-bell", "暂无新通知",
-      state.demo ? "通知会实时出现在这里。" : "开启镜像并授权通知访问后，通知会实时出现在这里。", null);
+      state.demo ? "通知会实时出现在这里；每条提供复制验证码、快捷回复、打开应用与清除并同步到手机。" : "开启通知镜像并授权后，通知会实时出现在这里；每条提供复制验证码、快捷回复、打开应用与清除并同步到手机。", null);
   } else {
     html += state.notis.map(function (n, i) {
       return '<div class="notify-row"><span class="tool-ico">' + esc(n.icon) + "</span>" +
         '<div class="notify-body"><b>' + esc(n.app) + '</b><p class="notify-text">' + esc(n.text) + "</p>" +
-        '<details style="margin-top:4px"><summary class="btn-ghost" style="font-size:var(--fs-12)">快捷回复</summary>' +
-        '<div style="display:flex;gap:8px;margin-top:6px"><input class="input" placeholder="回复内容（发到手机）" style="flex:1"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：已发送快捷回复">发送</button></div></details></div>' +
-        "<time>" + n.time + "</time></div>";
+        '<div class="notify-inline">' +
+        (n.code ? '<button class="btn btn-secondary btn-sm" data-act="notify-copy" data-arg="' + esc(n.code) + '">' + ico("i-copy") + "复制验证码</button>" : "") +
+        '<button class="btn-ghost" data-act="toast" data-arg="原型演示：打开 ' + esc(n.app) + '">打开</button>' +
+        '<details><summary class="btn-ghost" style="font-size:var(--fs-12)">快捷回复</summary>' +
+        '<div style="display:flex;gap:8px;margin-top:6px"><input class="input" placeholder="回复内容（发到手机）" style="flex:1"><button class="btn btn-secondary btn-sm" data-act="toast" data-arg="原型演示：已发送快捷回复">发送</button></div></details>' +
+        "</div></div>" +
+        "<time>" + n.time + "</time>" +
+        '<button class="icon-btn" data-act="notify-dismiss" data-arg="' + i + '" aria-label="清除此通知 · 同步到手机">' + ico("i-x") + "</button></div>";
     }).join("");
   }
   html += "</div>";
@@ -1587,36 +1714,96 @@ function vNotify() {
 }
 
 function vSettings() {
+  // X10-144：与真实设置中心 1:1 对齐——7 组对应原 7 张设置卡，保留全部真实
+  // 设置项名称与说明；控件为静态演示，真实值在客户端里改。不用演示开关顶替真实项。
   function row(title, note, ctrl) {
-    return '<div class="settings-row"><div class="set-text"><b>' + title + "</b><small>" + note + "</small></div><div class='set-ctrl'>" + ctrl + "</div></div>";
+    return '<div class="settings-row"><div class="set-text"><b>' + title + '</b><small>' + note + '</small></div><div class="set-ctrl">' + ctrl + '</div></div>';
   }
   function sw(key) {
-    return '<button class="switch" role="switch" aria-checked="' + state.settings[key] + '" data-act="set-switch" data-arg="' + key + '" aria-label="' + key + '"></button>';
+    return '<button class="switch" role="switch" aria-checked="' + (!!state.settings[key]) + '" data-act="set-switch" data-arg="' + key + '" aria-label="' + key + '"></button>';
   }
-  var themeSwatches = THEME_ORDER.map(function (k) {
-    var t = THEMES[k];
-    return '<button class="theme-swatch" data-theme="' + k + '" data-act="theme-set" data-arg="' + k + '" aria-pressed="' + (state.theme === k) + '">' +
-      '<span class="swatch-strip">' + t.dots.map(function (c) { return '<i style="background:' + c + '"></i>'; }).join("") + "</span>" + t.name + "</button>";
-  }).join("");
-  return '<div class="card"><div class="card-head">外观主题</div><div class="card-body"><div class="theme-grid">' + themeSwatches + "</div></div></div>" +
-    '<div class="card"><div class="card-head">通用</div><div class="card-body tight">' +
-    row("开机自启", "随系统登录后启动 MirrorDock", sw("autoStart")) +
-    row("关闭时最小化到托盘", "点关闭按钮时不退出，保留后台连接", sw("minToTray")) +
-    row("检查更新", "仅校验签名包，不走遥测通道", sw("updateCheck")) +
-    "</div></div>" +
-    '<div class="card"><div class="card-head">镜像</div><div class="card-body tight">' +
-    row("默认画质", "会话内可随时切换", '<select class="select" aria-label="默认画质"><option>高清</option><option>流畅</option><option>演示</option></select>') +
-    row("桌面模式", "按设备记忆，插拔后恢复", sw("desktopMode")) +
-    "</div></div>" +
-    '<div class="card"><div class="card-head">传输</div><div class="card-body tight">' +
-    row("下载目录", "文件取回与截图保存位置", '<input class="input mono" style="width:240px;font-size:var(--fs-12)" value="MirrorDock/Download" readonly aria-label="下载目录">') +
-    row("传输后打开文件夹", "每次取回完成后在访达中显示", sw("openAfter")) +
-    "</div></div>" +
-    '<div class="card"><div class="card-head">隐私</div><div class="card-body tight">' +
-    row("通知持久化", "开启后通知正文写入本机数据库；不上传", sw("notifyPersist")) +
-    row("操作回放", "默认禁用；开启需二次确认", sw("replay")) +
-    row("遥测", "本版本无遥测字段", '<span class="badge ok">无遥测</span>') +
-    "</div></div>";
+  function hint(t) { return '<p class="hint" style="margin:10px 0 0">' + t + '</p>'; }
+  function sel(label, options) {
+    return '<select class="select" aria-label="' + label + '">' + options.map(function (o) { return '<option>' + o + '</option>'; }).join('') + '</select>';
+  }
+  var groups = [
+    ["appearance", "外观主题", "i-info", "5 套本机主题"],
+    ["general", "通用", "i-set", "启动 / 重连 / 停靠"],
+    ["mirror", "镜像窗口", "i-mirror", "画质 / 帧率 / 输入 / 录制"],
+    ["desktop", "设备与桌面模式", "i-phone", "每设备独立配置"],
+    ["shortcuts", "全局快捷键", "i-set", "截图 / 录制 / 旋转"],
+    ["license", "版本与授权", "i-shield", "专业版离线激活"],
+    ["about", "关于 MirrorDock", "i-info", "版本 / 许可 / 更新"]
+  ];
+  var nav = '<nav class="settings-nav" aria-label="设置分组">' + groups.map(function (g) {
+    return '<button class="settings-nav-item' + (state.settingsGroup === g[0] ? " active" : "") + '" data-act="settings-group" data-arg="' + g[0] + '">' +
+      ico(g[2]) + '<span class="settings-nav-text">' + g[1] + '<small>' + g[3] + '</small></span></button>';
+  }).join("") + "</nav>";
+  var body = "";
+  if (state.settingsGroup === "appearance") {
+    var themeSwatches = THEME_ORDER.map(function (k) {
+      var t = THEMES[k];
+      return '<button class="theme-swatch" data-theme="' + k + '" data-act="theme-set" data-arg="' + k + '" aria-pressed="' + (state.theme === k) + '">' +
+        '<span class="swatch-strip">' + t.dots.map(function (c) { return '<i style="background:' + c + '"></i>'; }).join("") + "</span>" + t.name + "</button>";
+    }).join("");
+    body = '<div class="card-head">外观主题</div><div class="card-body"><div class="theme-grid">' + themeSwatches + "</div>" +
+      hint("只改变这台电脑上的 MirrorDock 界面；连接、镜像、文件与授权完全不受影响。偏好只保存在本机浏览器存储中，不上传、不需要账号。") + "</div>";
+  } else if (state.settingsGroup === "general") {
+    body = '<div class="card-head">通用</div><div class="card-body tight">' +
+      row("开机自动启动 MirrorDock", "登录本机后自动运行，无需手动打开。", sw("autoStart")) +
+      row("隐藏 Dock 图标", "仅 macOS：只保留屏幕顶部菜单栏图标。", sw("hideDock")) +
+      row("断线自动重连", "镜像意外断开时自动等待恢复并重建（最多 15 分钟）；手动关闭镜像窗口不触发。", sw("autoReconnect")) +
+      hint("点窗口关闭按钮 = 最小化到菜单栏/托盘，不会结束镜像会话。") +
+      hint("画面黑屏（手机熄屏）时，在镜像窗口上点右键即可点亮屏幕。") + "</div>";
+  } else if (state.settingsGroup === "mirror") {
+    body = '<div class="card-head">镜像窗口 <span class="badge neutral">15 项真实设置</span></div><div class="card-body tight">' +
+      row("画质", "分辨率与码率越高越清晰，对电脑与手机性能要求也越高。", sel("画质", ["流畅 · 1024 / 2 Mbps", "均衡 · 1920 / 8 Mbps", "清晰 · 2560 / 16 Mbps"])) +
+      row("帧率上限", "默认跟随设备帧率；老手机卡顿时选 30，长会话省电选 24。", sel("帧率上限", ["跟随设备（不限）", "最高 60 帧", "最高 30 帧", "最高 24 帧（最省电）"])) +
+      row("使用手机后置摄像头画面", "把手机摄像头当电脑摄像头；不采集麦克风声音，与桌面模式互斥。", sw("cameraSource")) +
+      row("显示方向", "「自动」跟随手机旋转，横屏游戏自动转横屏。", sel("显示方向", ["自动（跟随手机）", "锁定 90°", "锁定 180°", "锁定 270°"])) +
+      row("全屏启动", "镜像窗口直接铺满整个屏幕。", sw("fullscreen")) +
+      row("窗口置顶", "镜像窗口始终浮在其他窗口上方。", sw("alwaysOnTop")) +
+      row("会话期间保持手机唤醒", "镜像中手机不熄屏不变暗；USB 与无线均生效，不伪造充电状态，结束即恢复。", sw("keepAwake")) +
+      row("启用视频录制", "专业版功能；何时开始/结束由工具页或快捷键决定，MP4 保存在本机视频目录。", sw("record")) +
+      row("录像保存位置", "默认本机视频目录下的 MirrorDock 文件夹。", '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="演示：选择录像文件夹">选择文件夹</button>') +
+      row("双向同步剪贴板", "镜像会话内电脑与手机直接复制粘贴。", sw("clipboardSync")) +
+      row("键盘直输（手机不弹全屏键盘）", "手机把电脑当外接键盘，只在底部留候选栏；更改后重启会话生效。", sw("keyboardUh") + '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="演示：打开手机键盘设置">手机键盘设置</button>') +
+      row("转发手机播放的声音", "声音在电脑播放、手机静音（Android 11+）；不支持的设备自动关闭。", sw("audio")) +
+      row("显示触摸点", "画面上显示点按位置，适合演示与录屏。", sw("showTouches")) +
+      row("只读模式", "电脑键鼠只看不控，避免误操作手机。", sw("readOnly")) +
+      row("镜像窗口快捷键修饰键", "窗口内 +H 主屏幕、+B 返回、+O 熄屏（镜像继续）等组合的修饰键。", sel("修饰键", ["默认（左 Alt / 左 Super）", "左 Ctrl", "右 Ctrl", "左 Alt", "右 Alt", "左 Super", "右 Super"])) +
+      hint("受保护内容（支付、密码页）会由系统屏蔽为黑屏；全局快捷键在「全局快捷键」分组自定义。") + "</div>";
+  } else if (state.settingsGroup === "desktop") {
+    body = '<div class="card-head">按设备设置 · 桌面模式 <span class="badge neutral">每设备独立</span></div><div class="card-body tight">' +
+      row("设置哪台设备", "所有已知设备（含未插线/未授权）都会列出，各设备互不影响。", sel("目标设备", ["小狸 · 已就绪", "平板 · 离线（已设置）", "备用机 · 未授权"])) +
+      '<div class="settings-row"><div class="set-text"><b>设备状态一览</b><small>点设备行即切换编辑对象；镜像中/未单独设置会标注。</small></div><div class="set-ctrl">' +
+        '<span class="badge ok">小狸 桌面模式 开</span> <span class="badge neutral">平板 关</span></div></div>' +
+      row("桌面模式（独立虚拟屏幕）", "Android 10+；手机端确认「显示在其他应用上层」。与摄像头画面互斥，重启会话生效。", sw("desktopMode")) +
+      row("虚拟屏启动的应用（可选）", "部分 MIUI 机型桌面在虚拟屏白屏时可指定应用包名；留空显示系统桌面。", '<input class="input mono" style="width:220px;font-size:var(--fs-12)" placeholder="com.android.browser" aria-label="虚拟屏启动的应用">') +
+      hint("没有检测到设备时，两项会作为全局默认保存，新设备首次接入前按它启动。") + "</div>";
+  } else if (state.settingsGroup === "shortcuts") {
+    body = '<div class="card-head">全局快捷键</div><div class="card-body tight">' +
+      row("截图", "镜像运行中全局生效，无需切回本窗口。", '<input class="input mono" style="width:220px" value="CommandOrControl+Alt+S" aria-label="截图快捷键">') +
+      row("录制开关", "Windows 用 Ctrl，macOS 用 ⌘。", '<input class="input mono" style="width:220px" value="CommandOrControl+Alt+R" aria-label="录制快捷键">') +
+      row("轮换方向", "修改立即保存，镜像运行中自动改用新组合。", '<input class="input mono" style="width:220px" value="CommandOrControl+Alt+D" aria-label="旋转快捷键">') +
+      hint("格式：修饰键+按键，如 Ctrl+Alt+S。至少一个修饰键加一个普通键。") + "</div>";
+  } else if (state.settingsGroup === "license") {
+    body = '<div class="card-head">版本与授权</div><div class="card-body tight">' +
+      row("许可证", "MD1-XXXXXX-XXXXXX-…；离线激活，只保存在本机，不需要联网账号。", '<input class="input mono" style="width:220px" placeholder="MD1-XXXXXX-XXXXXX-…" aria-label="许可证"><button class="btn btn-primary btn-sm" data-act="toast" data-arg="演示：离线激活专业版">激活专业版</button>') +
+      hint("免费版含全部镜像、截图与传输功能；专业版解锁 MP4 录制。") + "</div>";
+  } else {
+    body = '<div class="card-head">关于 MirrorDock</div><div class="card-body">' +
+      hint("当前版本：v0.4.8（测试版）") + hint("开发者：MirrorDock 项目（g-star1024），个人开源项目，欢迎提 Issue。") +
+      hint("开源许可：Apache-2.0。镜像引擎基于 scrcpy（Apache-2.0）；第三方声明见安装目录 THIRD_PARTY_NOTICES。") +
+      hint("隐私承诺：本地优先，画面与文件只经过数据线或局域网，不经过任何服务器。") +
+      hint("检查更新：发现新版本后自动下载安装，更新包经数字签名校验，重启即完成升级。") +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">' +
+        '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="演示：打开官网">打开官网</button>' +
+        '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="演示：打开 GitHub 仓库">GitHub 仓库</button>' +
+        '<button class="btn btn-secondary btn-sm" data-act="toast" data-arg="演示：检查更新">检查更新</button>' +
+      "</div></div>";
+  }
+  return '<div class="settings-split">' + nav + '<div class="card settings-card">' + body + "</div></div>";
 }
 
 function vHelp() {
@@ -1634,6 +1821,11 @@ function vHelp() {
       }).join("") + "</div>";
   }).join("");
   html += groups || '<div class="card"><div class="empty hint"><p style="max-width:none">没有匹配的帮助文章</p></div></div>';
+  // X10-146：帮助页补齐客户端已有的诊断包入口（正文不含剪贴板 / 口令 / 画面帧）。
+  html += '<div class="card"><div class="card-head">诊断包 <span class="badge neutral">仅本机 · 不上传</span></div><div class="card-body">' +
+    '<p class="hint">出现问题时可先预览内容，再导出为文件；诊断包不会自动上传，也不包含剪贴板、口令或画面帧。</p>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：预览诊断内容">预览诊断内容</button>' +
+    '<button class="btn btn-primary" data-act="toast" data-arg="原型演示：导出诊断包">导出为文件</button></div></div></div>';
   return html;
 }
 
@@ -2100,11 +2292,27 @@ function runAct(act, arg, btn) {
     }
     /* 通知 */
     case "notify-clear":
-      openModal({ id: "clear-notis", title: "清空 " + state.notis.length + " 条通知？", body: "<p>通知正文默认不持久化，清空后无法找回。</p>", okLabel: "清空", danger: true });
+      openModal({ id: "clear-notis", title: "清空 " + state.notis.length + " 条通知？", body: "<p>清空操作会同步到手机：两端通知一并移除，通知正文默认不持久化，无法找回。</p>", okLabel: "清空并同步手机", danger: true });
       break;
+    case "notify-copy":
+      // 演示态只提示；真实客户端由 Rust command 写入系统剪贴板，验证码不入日志。
+      showToast("已复制验证码 " + arg + "（演示）", { type: "ok" });
+      break;
+    case "notify-dismiss": {
+      var di = Number(arg);
+      var dn = state.notis[di];
+      state.notis.splice(di, 1);
+      render();
+      showToast("已清除「" + (dn ? dn.app : "通知") + "」并同步到手机（演示）", { type: "ok" });
+      break;
+    }
     case "notify-keep":
       state.notifyKeep = !state.notifyKeep;
       btn.setAttribute("aria-checked", String(state.notifyKeep));
+      break;
+    case "settings-group":
+      state.settingsGroup = arg;
+      render();
       break;
     /* 方案 / 计划 / 脚本 */
     case "plan-new": {

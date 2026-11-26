@@ -346,6 +346,34 @@ export type PhoneNotification = {
   replyable?: boolean;
 };
 
+/** P0-1：从通知正文保守提取一次性验证码。
+ * 只在出现明确的验证码语境（中文「验证码/校验码/动态码/一次性密码」或英文
+ * verification code / OTP）且其后 12 个字符内紧跟 4~8 位数字时才识别；
+ * 金额、手机号、订单号、普通数字串不会被误判为验证码。 */
+export function verificationCode(text: string): string | null {
+  if (!text) return null;
+  const match = /(?:验证码|校验码|动态码|一次性密码|verification\s*code|one[-\s]?time\s*(?:code|password)|\botp\b)[^\d\n]{0,12}(\d{4,8})(?!\d)/i.exec(text);
+  return match ? match[1] : null;
+}
+
+/** P0-1：复制验证码到系统剪贴板。优先 Web API，失败走 Rust 系统工具兜底。
+ * 返回成功与否；调用方提示语不得包含验证码明文。 */
+async function copyCodeToClipboard(code: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(code);
+      return true;
+    }
+  } catch {
+    // WebView 可能禁用 Web API，继续走 Rust 兜底。
+  }
+  try {
+    return await invoke<boolean>("copy_text_to_clipboard", { text: code });
+  } catch {
+    return false;
+  }
+}
+
 /** 通知时间展示：当天的只显示时刻，跨天带日期。 */
 export function notificationTime(posted: number, now: number = Date.now()): string {
   const date = new Date(posted);
@@ -712,6 +740,20 @@ const stateCopy: Record<DeviceState, { label: string; detail: string }> = {
 type TabKey = "home" | "tools" | "wireless" | "settings" | "help";
 const LEGACY_VIEWS = new Set<AssistantViewKey>(["home", "connect", "settings", "help"]);
 
+// X10-144：设置中心二级分组导航。每一项对应一个既存设置卡；卡片 DOM 与事件
+// 绑定保持原样，只由 CSS 控制显隐——切换分组不丢输入内容、不卸载任何控件。
+// 铁律：新版本必须保留设置中心的全部真实设置项，不允许用演示开关替换。
+type SettingsGroupKey = "appearance" | "general" | "mirror" | "desktop" | "shortcuts" | "license" | "about";
+const SETTINGS_GROUPS: { key: SettingsGroupKey; label: string; note: string }[] = [
+  { key: "appearance", label: "外观主题", note: "5 套本机主题" },
+  { key: "general", label: "通用", note: "启动 / 重连 / 停靠" },
+  { key: "mirror", label: "镜像窗口", note: "画质 / 帧率 / 输入 / 录制" },
+  { key: "desktop", label: "按设备 · 桌面模式", note: "每设备独立配置" },
+  { key: "shortcuts", label: "全局快捷键", note: "截图 / 录制 / 旋转" },
+  { key: "license", label: "版本与授权", note: "专业版离线激活" },
+  { key: "about", label: "关于 MirrorDock", note: "版本 / 许可 / 更新" },
+];
+
 // 顶栏主题菜单的小色点：取各主题的签名色（重设计 v2.5）。
 const THEME_DOT: Record<UiThemeKey, string> = {
   a: "#4a7cf3",
@@ -723,7 +765,8 @@ const THEME_DOT: Record<UiThemeKey, string> = {
 
 // 命令面板里可执行的页头过滤视图：这些页面才有可筛选的表格行。
 const FILTERABLE_VIEWS = new Set<AssistantViewKey>([
-  "multi", "mirror", "keymap", "replay", "apps", "shot", "album", "notify", "help",
+  // X10-146：应用管理的筛选框改为预览同款「卡头搜索」，与表格同属一张卡。
+  "multi", "mirror", "keymap", "replay", "shot", "album", "notify", "help",
 ]);
 
 // Context Panel（右栏）只在设备相关的视图渲染（重设计 §4：右栏从全量降级为情境面板）。
@@ -805,6 +848,8 @@ function App() {
   // tab 只保留给仍使用原有完整面板的「连接 / 设置 / 帮助」等页面。
   const [view, setView] = useState<AssistantViewKey>("home");
   const [viewFilter, setViewFilter] = useState("");
+  // X10-146：应用管理按预览在卡头提供名称 / 包名排序；只影响展示顺序。
+  const [appsSort, setAppsSort] = useState<"name" | "package">("name");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(ASSISTANT_GROUPS.map((group) => [group.name, group.openByDefault])),
   );
@@ -815,6 +860,8 @@ function App() {
   const [cmdkIndex, setCmdkIndex] = useState(0);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  // X10-144：设置中心二级分组（默认外观，与原设置页首屏一致）。
+  const [settingsGroup, setSettingsGroup] = useState<SettingsGroupKey>("appearance");
 
   function openView(next: AssistantViewKey) {
     setView(next);
@@ -963,6 +1010,11 @@ function App() {
   const [companionCrashExpanded, setCompanionCrashExpanded] = useState(false);
   // X10-66 通知镜像：手机转来的通知（最新在前，最多 50 条，仅内存）。
   const [phoneNotifications, setPhoneNotifications] = useState<PhoneNotification[]>([]);
+  /** P0-1/P0-2：不含验证码明文的提示语（明文一律不进 state 之外的任何地方）。 */
+  const [notifyNotice, setNotifyNotice] = useState<string | null>(null);
+  /** P0-3：手机发来的剪贴板文字，用户点「复制」才写入系统剪贴板。 */
+  const [incomingClipboard, setIncomingClipboard] = useState<string | null>(null);
+  const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
   // X10-133 本机保留：默认关闭（通知仍只在内存）；开启后通知列表写本机
   // localStorage，重启应用后恢复。关闭即清除已存记录，不上传。
   const [notifyKeep, setNotifyKeep] = useState<boolean>(() => {
@@ -1043,6 +1095,51 @@ function App() {
       setNotifReplyBusy(null);
     }
   }
+  // P0-1：复制验证码。提示语不含明文；复制失败明确报错，不伪装成功。
+  async function copyNotificationCode(code: string) {
+    setNotifyNotice(null);
+    const ok = await copyCodeToClipboard(code);
+    setNotifyNotice(ok ? "验证码已复制到本机剪贴板。" : "复制失败：浏览器与系统剪贴板均不可用，请手动选中复制。");
+  }
+
+  // P0-2：清除通知同步到手机。手机不在线时保留本地列表并说明原因，
+  // 绝不先清本地再假装"已同步"——避免用户误以为手机也清了。
+  async function clearNotifications(key?: string) {
+    setNotifyNotice(null);
+    try {
+      const sent = await invoke<boolean>("companion_notification_clear", key ? { key } : {});
+      if (!sent) {
+        setNotifyNotice("手机伴侣常驻连接不在线，未清除通知；请确认手机在线后重试。");
+        return;
+      }
+      setPhoneNotifications((prev) => (key ? prev.filter((n) => n.key !== key) : []));
+      setNotifyNotice(key ? "已清除该通知，手机同步移除。" : "已清空通知，手机同步移除。");
+    } catch (error) {
+      setNotifyNotice(errorMessage(error, "清除失败，请稍后再试。"));
+    }
+  }
+
+  // P0-3 电脑→手机：用户点按钮才读本机系统剪贴板并下发，不自动监听。
+  async function sendClipboardToPhone() {
+    setClipboardNotice(null);
+    try {
+      const result = await invoke<boolean | null>("companion_clipboard_send");
+      if (result === null) setClipboardNotice("本机剪贴板没有可发送的文字。");
+      else if (result === false) setClipboardNotice("手机常驻连接不在线，未发送；请确认手机在线后重试。");
+      else setClipboardNotice("已发送剪贴板文字到手机。");
+    } catch (error) {
+      setClipboardNotice(errorMessage(error, "发送失败，请稍后再试。"));
+    }
+  }
+
+  // P0-3 手机→电脑：手机发来的文字只在内存；用户点「复制」才写入系统剪贴板。
+  async function acceptIncomingClipboard() {
+    if (!incomingClipboard) return;
+    const ok = await copyCodeToClipboard(incomingClipboard);
+    setClipboardNotice(ok ? "已写入本机剪贴板。" : "写入剪贴板失败，请手动选中文字复制。");
+    if (ok) setIncomingClipboard(null);
+  }
+
   // 版本与授权：读取失败时按「版本未知」呈现，不阻断镜像主流程。
   const [entitlement, setEntitlement] = useState<EntitlementView | null>(null);
   const [licenseInput, setLicenseInput] = useState("");
@@ -3312,6 +3409,18 @@ function App() {
     if (!hasTauri) return;
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    // P0-3：手机前台点「发送剪贴板到电脑」后上行的文字。只进内存，
+    // 用户点「复制」才写入系统剪贴板——不自动替换用户剪贴板（可见可撤销）。
+    let unlistenClipboard: (() => void) | null = null;
+    void listen<{ text: string }>("companion-clipboard", (event) => {
+      if (!disposed && event.payload && typeof event.payload.text === "string") {
+        setIncomingClipboard(event.payload.text);
+        setClipboardNotice(null);
+      }
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlistenClipboard = dispose;
+    });
     void listen("companion-files-changed", () => {
       if (!disposed) setFilesChangedHint(Date.now());
     })
@@ -3322,6 +3431,7 @@ function App() {
     return () => {
       disposed = true;
       if (unlisten) unlisten();
+      if (unlistenClipboard) unlistenClipboard();
     };
   }, []);
   // 收到新文件事件后的实际动作：**无条件加载列表**，不再要求用户先点过一次按钮。
@@ -3464,7 +3574,11 @@ function App() {
     ? displayLabels[readyDevice.serial] ?? readyDevice.label
     : null;
   const appsTargetSerial = transferDeviceSerial ?? readySerial ?? sessionSerial;
-  const visibleDeviceApps = deviceApps[appsTargetSerial ?? ""] ?? [];
+  const visibleDeviceApps = [...(deviceApps[appsTargetSerial ?? ""] ?? [])].sort((a, b) =>
+    appsSort === "package"
+      ? a.package.localeCompare(b.package)
+      : (a.name || a.package).localeCompare(b.name || b.package),
+  );
 
   useEffect(() => {
     if (view !== "apps" || !appsTargetSerial) return;
@@ -3531,7 +3645,8 @@ function App() {
         if (appsTargetSerial) void ensureDeviceApps(appsTargetSerial);
         break;
       case "notify":
-        setPhoneNotifications([]);
+        // P0-2：页头「清空通知」走同步命令，手机不在线时不清本地、明确提示。
+        void clearNotifications();
         break;
       case "settings":
         openView("settings");
@@ -3611,7 +3726,7 @@ function App() {
                 <span key={device.serial} className="assistant-row-actions">
                   <button
                     type="button"
-                    className="assistant-btn primary sm"
+                    className="btn btn-primary btn-sm"
                     disabled={device.state !== "ready" || isLaunching || launchingSerial === device.serial}
                     onClick={() => void startMirroring(device.serial)}
                   >
@@ -3619,7 +3734,7 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    className="assistant-btn sm"
+                    className="btn btn-secondary btn-sm"
                     disabled={device.state !== "ready" || screenshotBusy}
                     onClick={() => void captureScreen(device.serial)}
                   >
@@ -3655,7 +3770,13 @@ function App() {
         ];
       case "mirror":
         return [
-          { kind: "phone", title: "镜像会话", tone: 1, children: <div className="assistant-phone-state"><strong>{statusMessage ?? "尚未开始镜像"}</strong><span>{session ? `阶段：${session.phase} · 首帧：${session.first_frame === "reached" ? "已到达" : "未确认"}` : "设备授权后即可开始"}</span></div> },
+          { kind: "phone", title: "镜像画面", tone: 1, children: (
+            <div className="assistant-phone-state">
+              <span className={`dot ${sessionActive ? "busy" : "off"}`} aria-hidden="true" />
+              <strong>{statusMessage ?? "尚未开始镜像"}</strong>
+              <span>{session ? `阶段：${session.phase} · 首帧：${session.first_frame === "reached" ? "已到达" : "未确认"}` : "设备授权后即可开始"}</span>
+            </div>
+          ) },
           {
             kind: "kv",
             title: "会话参数",
@@ -3681,14 +3802,16 @@ function App() {
       case "present":
         return [
           {
-            kind: "kv",
-            title: "演示就绪检查",
+            kind: "checklist",
+            title: "就绪检查",
             tone: 3,
             items: [
-              ["目标设备", readyDevice ? (displayLabels[readyDevice.serial] ?? readyDevice.label) : "未连接手机"],
-              ["镜像引擎", scrcpyReady ? "就绪" : "不可用"],
-              ["桌面模式", options.desktop_mode ? "开启" : "关闭"],
-              ["活动会话", activeSessionCount > 0 ? `${activeSessionCount} 台进行中` : "未开始"],
+              { label: "目标设备已连接", ok: !!readyDevice, why: readyDevice ? (displayLabels[readyDevice.serial] ?? readyDevice.label) : (
+                <>未连接手机 <button type="button" className="btn-ghost" onClick={() => openView("connect")}>去连接</button></>
+              ) },
+              { label: "镜像引擎可用", ok: scrcpyReady, why: scrcpyReady ? "scrcpy 4.1" : "不可用" },
+              { label: "桌面模式", ok: true, why: options.desktop_mode ? "开启" : "关闭" },
+              { label: "活动会话", ok: activeSessionCount > 0, why: activeSessionCount > 0 ? `${activeSessionCount} 台进行中` : "未开始" },
             ],
           },
           {
@@ -3718,115 +3841,113 @@ function App() {
           {
             kind: "custom",
             children: (
-              <section className="assistant-card assistant-tone-6">
-                <h4>键位映射方案</h4>
-                <div className="assistant-chip-row" role="group" aria-label="映射方案">
-                  {keymaps.profiles.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`assistant-chip${keymaps.activeId === item.id ? " active" : ""}`}
-                      onClick={() => persistKeymaps({ ...keymaps, activeId: item.id })}
-                    >
-                      {item.name}
-                    </button>
-                  ))}
-                  <button type="button" className="assistant-chip" onClick={createKeymapProfile}>＋ 新建方案</button>
+              <section className="card">
+                <div className="card-head"><h3 className="card-title">键位映射方案</h3><span className="spacer" /></div>
+                <div className="card-body">
+                  <div className="assistant-chip-row" role="group" aria-label="映射方案">
+                    {keymaps.profiles.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`chip${keymaps.activeId === item.id ? " active" : ""}`}
+                        onClick={() => persistKeymaps({ ...keymaps, activeId: item.id })}
+                      >
+                        {item.name}
+                      </button>
+                    ))}
+                    <button type="button" className="chip" onClick={createKeymapProfile}>＋ 新建方案</button>
+                  </div>
+                  {profile ? (
+                    <div className="plan-grid" style={{ marginTop: 12 }}>
+                      <article className="plan-card">
+                        <h4>{profile.name}<span className="badge neutral">{profile.bindings.length} 步</span></h4>
+                        {profile.bindings.length > 0 ? profile.bindings.map((binding) => (
+                          <div className="step-row" key={binding.physicalKey}>
+                            <span>{binding.label}</span>
+                            <span className="mono"><kbd className="kbd">{binding.label}</kbd></span>
+                            <span className="mono">{describeAction(binding.action)}</span>
+                            <span className="detail-ops">
+                              <button type="button" className="btn-ghost" disabled={!readyDevice} onClick={() => void testBinding(binding)}>测试</button>
+                              <button type="button" className="btn-ghost danger" onClick={() => removeKeymapBinding(binding.physicalKey)}>删除</button>
+                            </span>
+                          </div>
+                        )) : <p className="hint">这个方案还没有映射条目；在下方添加。</p>}
+                        <div className="detail-row">
+                          <button
+                            type="button"
+                            className={`btn btn-sm${capturingKey ? " btn-primary" : " btn-secondary"}`}
+                            onClick={() => setCapturingKey(true)}
+                          >
+                            {capturingKey ? "请按下任意键…" : capturedKey ? `物理键：${capturedKey.label}` : "捕获按键"}
+                          </button>
+                          <select className="select" value={newActionKind} onChange={(event) => setNewActionKind(event.target.value as typeof newActionKind)} aria-label="注入动作类型">
+                            <option value="key">按键</option>
+                            <option value="tap">点击</option>
+                            <option value="swipe">滑动</option>
+                          </select>
+                          {newActionKind === "key" && (
+                            <select className="select" value={newKeycode} onChange={(event) => setNewKeycode(event.target.value)} aria-label="Android 按键码">
+                              {INJECTABLE_KEYCODES.map((item) => (
+                                <option key={item.value} value={item.value}>{item.label}</option>
+                              ))}
+                            </select>
+                          )}
+                          {newActionKind === "tap" && (
+                            <span className="detail-row">
+                              X <input className="input mono" style={{ width: 64 }} value={draftTap.x} onChange={(event) => setDraftTap({ ...draftTap, x: event.target.value })} inputMode="numeric" aria-label="点击 X 坐标" />
+                              Y <input className="input mono" style={{ width: 64 }} value={draftTap.y} onChange={(event) => setDraftTap({ ...draftTap, y: event.target.value })} inputMode="numeric" aria-label="点击 Y 坐标" />
+                            </span>
+                          )}
+                          {newActionKind === "swipe" && (
+                            <span className="detail-row">
+                              起 X <input className="input mono" style={{ width: 58 }} value={draftSwipe.x1} onChange={(event) => setDraftSwipe({ ...draftSwipe, x1: event.target.value })} inputMode="numeric" aria-label="滑动起点 X" />
+                              Y <input className="input mono" style={{ width: 58 }} value={draftSwipe.y1} onChange={(event) => setDraftSwipe({ ...draftSwipe, y1: event.target.value })} inputMode="numeric" aria-label="滑动起点 Y" />
+                              终 X <input className="input mono" style={{ width: 58 }} value={draftSwipe.x2} onChange={(event) => setDraftSwipe({ ...draftSwipe, x2: event.target.value })} inputMode="numeric" aria-label="滑动终点 X" />
+                              Y <input className="input mono" style={{ width: 58 }} value={draftSwipe.y2} onChange={(event) => setDraftSwipe({ ...draftSwipe, y2: event.target.value })} inputMode="numeric" aria-label="滑动终点 Y" />
+                              时长 <input className="input mono" style={{ width: 72 }} value={draftSwipe.duration} onChange={(event) => setDraftSwipe({ ...draftSwipe, duration: event.target.value })} inputMode="numeric" aria-label="滑动时长毫秒" />
+                            </span>
+                          )}
+                          <button type="button" className="btn btn-primary btn-sm" onClick={addKeymapBinding}>添加到方案</button>
+                        </div>
+                        {keymapError && <p className="field-error" role="alert">{keymapError}</p>}
+                        {keymapNotice && <p className="hint" role="status">{keymapNotice}</p>}
+                        <div className="plan-foot">
+                          {/* X10-140：方案备份与迁移，走本机 .json 文件。 */}
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportKeymaps()}>导出方案</button>
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void importKeymaps()}>导入方案</button>
+                          <button type="button" className="btn-ghost danger" style={{ marginInlineStart: "auto" }} onClick={() => deleteKeymapProfile(profile.id)}>删除方案</button>
+                        </div>
+                      </article>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="alert alert-info" style={{ marginTop: 12 }}>
+                        <div className="alert-text">{keymaps.profiles.length > 0 ? `本机已恢复 ${keymaps.profiles.length} 个方案；点方案名选中后编辑。` : "还没有映射方案；点「＋ 新建方案」开始编排。"}</div>
+                      </div>
+                      <div className="assistant-action-row" style={{ marginTop: 8 }}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportKeymaps()} disabled={keymaps.profiles.length === 0}>导出方案</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void importKeymaps()}>导入方案</button>
+                      </div>
+                    </>
+                  )}
                 </div>
-                {profile && (
-                  <div className="assistant-chip-row">
-                    <button type="button" className="assistant-btn" onClick={() => deleteKeymapProfile(profile.id)}>删除「{profile.name}」</button>
-                    {/* X10-140：方案备份与迁移，走本机 .json 文件。 */}
-                    <button type="button" className="assistant-btn" onClick={() => void exportKeymaps()}>导出方案</button>
-                    <button type="button" className="assistant-btn" onClick={() => void importKeymaps()}>导入方案</button>
-                  </div>
-                )}
-                {!profile && (
-                  <div className="assistant-chip-row">
-                    <button type="button" className="assistant-btn" onClick={() => void exportKeymaps()} disabled={keymaps.profiles.length === 0}>导出方案</button>
-                    <button type="button" className="assistant-btn" onClick={() => void importKeymaps()}>导入方案</button>
-                  </div>
-                )}
-                {!profile && <p className="assistant-note">{keymaps.profiles.length > 0 ? `本机已恢复 ${keymaps.profiles.length} 个方案；点方案名选中后编辑。` : "还没有映射方案；点「＋ 新建方案」开始编排。"}</p>}
               </section>
             ),
           },
-          ...(profile ? [
-            {
-              kind: "table" as const,
-              title: `映射条目 · ${profile.name}`,
-              tone: 6,
-              columns: ["物理键", "注入动作", "操作"],
-              rows: profile.bindings.map((binding) => ({
-                cells: [
-                  binding.label,
-                  describeAction(binding.action),
-                  <span key={binding.physicalKey}>
-                    <button type="button" className="assistant-link" disabled={!readyDevice} onClick={() => void testBinding(binding)}>发送测试</button>
-                    {" · "}
-                    <button type="button" className="assistant-link" onClick={() => removeKeymapBinding(binding.physicalKey)}>删除</button>
-                  </span>,
-                ],
-                filterText: `${binding.label} ${describeAction(binding.action)}`,
-              })),
-              empty: "这个方案还没有映射条目；在下方添加。",
-            },
-            {
-              kind: "custom" as const,
-              children: (
-                <section className="assistant-card assistant-tone-6">
-                  <h4>添加映射</h4>
-                  <div className="assistant-form-grid">
-                    <button type="button" className={`assistant-btn${capturingKey ? " primary" : ""}`} onClick={() => setCapturingKey(true)}>
-                      {capturingKey ? "请按下任意键…" : capturedKey ? `物理键：${capturedKey.label}` : "捕获按键"}
-                    </button>
-                    <select className="assistant-select" value={newActionKind} onChange={(event) => setNewActionKind(event.target.value as typeof newActionKind)} aria-label="注入动作类型">
-                      <option value="key">按键</option>
-                      <option value="tap">点击</option>
-                      <option value="swipe">滑动</option>
-                    </select>
-                    {newActionKind === "key" && (
-                      <select className="assistant-select" value={newKeycode} onChange={(event) => setNewKeycode(event.target.value)} aria-label="Android 按键码">
-                        {INJECTABLE_KEYCODES.map((item) => (
-                          <option key={item.value} value={item.value}>{item.label}</option>
-                        ))}
-                      </select>
-                    )}
-                    {newActionKind === "tap" && (
-                      <span className="assistant-coord-inputs">
-                        X <input className="assistant-mini-input" value={draftTap.x} onChange={(event) => setDraftTap({ ...draftTap, x: event.target.value })} inputMode="numeric" aria-label="点击 X 坐标" />
-                        Y <input className="assistant-mini-input" value={draftTap.y} onChange={(event) => setDraftTap({ ...draftTap, y: event.target.value })} inputMode="numeric" aria-label="点击 Y 坐标" />
-                      </span>
-                    )}
-                    {newActionKind === "swipe" && (
-                      <span className="assistant-coord-inputs">
-                        起 X <input className="assistant-mini-input" value={draftSwipe.x1} onChange={(event) => setDraftSwipe({ ...draftSwipe, x1: event.target.value })} inputMode="numeric" aria-label="滑动起点 X" />
-                        Y <input className="assistant-mini-input" value={draftSwipe.y1} onChange={(event) => setDraftSwipe({ ...draftSwipe, y1: event.target.value })} inputMode="numeric" aria-label="滑动起点 Y" />
-                        终 X <input className="assistant-mini-input" value={draftSwipe.x2} onChange={(event) => setDraftSwipe({ ...draftSwipe, x2: event.target.value })} inputMode="numeric" aria-label="滑动终点 X" />
-                        Y <input className="assistant-mini-input" value={draftSwipe.y2} onChange={(event) => setDraftSwipe({ ...draftSwipe, y2: event.target.value })} inputMode="numeric" aria-label="滑动终点 Y" />
-                        时长(ms) <input className="assistant-mini-input" value={draftSwipe.duration} onChange={(event) => setDraftSwipe({ ...draftSwipe, duration: event.target.value })} inputMode="numeric" aria-label="滑动时长毫秒" />
-                      </span>
-                    )}
-                    <button type="button" className="assistant-btn primary" onClick={addKeymapBinding}>添加到方案</button>
-                  </div>
-                  {keymapError && <p className="assistant-note" role="alert">{keymapError}</p>}
-                  {keymapNotice && <p className="assistant-note" role="status">{keymapNotice}</p>}
-                </section>
-              ),
-            },
-            {
-              kind: "custom" as const,
-              children: (
-                <section className="assistant-card assistant-tone-6">
-                  <h4>测试面板</h4>
+          {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head"><h3 className="card-title">测试面板</h3><span className="spacer" /></div>
+                <div className="card-body">
                   <div className="assistant-capture-zone" tabIndex={0} role="group" aria-label="按键测试面板" onKeyDown={handleTestPanelKeyDown}>
                     <p>点这里获得焦点，然后按已映射的物理键——动作会通过 adb 注入到「{currentDeviceLabel ?? "已授权设备"}」。未映射的键不会发送。</p>
-                    {lastInjected && <p className="assistant-note" role="status">{lastInjected}</p>}
+                    {lastInjected && <p className="hint" role="status">{lastInjected}</p>}
                   </div>
-                </section>
-              ),
-            },
-          ] : []),
+                </div>
+              </section>
+            ),
+          },
           { kind: "actions", actions: [{ label: "打开键盘设置", onClick: () => readySerial ? void openKeyboardSettings() : openView("connect") }] },
           { kind: "note", text: "映射方案只保存在本机；焦点在镜像窗口时键盘输入由 scrcpy 直输处理，映射注入在这个测试面板聚焦时生效。触控注入走 adb，待真机验证。" },
         ];
@@ -3835,35 +3956,51 @@ function App() {
         return [
           { kind: "kv", title: "录制状态", tone: 4, items: [["录制", recording?.active ? "进行中" : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["计划停止", planStopRef.current ? new Date(planStopRef.current.at).toLocaleTimeString() : "无"], ["设备授权", "录制经既有会话，不绕过授权"]] },
           {
+            kind: "table",
+            title: recordPlans.length > 0 ? `录制计划 · ${recordPlans.length}` : "录制计划",
+            tone: 4,
+            columns: ["名称", "时间", "时长", "状态", "操作"],
+            rows: recordPlans.map((plan) => ({
+              cells: [
+                plan.name,
+                `每天 ${plan.time}`,
+                `${plan.durationMin} 分钟`,
+                <span className={`badge ${plan.enabled ? "ok" : "neutral"}`}>{plan.enabled ? "启用" : "暂停"}</span>,
+                <span key={plan.id} className="detail-ops">
+                  <button type="button" className="btn btn-secondary btn-sm" aria-pressed={plan.enabled} onClick={() => toggleRecordPlan(plan.id)}>{plan.enabled ? "暂停" : "启用"}</button>
+                  <button type="button" className="btn-ghost danger" aria-label={`删除计划：${plan.name}`} onClick={() => removeRecordPlan(plan.id)}>删除</button>
+                </span>,
+              ],
+              filterText: `${plan.name} ${plan.time}`,
+            })),
+            empty: "还没有录制计划；填写下方表单添加。",
+          },
+          {
             kind: "custom",
             children: (
-              <section className="assistant-card assistant-tone-4">
-                <h4>录制计划</h4>
-                <div className="assistant-chip-row" role="group" aria-label="录制计划">
-                  {recordPlans.map((plan) => (
-                    <span key={plan.id} className={`assistant-plan-chip${plan.enabled ? " active" : ""}`}>
-                      <button type="button" className="assistant-chip-toggle" aria-pressed={plan.enabled} onClick={() => toggleRecordPlan(plan.id)}>{plan.name} · {plan.time} · {plan.durationMin}分钟{plan.enabled ? "" : "（停用）"}</button>
-                      <button type="button" className="assistant-chip-remove" aria-label={`删除计划：${plan.name}`} onClick={() => removeRecordPlan(plan.id)}>×</button>
-                    </span>
-                  ))}
-                  {recordPlans.length === 0 && <p className="assistant-note">还没有录制计划；填写下方表单添加。</p>}
+              <section className="card">
+                <div className="card-head"><h3 className="card-title">添加计划</h3><span className="spacer" /></div>
+                <div className="card-body">
+                  <form className="detail-row" aria-label="添加录制计划" onSubmit={(event) => { event.preventDefault(); addRecordPlan(); }}>
+                    <input className="input grow" aria-label="计划名称" placeholder="计划名称" value={draftPlan.name} onChange={(e) => setDraftPlan({ ...draftPlan, name: e.target.value })} />
+                    <input className="input" aria-label="开始时间" type="time" value={draftPlan.time} onChange={(e) => setDraftPlan({ ...draftPlan, time: e.target.value })} />
+                    <input className="input" style={{ width: 88 }} aria-label="时长（分钟）" type="number" min={1} max={240} value={draftPlan.duration} onChange={(e) => setDraftPlan({ ...draftPlan, duration: e.target.value })} />
+                    <button type="submit" className="btn btn-primary btn-sm">添加计划</button>
+                  </form>
+                  {planRunLog.length > 0 && (
+                    <div className="card-section" style={{ marginTop: 12 }}>
+                      <strong>计划运行日志</strong>
+                      <ul className="assistant-note-list" aria-label="计划运行日志">
+                        {planRunLog.map((entry, index) => (
+                          <li key={`${entry.at}-${index}`}>
+                            <span className="assistant-muted">{new Date(entry.at).toLocaleTimeString()} · {entry.planName}</span>
+                            <span className={entry.error ? "assistant-error-text" : ""}>{entry.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
-                <form className="assistant-form-row" aria-label="添加录制计划" onSubmit={(event) => { event.preventDefault(); addRecordPlan(); }}>
-                  <input aria-label="计划名称" placeholder="名称" value={draftPlan.name} onChange={(e) => setDraftPlan({ ...draftPlan, name: e.target.value })} />
-                  <input aria-label="开始时间" type="time" value={draftPlan.time} onChange={(e) => setDraftPlan({ ...draftPlan, time: e.target.value })} />
-                  <input aria-label="时长（分钟）" type="number" min={1} max={240} value={draftPlan.duration} onChange={(e) => setDraftPlan({ ...draftPlan, duration: e.target.value })} />
-                  <button type="submit" className="assistant-btn primary sm">添加计划</button>
-                </form>
-                {planRunLog.length > 0 && (
-                  <ul className="assistant-note-list" aria-label="计划运行日志">
-                    {planRunLog.map((entry, index) => (
-                      <li key={`${entry.at}-${index}`}>
-                        <span className="assistant-muted">{new Date(entry.at).toLocaleTimeString()} · {entry.planName}</span>
-                        <span className={entry.error ? "assistant-error-text" : ""}>{entry.text}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </section>
             ),
           },
@@ -3876,106 +4013,96 @@ function App() {
           {
             kind: "custom",
             children: (
-              <section className="assistant-card assistant-tone-8">
-                <h4>回放脚本</h4>
-                <div className="assistant-chip-row" role="group" aria-label="回放脚本">
-                  {replays.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`assistant-chip${activeReplayId === item.id ? " active" : ""}`}
-                      onClick={() => setActiveReplayId(item.id)}
-                    >
-                      {item.name}
-                    </button>
-                  ))}
-                  <button type="button" className="assistant-chip" onClick={createReplayScript}>＋ 新建脚本</button>
+              <section className="card">
+                <div className="card-head"><h3 className="card-title">回放脚本</h3><span className="spacer" /></div>
+                <div className="card-body">
+                  <div className="assistant-chip-row" role="group" aria-label="回放脚本">
+                    {replays.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`chip${activeReplayId === item.id ? " active" : ""}`}
+                        onClick={() => setActiveReplayId(item.id)}
+                      >
+                        {item.name}
+                      </button>
+                    ))}
+                    <button type="button" className="chip" onClick={createReplayScript}>＋ 新建脚本</button>
+                  </div>
+                  {script ? (
+                    <div className="plan-grid" style={{ marginTop: 12 }}>
+                      <article className="plan-card">
+                        <h4>{script.name}<span className="badge neutral">{script.steps.length} 步</span></h4>
+                        {script.steps.length > 0 ? script.steps.map((step, index) => (
+                          <div className="step-row" key={`${step.kind}-${index}`}>
+                            <span>{index + 1} · {describeStep(step)}</span>
+                            <span className="mono">{replayStatus?.[index] ?? "—"}</span>
+                            <span className="mono" />
+                            <span className="detail-ops">
+                              <button type="button" className="btn-ghost" onClick={() => moveReplayStep(index, -1)} disabled={index === 0}>上移</button>
+                              <button type="button" className="btn-ghost" onClick={() => moveReplayStep(index, 1)} disabled={index === script.steps.length - 1}>下移</button>
+                              <button type="button" className="btn-ghost danger" onClick={() => removeReplayStep(index)} disabled={replayRunning}>删除</button>
+                            </span>
+                          </div>
+                        )) : <p className="hint">脚本还没有步骤；在下方添加动作。</p>}
+                        <div className="detail-row">
+                          <select className="select" value={draftStepKind} onChange={(event) => setDraftStepKind(event.target.value as typeof draftStepKind)} aria-label="步骤类型">
+                            <option value="tap">点击</option>
+                            <option value="swipe">滑动</option>
+                            <option value="key">按键</option>
+                          </select>
+                          {draftStepKind === "key" && (
+                            <select className="select" value={newKeycode} onChange={(event) => setNewKeycode(event.target.value)} aria-label="Android 按键码">
+                              {INJECTABLE_KEYCODES.map((item) => (
+                                <option key={item.value} value={item.value}>{item.label}</option>
+                              ))}
+                            </select>
+                          )}
+                          {draftStepKind === "tap" && (
+                            <span className="detail-row">
+                              X <input className="input mono" style={{ width: 64 }} value={draftTap.x} onChange={(event) => setDraftTap({ ...draftTap, x: event.target.value })} inputMode="numeric" aria-label="点击 X 坐标" />
+                              Y <input className="input mono" style={{ width: 64 }} value={draftTap.y} onChange={(event) => setDraftTap({ ...draftTap, y: event.target.value })} inputMode="numeric" aria-label="点击 Y 坐标" />
+                            </span>
+                          )}
+                          {draftStepKind === "swipe" && (
+                            <span className="detail-row">
+                              起 X <input className="input mono" style={{ width: 58 }} value={draftSwipe.x1} onChange={(event) => setDraftSwipe({ ...draftSwipe, x1: event.target.value })} inputMode="numeric" aria-label="滑动起点 X" />
+                              Y <input className="input mono" style={{ width: 58 }} value={draftSwipe.y1} onChange={(event) => setDraftSwipe({ ...draftSwipe, y1: event.target.value })} inputMode="numeric" aria-label="滑动起点 Y" />
+                              终 X <input className="input mono" style={{ width: 58 }} value={draftSwipe.x2} onChange={(event) => setDraftSwipe({ ...draftSwipe, x2: event.target.value })} inputMode="numeric" aria-label="滑动终点 X" />
+                              Y <input className="input mono" style={{ width: 58 }} value={draftSwipe.y2} onChange={(event) => setDraftSwipe({ ...draftSwipe, y2: event.target.value })} inputMode="numeric" aria-label="滑动终点 Y" />
+                              时长 <input className="input mono" style={{ width: 72 }} value={draftSwipe.duration} onChange={(event) => setDraftSwipe({ ...draftSwipe, duration: event.target.value })} inputMode="numeric" aria-label="滑动时长毫秒" />
+                            </span>
+                          )}
+                          <label className="detail-row">
+                            等待(ms)
+                            <input className="input mono" style={{ width: 76 }} value={draftStepWait} onChange={(event) => setDraftStepWait(event.target.value)} inputMode="numeric" aria-label="执行前等待毫秒" />
+                          </label>
+                          <button type="button" className="btn btn-primary btn-sm" onClick={addReplayStep}>添加步骤</button>
+                        </div>
+                        {replayError && <p className="field-error" role="alert">{replayError}</p>}
+                        <div className="plan-foot">
+                          {/* X10-140：脚本备份与迁移。 */}
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportReplays()}>导出脚本</button>
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void importReplays()}>导入脚本</button>
+                          <button type="button" className="btn-ghost danger" style={{ marginInlineStart: "auto" }} onClick={() => deleteReplayScript(script.id)} disabled={replayRunning}>删除脚本</button>
+                        </div>
+                      </article>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="alert alert-info" style={{ marginTop: 12 }}>
+                        <div className="alert-text">{replays.length > 0 ? `本机已恢复 ${replays.length} 个脚本；点脚本名选中后编排或回放。` : "还没有回放脚本；点「＋ 新建脚本」开始编排。"}</div>
+                      </div>
+                      <div className="assistant-action-row" style={{ marginTop: 8 }}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportReplays()} disabled={replays.length === 0}>导出脚本</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => void importReplays()}>导入脚本</button>
+                      </div>
+                    </>
+                  )}
                 </div>
-                {script && (
-                  <div className="assistant-chip-row">
-                    <button type="button" className="assistant-btn" onClick={() => deleteReplayScript(script.id)} disabled={replayRunning}>删除「{script.name}」</button>
-                    {/* X10-140：脚本备份与迁移。 */}
-                    <button type="button" className="assistant-btn" onClick={() => void exportReplays()}>导出脚本</button>
-                    <button type="button" className="assistant-btn" onClick={() => void importReplays()}>导入脚本</button>
-                  </div>
-                )}
-                {!script && (
-                  <div className="assistant-chip-row">
-                    <button type="button" className="assistant-btn" onClick={() => void exportReplays()} disabled={replays.length === 0}>导出脚本</button>
-                    <button type="button" className="assistant-btn" onClick={() => void importReplays()}>导入脚本</button>
-                  </div>
-                )}
-                {!script && <p className="assistant-note">{replays.length > 0 ? `本机已恢复 ${replays.length} 个脚本；点脚本名选中后编排或回放。` : "还没有回放脚本；点「＋ 新建脚本」开始编排。"}</p>}
               </section>
             ),
           },
-          ...(script ? [
-            {
-              kind: "table" as const,
-              title: `动作序列 · ${script.steps.length} 步`,
-              tone: 8,
-              columns: ["#", "动作", "执行", "调整"],
-              rows: script.steps.map((step, index) => ({
-                cells: [
-                  `${index + 1}`,
-                  describeStep(step),
-                  replayStatus?.[index] ?? "—",
-                  <span key={index}>
-                    <button type="button" className="assistant-link" onClick={() => moveReplayStep(index, -1)} disabled={index === 0}>上移</button>
-                    {" · "}
-                    <button type="button" className="assistant-link" onClick={() => moveReplayStep(index, 1)} disabled={index === script.steps.length - 1}>下移</button>
-                    {" · "}
-                    <button type="button" className="assistant-link" onClick={() => removeReplayStep(index)} disabled={replayRunning}>删除</button>
-                  </span>,
-                ],
-                filterText: describeStep(step),
-              })),
-              empty: "脚本还没有步骤；在下方添加动作。",
-            },
-            {
-              kind: "custom" as const,
-              children: (
-                <section className="assistant-card assistant-tone-8">
-                  <h4>添加步骤</h4>
-                  <div className="assistant-form-grid">
-                    <select className="assistant-select" value={draftStepKind} onChange={(event) => setDraftStepKind(event.target.value as typeof draftStepKind)} aria-label="步骤类型">
-                      <option value="tap">点击</option>
-                      <option value="swipe">滑动</option>
-                      <option value="key">按键</option>
-                    </select>
-                    {draftStepKind === "key" && (
-                      <select className="assistant-select" value={newKeycode} onChange={(event) => setNewKeycode(event.target.value)} aria-label="Android 按键码">
-                        {INJECTABLE_KEYCODES.map((item) => (
-                          <option key={item.value} value={item.value}>{item.label}</option>
-                        ))}
-                      </select>
-                    )}
-                    {draftStepKind === "tap" && (
-                      <span className="assistant-coord-inputs">
-                        X <input className="assistant-mini-input" value={draftTap.x} onChange={(event) => setDraftTap({ ...draftTap, x: event.target.value })} inputMode="numeric" aria-label="点击 X 坐标" />
-                        Y <input className="assistant-mini-input" value={draftTap.y} onChange={(event) => setDraftTap({ ...draftTap, y: event.target.value })} inputMode="numeric" aria-label="点击 Y 坐标" />
-                      </span>
-                    )}
-                    {draftStepKind === "swipe" && (
-                      <span className="assistant-coord-inputs">
-                        起 X <input className="assistant-mini-input" value={draftSwipe.x1} onChange={(event) => setDraftSwipe({ ...draftSwipe, x1: event.target.value })} inputMode="numeric" aria-label="滑动起点 X" />
-                        Y <input className="assistant-mini-input" value={draftSwipe.y1} onChange={(event) => setDraftSwipe({ ...draftSwipe, y1: event.target.value })} inputMode="numeric" aria-label="滑动起点 Y" />
-                        终 X <input className="assistant-mini-input" value={draftSwipe.x2} onChange={(event) => setDraftSwipe({ ...draftSwipe, x2: event.target.value })} inputMode="numeric" aria-label="滑动终点 X" />
-                        Y <input className="assistant-mini-input" value={draftSwipe.y2} onChange={(event) => setDraftSwipe({ ...draftSwipe, y2: event.target.value })} inputMode="numeric" aria-label="滑动终点 Y" />
-                        时长(ms) <input className="assistant-mini-input" value={draftSwipe.duration} onChange={(event) => setDraftSwipe({ ...draftSwipe, duration: event.target.value })} inputMode="numeric" aria-label="滑动时长毫秒" />
-                      </span>
-                    )}
-                    <label className="assistant-coord-inputs">
-                      执行前等待(ms)
-                      <input className="assistant-mini-input" value={draftStepWait} onChange={(event) => setDraftStepWait(event.target.value)} inputMode="numeric" aria-label="执行前等待毫秒" />
-                    </label>
-                    <button type="button" className="assistant-btn primary" onClick={addReplayStep}>添加步骤</button>
-                  </div>
-                  {replayError && <p className="assistant-note" role="alert">{replayError}</p>}
-                </section>
-              ),
-            },
-          ] : []),
           {
             kind: "actions",
             actions: [
@@ -3983,214 +4110,454 @@ function App() {
               { label: "停止", onClick: () => { replayCancelRef.current = true; }, disabled: !replayRunning, danger: true },
             ],
           },
+          {
+            kind: "custom",
+            children: (
+              <details className="card details-block">
+                <summary className="card-head"><h3 className="card-title">能力边界</h3><span className="spacer" /></summary>
+                <div className="card-body">默认禁用操作回放，开启需二次确认；回放文件只保存在本机，不上传；回放期间设备端可见操作，不做静默注入。</div>
+              </details>
+            ),
+          },
           { kind: "note", text: [replayNotice, "坐标以当前设备的分辨率与屏幕方向为准；脚本只保存在本机。录制镜像窗口里的真实触控需要控制通道，尚未实现——这里是编排式回放，不会伪装成录屏式回放。待真机验证。"].filter(Boolean).join(" ") },
         ];
       }
       case "files":
         return [
           {
-            kind: "table",
-            title: deviceFiles === null ? "手机发送区" : `手机发送区 · ${deviceFiles.length} 项`,
-            tone: 2,
-            columns: ["文件", "状态", "操作"],
-            rows: transferGroups.flatMap((group) => group.files.map((name) => ({
-              cells: [
-                name,
-                fetchedFiles[name] ? "已取回" : fetchErrors[name] ?? "可取回",
-                <span key={name}>
-                  {fetchingName === name ? "正在取回…" : fetchedFiles[name] ? "完成" : fetchErrors[name] ? (
-                    <button type="button" className="assistant-link" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>重试</button>
+            kind: "custom",
+            children: (
+              <div className="files-split">
+                <section className="card">
+                  <div className="card-head">                    <h3 className="card-title">手机 → 电脑</h3>
+                    {deviceFiles !== null && <span className="badge neutral">{deviceFiles.length} 项</span>}
+                    <span className="spacer" />
+                  </div>
+                  {transferGroups.length === 0 ? (
+                    <div className="empty hint">
+                      <p>{deviceFiles === null ? "尚未读取手机文件，点「刷新文件」查看。" : "当前没有可显示文件。"}</p>
+                    </div>
                   ) : (
-                    <button type="button" className="assistant-link" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>取回到电脑</button>
+                    <div className="table-wrap" role="region" aria-label="手机发送区" tabIndex={0}>
+                      <table className="table">
+                        <thead>
+                          <tr><th>名称</th><th>状态</th><th data-col="ops">操作</th></tr>
+                        </thead>
+                        <tbody>
+                          {transferGroups.flatMap((group) => group.files.map((name) => (
+                            <tr key={name}>
+                              <td className="cell-main">{name}</td>
+                              <td>{fetchedFiles[name] ? <span className="badge ok">已取回</span> : fetchErrors[name] ?? <span className="badge neutral">可取回</span>}</td>
+                              <td data-col="ops">
+                                {fetchingName === name ? "正在取回…" : fetchedFiles[name] ? "完成" : fetchErrors[name] ? (
+                                  <button type="button" className="btn-ghost" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>重试</button>
+                                ) : (
+                                  <button type="button" className="btn-ghost" disabled={fetchingName !== null} onClick={() => void fetchDeviceFile(transferDeviceSerial ?? "", name)}>取回到电脑</button>
+                                )}
+                                {" · "}
+                                <button type="button" className="btn-ghost" disabled={fetchingName !== null} onClick={() => void confirmDeleteDeviceFile(name)}>删除</button>
+                              </td>
+                            </tr>
+                          )))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
-                  {" · "}
-                  <button type="button" className="assistant-link" disabled={fetchingName !== null} onClick={() => void confirmDeleteDeviceFile(name)}>删除</button>
-                </span>,
-              ],
-              filterText: `${name} ${group.label}`,
-            }))),
-            empty: deviceFiles === null ? "尚未读取手机文件，点「刷新文件」查看。" : "当前没有可显示文件。",
+                  <div className="card-foot">
+                    <button type="button" className="btn btn-primary" onClick={() => transferDeviceSerial && void refreshDeviceFiles(transferDeviceSerial)} disabled={transferBusy}>刷新文件</button>
+                    <button type="button" className="btn btn-secondary" onClick={() => void openFetchedFolder()}>打开文件夹</button>
+                    <span className="spacer" />
+                    <span>{deviceFiles ? `共 ${deviceFiles.length} 个文件${fetchedCount > 0 ? `，${fetchedCount} 个已取回` : ""}` : ""}</span>
+                  </div>
+                </section>
+                <section className="card">
+                  <div className="card-head"><h3 className="card-title">电脑 → 手机</h3><span className="spacer" /></div>
+                  <div className="card-body">
+                    <button
+                      type="button"
+                      className="dropzone"
+                      disabled={!transferDeviceSerial || transferBusy}
+                      onClick={() => transferDeviceSerial && void sendFileTo(transferDeviceSerial)}
+                    >
+                      把文件拖到这里，或点此选择推送到手机
+                      <small>{transferDeviceSerial ? "推送后需在手机上确认接收" : "连接设备后可用"}</small>
+                    </button>
+                    <p className="setting-note">文件通道走 ADB，不依赖镜像会话；读取失败会明确报错，不会伪装成「没有文件」。</p>
+                  </div>
+                </section>
+              </div>
+            ),
           },
           {
-            kind: "actions",
-            actions: [
-              { label: "刷新文件", primary: true, onClick: () => transferDeviceSerial && void refreshDeviceFiles(transferDeviceSerial), disabled: transferBusy },
-              { label: "发送到手机", onClick: () => transferDeviceSerial && void sendFileTo(transferDeviceSerial), disabled: transferBusy },
-              { label: "打开文件夹", onClick: () => void openFetchedFolder() },
-            ],
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head"><h3 className="card-title">剪贴板（手动）</h3><span className="badge neutral">不自动监听</span><span className="spacer" /></div>
+                <div className="card-body">
+                  {incomingClipboard && (
+                    <div className="alert alert-info" role="status">
+                      <div className="alert-text">
+                        <b>手机发来一段剪贴板文字</b>
+                        <p className="clipboard-preview">{incomingClipboard}</p>
+                      </div>
+                      <div className="alert-actions">
+                        <button type="button" className="btn btn-primary" onClick={() => void acceptIncomingClipboard()}>复制到本机</button>
+                        <button type="button" className="btn btn-secondary" onClick={() => setIncomingClipboard(null)}>忽略</button>
+                      </div>
+                    </div>
+                  )}
+                  <button type="button" className="btn btn-secondary" onClick={() => void sendClipboardToPhone()}>发送本机剪贴板到手机</button>
+                  <p className="setting-note">两端都只在点按钮时读写，不后台监听、不上传；文字仅在本机与已配对手机之间直传，不进日志。写手机剪贴板后手机会有系统提示。</p>
+                  {clipboardNotice && <p className="hint" role="status">{clipboardNotice}</p>}
+                </div>
+              </section>
+            ),
           },
-          ...(deviceFiles ? [{
-            kind: "note" as const,
-            text: `共 ${deviceFiles.length} 个文件${fetchedCount > 0 ? `，${fetchedCount} 个已取回` : ""}`,
-          }] : []),
           {
             kind: "note",
-            text: [transferError, transferMessage, "文件通道走 ADB，不依赖镜像会话；读取失败会明确报错。"].filter(Boolean).join(" "),
+            text: [transferError, transferMessage].filter(Boolean).join(" "),
           },
         ];
       case "shot":
         return [
-          { kind: "kv", title: "最近截图", tone: 5, items: screenshot ? [["文件", screenshot.file_name], ["大小", formatBytes(screenshot.bytes)], ["路径", screenshot.path]] : [["状态", "本机还没有新截图"]] },
-          { kind: "actions", actions: [{ label: "立即截图", primary: true, onClick: () => readyDevice ? void captureScreen(readyDevice.serial) : openView("connect"), disabled: screenshotBusy }, { label: "在文件夹中显示", onClick: () => void revealCapture(), disabled: !screenshot }, { label: "删除这张截图", onClick: () => void undoCapture(), disabled: !screenshot || screenshotBusy, danger: true }] },
-          { kind: "note", text: screenshotError ?? "截图默认保存到本机 MirrorDock 目录；受保护页面会截成黑屏。" },
+          {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">                  <h3 className="card-title">最近截图</h3>
+                  {screenshot && <span className="badge neutral">{formatBytes(screenshot.bytes)}</span>}
+                  <span className="spacer" />
+                </div>
+                {screenshot ? (
+                  <div className="card-body">
+                    <div className="thumb-strip">
+                      <div className="thumb" role="button" tabIndex={0} title={screenshot.path}>
+                        <span>{screenshot.file_name}</span>
+                        <button type="button" className="icon-btn" aria-label="删除这张截图" onClick={() => void undoCapture()} disabled={screenshotBusy}>×</button>
+                      </div>
+                    </div>
+                    <p className="screenshot-path">{screenshot.path}</p>
+                  </div>
+                ) : (
+                  <div className="empty hint">
+                    <p>{screenshotError ?? "本机还没有新截图；点「立即截图」获取第一张。"}</p>
+                  </div>
+                )}
+                <div className="card-foot">
+                  <button type="button" className="btn btn-primary" onClick={() => readyDevice ? void captureScreen(readyDevice.serial) : openView("connect")} disabled={screenshotBusy}>立即截图</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => void revealCapture()} disabled={!screenshot}>在文件夹中显示</button>
+                </div>
+              </section>
+            ),
+          },
+          { kind: "note", text: "截图默认保存到本机 MirrorDock 目录；受保护页面会截成黑屏。" },
         ];
       case "record":
         return [
+          ...(!proEdition ? [{ kind: "note" as const, kind_of_alert: "info" as const, text: "录像是专业版功能；未激活时核心镜像与传输保持免费可用。" }] : []),
+          ...(recording?.active ? [{
+            kind: "custom" as const,
+            children: (
+              <section className="card">
+                <div className="card-body" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span className="dot busy" aria-hidden="true" />
+                  <strong style={{ fontSize: 20 }}>{recording.file_name}</strong>
+                  <span className="hint">正在录制到本机</span>
+                </div>
+              </section>
+            ),
+          }] : []),
           { kind: "kv", title: "录像参数", tone: 5, items: [["状态", recording?.active ? `正在录制：${recording.file_name}` : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["保存位置", appSettings.recording_dir ?? "本机视频 / MirrorDock"], ["授权", "手动启停，不重启镜像"]] },
           { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active }, { label: "在文件夹中显示", onClick: () => void revealRecording(), disabled: !recording }] },
-          { kind: "note", text: recordingError ?? (!proEdition ? "录像是专业版功能；未激活时不会伪装成可用。" : "录像只保存在本机，不默认云录制。") },
+          { kind: "note", text: recordingError ?? "录像只保存在本机，不默认云录制；「结束录制」无确认，误停止可重新开始。" },
         ];
       case "album":
         return [
           {
             kind: "custom",
             children: (
-              <section className="assistant-card assistant-tone-7">
-                <h4>相册目录</h4>
-                <div className="assistant-chip-row" role="group" aria-label="相册目录">
-                  {GALLERY_DIRS.map((item) => (
-                    <button
-                      key={item.dir}
-                      type="button"
-                      className={`assistant-chip${galleryDir === item.dir ? " active" : ""}`}
-                      disabled={galleryBusy || !transferDeviceSerial}
-                      onClick={() => chooseGalleryDir(item.dir)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
+              <section className="card">
+                <div className="card-head">                  <h3 className="card-title">相册目录</h3>
+                  <span className="badge neutral">{GALLERY_DIRS.find((item) => item.dir === galleryDir)?.label ?? galleryDir}</span>
+                  <span className="spacer" />
                 </div>
-                <p className="assistant-note">只提供这几个公开媒体目录；其他位置请用文件传输，相册不做自由路径浏览。</p>
+                <div className="card-body tight">
+                  <div className="assistant-chip-row" role="group" aria-label="相册目录">
+                    {GALLERY_DIRS.map((item) => (
+                      <button
+                        key={item.dir}
+                        type="button"
+                        className={`assistant-chip${galleryDir === item.dir ? " active" : ""}`}
+                        disabled={galleryBusy || !transferDeviceSerial}
+                        onClick={() => chooseGalleryDir(item.dir)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {galleryFiles === null || galleryFiles.length === 0 ? (
+                  <div className="empty hint">
+                    <p>{galleryFiles === null ? "尚未读取相册目录；连接设备后会自动读取，也可以点「刷新相册」。" : "这个目录里没有照片或视频。"}</p>
+                  </div>
+                ) : (
+                  <div className="table-wrap" role="region" aria-label="相册文件" tabIndex={0}>
+                    <table className="table">
+                      <thead>
+                        <tr><th>文件</th><th>状态</th><th data-col="ops">操作</th></tr>
+                      </thead>
+                      <tbody>
+                        {galleryFiles.map((name) => (
+                          <tr key={name}>
+                            <td className="cell-main">{name}</td>
+                            <td>{galleryFetched[name] ? <span className="badge ok">已取回</span> : galleryErrors[name] ?? <span className="badge neutral">可取回</span>}</td>
+                            <td data-col="ops">
+                              {fetchingGalleryName === name ? "正在取回…" : galleryFetched[name] ? "完成" : (
+                                <button type="button" className="btn-ghost" disabled={fetchingGalleryName !== null} onClick={() => void fetchGalleryFile(name)}>
+                                  {galleryErrors[name] ? "重试" : "取回到电脑"}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div className="card-foot">
+                  <button type="button" className="btn btn-primary" onClick={() => void refreshGallery()} disabled={galleryBusy || !transferDeviceSerial}>刷新相册</button>
+                  {/* X10-138：一键取回本目录全部未取回的文件，逐个执行、失败不阻断。 */}
+                  <button type="button" className="btn btn-secondary" onClick={() => void fetchAllGalleryFiles()} disabled={galleryBusy || fetchingGalleryName !== null || !transferDeviceSerial || galleryFiles === null || (galleryFiles ?? []).every((name) => galleryFetched[name])}>一键取回全部</button>
+                  <span className="spacer" />
+                  <span>文件保存到本机「下载 / MirrorDock / 相册」</span>
+                </div>
+              </section>
+            ),
+          },
+          { kind: "note", text: [galleryError, galleryMessage, "相册为只读浏览，只提供这几个公开媒体目录；其他位置请用文件传输。读取失败会明确报错，不上传任何内容。"].filter(Boolean).join(" ") },
+        ];
+      case "install":
+        return [
+          {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head"><h3 className="card-title">选择安装包</h3><span className="spacer" /></div>
+                <div className="card-body">
+                  <button type="button" className="dropzone" disabled={batchBusy} onClick={() => void pickApksBatch()}>
+                    把 APK 拖到这里，或选择 APK（可多选）
+                    <small>每个安装包都在手机上确认，不做静默安装</small>
+                  </button>
+                  <p className="setting-note">安装包逐个经 adb 安装；失败原因来自 adb 的真实输出。单个 APK 也可以直接拖进窗口安装。</p>
+                </div>
               </section>
             ),
           },
           {
             kind: "table",
-            title: galleryFiles === null ? "相册文件" : `相册文件 · ${galleryFiles.length}`,
-            tone: 7,
-            columns: ["文件", "状态", "操作"],
-            rows: (galleryFiles ?? []).map((name) => ({
-              cells: [
-                name,
-                galleryFetched[name] ? "已取回" : galleryErrors[name] ?? "可取回",
-                <span key={name}>
-                  {fetchingGalleryName === name ? "正在取回…" : galleryFetched[name] ? "完成" : (
-                    <button type="button" className="assistant-link" disabled={fetchingGalleryName !== null} onClick={() => void fetchGalleryFile(name)}>
-                      {galleryErrors[name] ? "重试" : "取回到电脑"}
-                    </button>
-                  )}
-                </span>,
-              ],
-              filterText: name,
-            })),
-            empty: galleryFiles === null ? "尚未读取相册目录；连接设备后会自动读取，也可以点「刷新相册」。" : "这个目录里没有照片或视频。",
-          },
-          {
-            kind: "actions",
-            actions: [
-              { label: "刷新相册", primary: true, onClick: () => void refreshGallery(), disabled: galleryBusy || !transferDeviceSerial },
-              // X10-138：一键取回本目录全部未取回的文件，逐个执行、失败不阻断。
-              { label: "一键取回全部", onClick: () => void fetchAllGalleryFiles(), disabled: galleryBusy || fetchingGalleryName !== null || !transferDeviceSerial || galleryFiles === null || (galleryFiles ?? []).every((name) => galleryFetched[name]) },
-            ],
-          },
-          { kind: "note", text: [galleryError, galleryMessage, "文件保存到本机「下载 / MirrorDock / 相册」；读取失败会明确报错，不上传任何内容。"].filter(Boolean).join(" ") },
-        ];
-      case "install":
-        return [
-          { kind: "kv", title: "安装队列", tone: 4, items: [["目标设备", currentDeviceLabel ?? "未选择设备"], ["队列", batchApks.length > 0 ? `${batchApks.length} 个安装包` : "尚未选择"], ["进度", batchBusy ? "正在逐个安装…" : "空闲"], ["确认方式", "每个安装包都在手机上确认"]] },
-          {
-            kind: "table",
-            title: batchApks.length > 0 ? `安装包 · ${batchApks.length}` : "安装包",
+            title: batchApks.length > 0 ? `安装包 · ${batchApks.length}` : "安装队列",
             tone: 4,
             columns: ["文件", "状态", "结果"],
             rows: batchApks.map((item) => ({
               cells: [
                 item.name,
-                item.status === "installing" ? "安装中…" : item.status === "done" ? "已安装" : item.status === "failed" ? "失败" : "待安装",
+                item.status === "installing" ? <span className="badge warn">安装中…</span> : item.status === "done" ? <span className="badge ok">已安装</span> : item.status === "failed" ? <span className="badge danger">失败</span> : <span className="badge neutral">待安装</span>,
                 item.message ?? "—",
               ],
               filterText: item.name,
             })),
-            empty: "还没有选择安装包；点「选择 APK（可多选）」一次挑多个。",
+            empty: "还没有选择安装包；点上方拖放区一次挑多个。",
           },
           {
             kind: "actions",
             actions: [
-              { label: "选择 APK（可多选）", primary: true, onClick: () => void pickApksBatch(), disabled: batchBusy },
-              { label: "全部安装", onClick: () => readyDevice && void installBatch(readyDevice.serial), disabled: batchBusy || batchApks.length === 0 || !readyDevice },
-              { label: "停止", onClick: () => { batchCancelRef.current = true; }, disabled: !batchBusy },
+              { label: "全部安装", primary: true, onClick: () => readyDevice && void installBatch(readyDevice.serial), disabled: batchBusy || batchApks.length === 0 || !readyDevice },
+              { label: "停止", onClick: () => { batchCancelRef.current = true; }, disabled: !batchBusy, danger: true },
               { label: "清空队列", onClick: () => setBatchApks([]), disabled: batchBusy },
             ],
           },
-          { kind: "note", text: apkError ?? apkMessage ?? "安装包逐个经 adb 安装；失败原因来自 adb 的真实输出。单个 APK 也可以直接拖进窗口安装。" },
+          { kind: "note", text: apkError ?? apkMessage ?? `目标设备：${currentDeviceLabel ?? "未选择设备"} · 进度：${batchBusy ? "正在逐个安装…" : "空闲"}` },
         ];
-      case "apps":
+      case "apps": {
+        const appQuery = viewFilter.trim().toLowerCase();
+        const filteredApps = appQuery
+          ? visibleDeviceApps.filter((app) => `${app.name} ${app.package}`.toLowerCase().includes(appQuery))
+          : visibleDeviceApps;
         return [
           {
-            kind: "table",
-            title: visibleDeviceApps.length > 0 ? `已安装应用 · ${visibleDeviceApps.length}` : "已安装应用",
-            tone: 1,
-            columns: ["应用", "包名", "操作"],
-            rows: visibleDeviceApps.map((app) => ({
-              cells: [
-                app.name || app.package,
-                app.package,
-                // X10-134：启动走系统默认入口；卸载先弹显式确认（不可恢复）。
-                <span key={app.package} className="assistant-row-actions">
-                  <button
-                    type="button"
-                    className="assistant-btn primary sm"
-                    disabled={!readySerial || appActionBusy !== null}
-                    onClick={() => void launchDeviceApp(app.package)}
-                  >
-                    打开
-                  </button>
-                  <button
-                    type="button"
-                    className="assistant-btn danger sm"
-                    disabled={!readySerial || appActionBusy !== null}
-                    onClick={() => void uninstallDeviceApp(app.package, app.name)}
-                  >
-                    卸载
-                  </button>
-                </span>,
-              ],
-              filterText: `${app.name} ${app.package}`,
-            })),
-            empty: "尚未读取应用清单；连接设备后点「刷新清单」。",
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">已安装应用</h3>
+                  <span className="badge neutral">{filteredApps.length} 项</span>
+                  <span className="spacer" />
+                  <label className="search-box">
+                    <span aria-hidden="true">⌕</span>
+                    <input
+                      type="search"
+                      value={viewFilter}
+                      onChange={(event) => setViewFilter(event.target.value)}
+                      placeholder="搜索应用名或包名"
+                      aria-label="搜索应用名或包名"
+                    />
+                  </label>
+                  <select className="select" value={appsSort} onChange={(event) => setAppsSort(event.target.value as "name" | "package")} aria-label="应用排序">
+                    <option value="name">按名称</option>
+                    <option value="package">按包名</option>
+                  </select>
+                </div>
+                {filteredApps.length > 0 ? (
+                  <div className="table-wrap" role="region" aria-label="已安装应用" tabIndex={0}>
+                    <table className="table">
+                      <thead>
+                        <tr><th>应用</th><th>包名</th><th data-col="ops">操作</th></tr>
+                      </thead>
+                      <tbody>
+                        {filteredApps.map((app) => (
+                          <tr key={app.package}>
+                            <td className="cell-main">{app.name || app.package}</td>
+                            <td className="mono">{app.package}</td>
+                            <td data-col="ops">
+                              <span className="detail-ops">
+                                {/* X10-134：启动走系统默认入口；卸载先弹显式确认（不可恢复）。 */}
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  disabled={!readySerial || appActionBusy !== null}
+                                  onClick={() => void launchDeviceApp(app.package)}
+                                >
+                                  打开
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-sm"
+                                  disabled={!readySerial || appActionBusy !== null}
+                                  onClick={() => void uninstallDeviceApp(app.package, app.name)}
+                                >
+                                  卸载
+                                </button>
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="empty hint"><p>{appQuery ? `没有匹配「${viewFilter}」的应用` : "尚未读取应用清单；连接设备后点「刷新清单」。"}</p></div>
+                )}
+                <div className="card-foot">
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => appsTargetSerial && void ensureDeviceApps(appsTargetSerial)} disabled={!appsTargetSerial}>刷新清单</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openView("install")}>安装 APK</button>
+                  <span className="spacer" />
+                  <span>应用数据不读取、不上传</span>
+                </div>
+              </section>
+            ),
           },
-          { kind: "actions", actions: [{ label: "刷新清单", primary: true, onClick: () => appsTargetSerial && void ensureDeviceApps(appsTargetSerial) }, { label: "安装 APK", onClick: () => openView("install") }] },
           { kind: "note", text: appActionNotice ? `${appActionNotice.error ? "⚠" : "✓"} ${appActionNotice.text}` : "「打开」用系统默认入口启动应用；「卸载」会先弹确认、卸载后无法恢复，系统预装应用无法卸载。应用数据不读取、不上传。" },
         ];
+      }
       case "notify":
         return [
           {
-            kind: "table",
-            title: phoneNotifications.length > 0 ? `实时通知 · ${phoneNotifications.length}` : "实时通知",
-            tone: 3,
-            columns: ["来源", "内容", "时间", "操作"],
-            rows: phoneNotifications.map((item) => ({
-              cells: [
-                item.app || item.pkg,
-                `${item.title}${item.text ? `：${item.text}` : ""}`,
-                notificationTime(item.posted),
-                // X10-135：复用应用启动能力，把来源 App 拉到前台。
-                <button
-                  key={item.key ?? `${item.pkg}-${item.posted}`}
-                  type="button"
-                  className="assistant-btn primary sm"
-                  disabled={!readySerial || appActionBusy !== null}
-                  onClick={() => void launchDeviceApp(item.pkg)}
-                >
-                  {appActionBusy === item.pkg ? "打开中…" : "打开"}
-                </button>,
-              ],
-              filterText: `${item.app ?? ""} ${item.title} ${item.text ?? ""}`,
-            })),
-            empty: "伴侣 App 打开通知镜像并授权后，新通知会实时出现在这里。",
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">实时通知</h3>
+                  <span className="badge neutral">{phoneNotifications.length} 条</span>
+                  <span className="spacer" />
+                  {phoneNotifications.length > 0 && (
+                    <button type="button" className="btn-ghost danger" onClick={() => void clearNotifications()}>清空</button>
+                  )}
+                </div>
+                {phoneNotifications.length === 0 ? (
+                  <div className="empty hint">
+                    <p>伴侣 App 打开通知镜像并授权后，新通知会实时出现在这里。</p>
+                  </div>
+                ) : phoneNotifications.map((item) => {
+                  const code = verificationCode(`${item.title} ${item.text}`);
+                  return (
+                  <div className="notify-row" key={item.key ?? `${item.pkg}-${item.posted}`}>
+                    <span className="tool-ico" aria-hidden="true">{(item.app || item.pkg || "?").slice(0, 1)}</span>
+                    <div className="notify-body">
+                      <b>{item.app || item.pkg}</b>
+                      <p className="notify-text">{item.title}{item.text ? `：${item.text}` : ""}</p>
+                      <div className="notify-inline">
+                        {code && (
+                          <button type="button" className="secondary-button sm" onClick={() => void copyNotificationCode(code)}>
+                            复制验证码
+                          </button>
+                        )}
+                        {item.replyable && item.key && (
+                          <details className="notify-reply-details">
+                            <summary className="btn-ghost">快捷回复</summary>
+                            <div className="notify-reply">
+                              <input
+                                value={notifReplyDrafts[item.key] ?? ""}
+                                placeholder={`回复 ${item.app || item.pkg}…`}
+                                maxLength={500}
+                                disabled={notifReplyBusy === item.key}
+                                onChange={e => setNotifReplyDrafts(prev => ({ ...prev, [item.key as string]: e.target.value }))}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                                    void sendNotificationReply({ ...item, key: item.key as string });
+                                  }
+                                }}
+                              />
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                disabled={notifReplyBusy === item.key || !(notifReplyDrafts[item.key] ?? "").trim()}
+                                onClick={() => void sendNotificationReply({ ...item, key: item.key as string })}
+                              >
+                                {notifReplyBusy === item.key ? "发送中…" : "发送"}
+                              </button>
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                    <time>{notificationTime(item.posted)}</time>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="清除此通知并同步到手机"
+                      title="清除并同步到手机"
+                      disabled={!item.key}
+                      onClick={() => item.key && void clearNotifications(item.key)}
+                    >
+                      ×
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={!readySerial || appActionBusy !== null}
+                      onClick={() => void launchDeviceApp(item.pkg)}
+                    >
+                      {appActionBusy === item.pkg ? "打开中…" : "打开"}
+                    </button>
+                  </div>
+                  );
+                })}
+                {notifyNotice && <p className="hint" role="status" style={{ padding: "8px 20px" }}>{notifyNotice}</p>}
+                <div className="card-foot">
+                  <button
+                    type="button"
+                    className="switch"
+                    role="switch"
+                    aria-checked={notifyKeep}
+                    aria-label="本机保留"
+                    onClick={toggleNotifyKeep}
+                  />
+                  <span>本机保留（最多 50 条，重启后恢复）</span>
+                </div>
+              </section>
+            ),
           },
-          { kind: "actions", actions: [{ label: "清空通知", primary: true, onClick: () => setPhoneNotifications([]), disabled: phoneNotifications.length === 0 }, { label: notifyKeep ? "本机保留：已开启" : "本机保留：已关闭", onClick: toggleNotifyKeep }] },
-          { kind: "note", text: notifyKeep ? "通知已保留在本机（最多 50 条），重启应用后恢复；关闭开关即清除已存记录。内容不出本机。「打开」把来源应用拉到手机前台，需要设备已连接。" : "通知正文只在本窗口临时展示，默认不落盘、不上传；点「本机保留」可显式开启本机存储。「打开」把来源应用拉到手机前台，需要设备已连接。" },
+          { kind: "note", text: notifyKeep ? "通知已保留在本机（最多 50 条），重启应用后恢复；关闭开关即清除已存记录。内容不出本机。「复制验证码」只写入本机剪贴板；「清除」会同步移除手机通知，需手机常驻连接在线。" : "通知正文只在本窗口临时展示，默认不落盘、不上传；「复制验证码」只写入本机剪贴板；「清除」会同步移除手机通知，需手机常驻连接在线，离线时不会清本地。" },
         ];
       case "pro":
         return [
@@ -4198,15 +4565,21 @@ function App() {
           {
             kind: "custom",
             children: (
-              <section className="assistant-card assistant-tone-3">
-                <h4>激活</h4>
-                <div className="assistant-license">
-                  <input value={licenseInput} onChange={(event) => setLicenseInput(event.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" aria-label="许可证密钥" />
-                  <button type="button" className="assistant-btn primary" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>{licenseBusy ? "激活中…" : "激活"}</button>
-                  <button type="button" className="assistant-btn" disabled={licenseBusy || !proEdition} onClick={() => void deactivateLicense()}>撤销本机授权</button>
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">激活</h3>
+                  <span className={`badge ${proEdition ? "ok" : "neutral"}`}>{proEdition ? "已激活 · Pro" : "免费版 · 功能正常"}</span>
+                  <span className="spacer" />
                 </div>
-                {licenseMessage && <p className="assistant-note" role="status">{licenseMessage}</p>}
-                {licenseError && <p className="assistant-note" role="alert">{licenseError}</p>}
+                <div className="card-body">
+                  <div className="detail-row">
+                    <input className="input mono grow" value={licenseInput} onChange={(event) => setLicenseInput(event.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" aria-label="许可证密钥" />
+                    <button type="button" className="btn btn-primary btn-sm" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>{licenseBusy ? "激活中…" : "激活"}</button>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={licenseBusy || !proEdition} onClick={() => void deactivateLicense()}>撤销本机授权</button>
+                  </div>
+                  {licenseMessage && <p className="hint" role="status">{licenseMessage}</p>}
+                  {licenseError && <p className="field-error" role="alert">{licenseError}</p>}
+                </div>
               </section>
             ),
           },
@@ -4457,7 +4830,7 @@ function App() {
               />
             </label>
           )}
-          <button className="assistant-btn primary sm" type="button" aria-label={`页面操作：${ASSISTANT_VIEWS[view].action}`} onClick={runViewAction}>{ASSISTANT_VIEWS[view].action}</button>
+          <button className="btn btn-primary btn-sm" type="button" aria-label={`页面操作：${ASSISTANT_VIEWS[view].action}`} onClick={runViewAction}>{ASSISTANT_VIEWS[view].action}</button>
         </div>
 
         <div className="content">
@@ -4471,9 +4844,11 @@ function App() {
             </div>
 
             <section className="connection-card" aria-live="polite">
-              <div className="connection-heading">
+              {/* X10-145：组件语言对齐预览——卡头用 card-head + badge，正文用 card-body，
+                  状态提示用 alert。文案、状态分支与事件保持原样。 */}
+              <div className="card-head connection-heading">
                 <div>
-                  <p className="eyebrow">
+                  <span className="eyebrow badge neutral">
                     {sessionActive
                       ? activeSessionCount > 1
                         ? `镜像运行中：${activeSessionCount} 台设备`
@@ -4481,8 +4856,8 @@ function App() {
                           ? `镜像运行中：${sessionDeviceLabel}`
                           : "镜像运行中"
                       : "第一步：连接手机"}
-                  </p>
-                  <h2>
+                  </span>
+                  <h2 className="card-title">
                     {isChecking
                       ? "正在检查 USB 连接…"
                       : sessionActive
@@ -4760,10 +5135,10 @@ function App() {
               )}
 
               {(!isChecking && !readyDevice) && (
-                <ol className="setup-steps">
-                  <li><span>1</span><div><strong>使用可传输数据的数据线连接手机</strong><p>如果手机弹出 USB 用途选择，请选择“文件传输”。</p></div></li>
-                  <li><span>2</span><div><strong>在手机上开启“USB 调试”</strong><p>这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
-                  <li><span>3</span><div><strong>解锁手机并允许这台电脑</strong><p>在“允许 USB 调试吗？”中选择允许。你可以随时在手机设置中撤销。</p></div></li>
+                <ol className="setup-steps steps">
+                  <li className="step-line"><div><strong>使用可传输数据的数据线连接手机</strong><p>如果手机弹出 USB 用途选择，请选择“文件传输”。</p></div></li>
+                  <li className="step-line"><div><strong>在手机上开启“USB 调试”</strong><p>这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
+                  <li className="step-line"><div><strong>解锁手机并允许这台电脑</strong><p>在“允许 USB 调试吗？”中选择允许。你可以随时在手机设置中撤销。</p></div></li>
                 </ol>
               )}
 
@@ -4778,7 +5153,7 @@ function App() {
                   <div className="device-picker" aria-label="选择手机品牌">
                     {brandGuides.map((guide) => (
                       <button
-                        className={shownGuide?.key === guide.key ? "device-choice selected" : "device-choice"}
+                        className={`chip${shownGuide?.key === guide.key ? " active" : ""}`}
                         type="button"
                         key={guide.key}
                         onClick={() => setGuideKey(guide.key)}
@@ -4789,10 +5164,10 @@ function App() {
                   </div>
                   {shownGuide && (
                     <>
-                      <ol className="setup-steps brand-steps">
-                        <li><span>1</span><div><strong>打开开发者选项</strong><p>{shownGuide.openDeveloperOptions}</p></div></li>
-                        <li><span>2</span><div><strong>开启 USB 调试</strong><p>{shownGuide.usbDebugging}</p></div></li>
-                        <li><span>3</span><div><strong>（可选）无线调试</strong><p>{shownGuide.wireless}</p></div></li>
+                      <ol className="setup-steps brand-steps steps">
+                        <li className="step-line"><div><strong>打开开发者选项</strong><p>{shownGuide.openDeveloperOptions}</p></div></li>
+                        <li className="step-line"><div><strong>开启 USB 调试</strong><p>{shownGuide.usbDebugging}</p></div></li>
+                        <li className="step-line"><div><strong>（可选）无线调试</strong><p>{shownGuide.wireless}</p></div></li>
                       </ol>
                       {shownGuide.notes.length > 0 && (
                         <ul className="brand-notes">
@@ -5006,8 +5381,8 @@ function App() {
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <strong>手机通知</strong>
                 {phoneNotifications.length > 0 && (
-                  <button className="text-button" type="button" onClick={() => setPhoneNotifications([])}>
-                    清空
+                  <button className="text-button" type="button" onClick={() => void clearNotifications()}>
+                    清空（同步手机）
                   </button>
                 )}
               </span>
@@ -5069,10 +5444,10 @@ function App() {
               <p className="intro">同一 Wi-Fi 下连接 Android 11+；推荐扫码配对，全程免输入。</p>
             </div>
             <section className="connection-card" aria-live="polite">
-              <div className="wireless-heading">
+              <div className="card-head wireless-heading">
                 <div>
-                  <p className="eyebrow">推荐</p>
-                  <h2>扫码配对</h2>
+                  <span className="badge ok">推荐</span>
+                  <h2 className="card-title">扫码配对</h2>
                   <p>手机在「无线调试」里点「使用二维码配对设备」，扫下面的二维码即可，配对与连接自动完成。</p>
                 </div>
               </div>
@@ -5096,10 +5471,10 @@ function App() {
               {qrError && <p className="capability-pending" role="alert">{qrError}</p>}
             </section>
             <section className="connection-card" aria-labelledby="wireless-title">
-              <div className="wireless-heading">
+              <div className="card-head wireless-heading">
                 <div>
-                  <p className="eyebrow">手动方式</p>
-                  <h2 id="wireless-title">配对码配对</h2>
+                  <span className="badge neutral">手动方式</span>
+                  <h2 id="wireless-title" className="card-title">配对码配对</h2>
                   <p>扫码不便时，填手机屏幕上的地址和 6 位配对码。配对码不会保存。</p>
                 </div>
                 <button className="secondary-button" type="button" onClick={() => setWirelessExpanded((value) => !value)}>
@@ -5108,10 +5483,10 @@ function App() {
               </div>
 
               {wirelessExpanded && <div className="wireless-content">
-                <ol className="wireless-steps">
-                  <li>在手机的“开发者选项”中打开“无线调试”，并确认手机和电脑在同一 Wi-Fi。</li>
-                  <li>选择“使用配对码配对设备”，填写手机显示的配对地址和 6 位配对码。</li>
-                  <li>回到无线调试主页面，填写“IP 地址和端口”中的连接地址；它可能与配对地址不同。</li>
+                <ol className="wireless-steps steps">
+                  <li className="step-line">在手机的“开发者选项”中打开“无线调试”，并确认手机和电脑在同一 Wi-Fi。</li>
+                  <li className="step-line">选择“使用配对码配对设备”，填写手机显示的配对地址和 6 位配对码。</li>
+                  <li className="step-line">回到无线调试主页面，填写“IP 地址和端口”中的连接地址；它可能与配对地址不同。</li>
                 </ol>
                 <span>
                   <button className="secondary-button" type="button" disabled={discovering} onClick={() => void discoverWirelessEndpoints()}>
@@ -5142,10 +5517,10 @@ function App() {
             </section>
 
             <section className="connection-card" aria-live="polite">
-              <div className="wireless-heading">
+              <div className="card-head wireless-heading">
                 <div>
-                  <p className="eyebrow">伴侣 App（实验）</p>
-                  <h2>扫码配对</h2>
+                  <span className="badge warn">伴侣 App（实验）</span>
+                  <h2 className="card-title">扫码配对</h2>
                   <p>用伴侣 App 扫码，与电脑建立加密助手通道并互相记住身份（桌面端与手机端都保存互信凭据，之后重连无需再扫码）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。</p>
                 </div>
               </div>
@@ -5226,10 +5601,28 @@ function App() {
           <section className={`tab-panel ${tab === "settings" ? "" : "panel-hidden"}`} aria-label="设置">
             <div className="page-head">
               <h1>设置</h1>
-              <p className="intro">外观主题、镜像窗口、快捷键与授权。</p>
+              <p className="intro">外观主题、镜像窗口、快捷键与授权。全部设置项按分组保留，切换分组不会清除任何配置。</p>
             </div>
 
-            <section className="settings-card theme-settings" aria-labelledby="theme-settings-title">
+            {/* X10-144：左侧二级分组导航 + 右侧原设置卡。7 组对应原 7 块内容，
+                卡片 DOM / 事件绑定一字未改，只由 CSS 控制显隐，零丢项。 */}
+            <div className="settings-split">
+              <nav className="settings-nav" aria-label="设置分组">
+                {SETTINGS_GROUPS.map((group) => (
+                  <button
+                    key={group.key}
+                    type="button"
+                    className={`settings-nav-item${settingsGroup === group.key ? " active" : ""}`}
+                    aria-current={settingsGroup === group.key ? "true" : undefined}
+                    onClick={() => setSettingsGroup(group.key)}
+                  >
+                    <span>{group.label}</span>
+                    <small>{group.note}</small>
+                  </button>
+                ))}
+              </nav>
+              <div className="settings-content">
+            <section className={`settings-card theme-settings${settingsGroup === "appearance" ? "" : " panel-hidden"}`} aria-labelledby="theme-settings-title">
               <header className="settings-card-head">
                 <div><h2 id="theme-settings-title">外观主题</h2><p>只改变这台电脑上的 MirrorDock 界面；连接、镜像、文件与授权完全不受影响。</p></div>
               </header>
@@ -5251,7 +5644,7 @@ function App() {
               <p className="setting-note">主题偏好只保存在本机浏览器存储中，不上传、不需要账号。当前：{themeMeta(uiTheme).label}。</p>
             </section>
 
-            <section className="settings-card">
+            <section className={`settings-card${settingsGroup === "general" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
                 <div><h2>通用</h2><p>窗口关闭行为、断线自动重连、菜单栏/托盘与开机启动。</p></div>
               </header>
@@ -5285,7 +5678,7 @@ function App() {
               </div>
             </section>
 
-            <section className="settings-card">
+            <section className={`settings-card${settingsGroup === "mirror" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
                 <div><h2>镜像窗口</h2><p>{sessionActive ? "会话中修改需重启镜像窗口" : "开始镜像时生效"}</p></div>
                 <div className="settings-actions">
@@ -5482,7 +5875,7 @@ function App() {
                 ② 明确显示"下面两项属于哪台设备"
                 ③ 设备列表每行直接显示该设备当前的桌面模式状态，点行即切换编辑对象
                 ④ 只有在一台设备都没有时，才回落全局默认并如实写明。 */}
-            <section className="settings-card">
+            <section className={`settings-card${settingsGroup === "desktop" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
                 <div>
                   <h2>按设备设置 · 桌面模式</h2>
@@ -5595,7 +5988,7 @@ function App() {
               </div>
             </section>
 
-            <section className="settings-card">
+            <section className={`settings-card${settingsGroup === "shortcuts" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
                 <div><h2>全局快捷键</h2><p>镜像运行中全局生效，无需切回本窗口（Windows 用 Ctrl，macOS 用 ⌘）。</p></div>
                 <div className="settings-actions">
@@ -5613,7 +6006,7 @@ function App() {
               <p className="setting-note">格式：修饰键+按键，如 Ctrl+Alt+S。修改立即保存；镜像运行中会自动改用新组合，无需重启。</p>
             </section>
 
-            <section className="settings-card">
+            <section className={`settings-card${settingsGroup === "license" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
                 <div><h2>版本与授权</h2><p>当前版本：{editionLabel(entitlement?.edition)}{proEdition && entitlement?.key_id ? `（许可证 ${entitlement.key_id}，${expiryText(entitlement.expires_at)}）` : ""}</p></div>
               </header>
@@ -5644,7 +6037,7 @@ function App() {
             </section>
 
             {/* 关于：版本、开发者、许可与项目链接（X10-41）。 */}
-            <section className="settings-card">
+            <section className={`settings-card${settingsGroup === "about" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
                 <div><h2>关于 MirrorDock</h2><p>版本、开源许可与项目链接。</p></div>
               </header>
@@ -5668,6 +6061,8 @@ function App() {
                 </div>
               </div>
             </section>
+              </div>
+            </div>
           </section>
 
           {/* -- 帮助 -------------------------------------------------------- */}
@@ -5682,10 +6077,10 @@ function App() {
               {helpArticles.map((article) => {
                 const expanded = expandedHelpIds.has(article.id);
                 return (
-                  <div className={`capability-panel help-article ${expanded ? "help-article-open" : ""}`} key={article.id} aria-live="polite">
+                  <div className={`card capability-panel help-article ${expanded ? "help-article-open" : ""}`} key={article.id} aria-live="polite">
                     <button
                       type="button"
-                      className="help-article-head"
+                      className="card-head help-article-head"
                       aria-expanded={expanded}
                       onClick={() => setExpandedHelpIds((previous) => {
                         const next = new Set(previous);
@@ -5704,17 +6099,18 @@ function App() {
               })}
             </div>
 
-            <section className="connection-card" aria-live="polite">
-              <strong>诊断包</strong>
-              <p className="capability-pending">仅含版本、系统与最近操作结果（已抹去序列号、配对码与路径）。先预览，确认后才保存；不会自动上传任何内容。</p>
-              <span>
-                <button className="secondary-button" type="button" disabled={diagnosticsBusy} onClick={() => void previewDiagnostics()}>
-                  {diagnosticsBusy ? "正在处理…" : diagnostics ? "刷新预览" : "预览诊断内容"}
-                </button>
-                <button className="secondary-button" type="button" disabled={diagnosticsBusy || !diagnostics} onClick={() => void exportDiagnostics()}>
-                  导出为文件
-                </button>
-              </span>
+            <section className="card connection-card" aria-live="polite">
+              <div className="card-head"><h3 className="card-title">诊断包</h3><span className="badge neutral">仅本机 · 不上传</span></div>
+              <div className="card-body">
+                <p className="hint">仅含版本、系统与最近操作结果（已抹去序列号、配对码与路径）。先预览，确认后才保存；不会自动上传任何内容。</p>
+                <span>
+                  <button className="secondary-button" type="button" disabled={diagnosticsBusy} onClick={() => void previewDiagnostics()}>
+                    {diagnosticsBusy ? "正在处理…" : diagnostics ? "刷新预览" : "预览诊断内容"}
+                  </button>
+                  <button className="secondary-button" type="button" disabled={diagnosticsBusy || !diagnostics} onClick={() => void exportDiagnostics()}>
+                    导出为文件
+                  </button>
+                </span>
               {diagnostics && (
                 <div className="screenshot-result">
                   <p className="capability-summary">{diagnostics.app_version} · {diagnostics.system} · 镜像引擎{diagnostics.scrcpy_available ? "可用" : "不可用"} · {diagnostics.events.length} 条最近事件</p>
@@ -5731,6 +6127,7 @@ function App() {
               )}
               {diagnosticsMessage && <p className="apply-notice" role="status">{diagnosticsMessage}</p>}
               {diagnosticsError && <p className="capability-pending" role="alert">{diagnosticsError}</p>}
+              </div>
             </section>
             <aside className="privacy-note">
               <strong>隐私承诺</strong>

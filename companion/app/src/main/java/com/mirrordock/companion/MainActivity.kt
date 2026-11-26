@@ -137,6 +137,47 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    /**
+     * P0-3 手动发送剪贴板文字到电脑。
+     * 前置：用户在前台点按钮（合规读取），常驻连接在线；无新权限、不后台监听。
+     * 隐私：日志只记"发送成功与否"，绝不记录剪贴板正文；不落盘、不上传云端。
+     */
+    private fun sendClipboardToPc() {
+        val sender = LinkState.lineSender ?: run {
+            Toast.makeText(this, R.string.clipboard_no_link, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val clip = runCatching {
+            getSystemService(android.content.ClipboardManager::class.java)?.primaryClip
+        }.getOrNull()
+        val text = clip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) {
+            Toast.makeText(this, R.string.clipboard_empty, Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 行协议 8 KiB 上限：UTF-8 留余量，超长明确拒绝，不截断成半段内容。
+        if (text.toByteArray(Charsets.UTF_8).size > 6000) {
+            Toast.makeText(this, R.string.clipboard_too_long, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val line = org.json.JSONObject().apply {
+            put("type", "clipboard")
+            put("text", text)
+        }.toString()
+        linkSendExecutor.execute {
+            val ok = runCatching { sender(line) }.getOrDefault(false)
+            android.util.Log.i("ClipboardMirror", "send to pc: sent=$ok")
+            runOnUiThread {
+                Toast.makeText(
+                    this@MainActivity,
+                    if (ok) R.string.clipboard_sent else R.string.clipboard_no_link,
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
     private fun openSendPicker() {
         runCatching {
             sendToPcPicker.launch(arrayOf("*/*"))
@@ -527,6 +568,8 @@ class MainActivity : AppCompatActivity() {
     private fun setupFilesPage() {
         findViewById<Button>(R.id.button_files_refresh).setOnClickListener { refreshFiles() }
         findViewById<Button>(R.id.button_send_to_pc).setOnClickListener { openSendPicker() }
+        // P0-3 手动触发：只有用户点按钮才读剪贴板，绝不后台监听。
+        findViewById<Button>(R.id.button_clipboard_to_pc).setOnClickListener { sendClipboardToPc() }
         grantFilesButton.setOnClickListener {
             ReceivedFiles.allFilesAccessIntent(this)?.let { intent ->
                 runCatching { startActivity(intent) }

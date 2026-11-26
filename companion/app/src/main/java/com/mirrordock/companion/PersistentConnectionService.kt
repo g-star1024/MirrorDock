@@ -303,6 +303,39 @@ class PersistentConnectionService : Service() {
                                 NotificationMirrorService.handleReply(key, text)
                             }
                         }
+                        // P0-2 双向清除：桌面端下发的通知清除指令。key 缺省=清空全部，
+                        // 非空=只清对应通知；服务内部会校验 key 仍是活跃通知才动手。
+                        "notification_clear" -> {
+                            val key = json.optString("key").takeIf { it.isNotBlank() }
+                            NotificationMirrorService.handleClear(key)
+                        }
+                        // P0-3 手动触发：电脑端点「发送到手机」下发的剪贴板文字，
+                        // 写入本机系统剪贴板。日志只记收到与否，不记内容。
+                        "clipboard" -> {
+                            val text = json.optString("text")
+                            if (text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 6000) {
+                                android.util.Log.i("ClipboardMirror", "recv from pc: applying")
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    val applied = runCatching<Unit> {
+                                        val cm = getSystemService(android.content.ClipboardManager::class.java)
+                                            ?: error("no clipboard service")
+                                        cm.setPrimaryClip(
+                                            android.content.ClipData.newPlainText(
+                                                getString(R.string.app_name), text,
+                                            ),
+                                        )
+                                    }.isSuccess
+                                    android.widget.Toast.makeText(
+                                        this@PersistentConnectionService,
+                                        if (applied) R.string.clipboard_received else R.string.clipboard_no_link,
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                    if (!applied) {
+                                        android.util.Log.w("ClipboardMirror", "recv apply failed")
+                                    }
+                                }
+                            }
+                        }
                         // 未知类型静默忽略。
                     }
                 }

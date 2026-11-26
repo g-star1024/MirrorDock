@@ -1362,3 +1362,102 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **诚实边界**：预览版「预览演示数据」开关属预览专用，未移植（真实客户端只显示真实状态）；空态三件套全面重构与危险操作自定义对话框未在本轮完成（现有空态/confirm 保持真实行为），记为后续打磨。
 - **质量门**：vitest 123/123（契约测试同步：主题菜单 menuitemradio、模块 Tab 移除改侧栏跳转、留白 Paper 新名）、`pnpm build` 通过、cargo test **229/229**（后端 0 改动 0 破坏）、浏览器走查 19 视图全 0 横向溢出 + ⌘K 过滤执行 + 主题切换持久化 + ⌘B 折叠 + 1100/950px 响应式 0 溢出 + 控制台 0 错误。
 - **状态**：代码在本地 `feat/phone-assistant-ui`；**未打 tag、未推远端、未触发 CI**。真机视觉验收待用户。
+
+### X10-142 各页面内容层对齐预览 HTML：组件库移植 + 逐视图布局重构（2026-11-25）
+
+用户反馈「只改了骨架？各个页面的布局样式跟 HTML 的不一样」——X10-141 确实只覆盖 token + 外壳，15 个助手视图仍走旧 assistant-card 组件体系。本轮把预览 HTML 的组件库整体移植进 React：
+
+- **渲染器重构（assistantViews.tsx）**：section 渲染从旧 `assistant-card/assistant-table/assistant-kv` 切换到预览组件语言——`card/card-head(含 h3.card-title)/card-body/card-foot/table(表头灰底+ops 右对齐列)/kv-grid(.kv)/steps(.step-line 编号圆点)/alert(-info/-warn/-danger)/empty(.hint)/device-tiles/tool-grid-home/check-list(.check-item+why)/badge`；数据模型（AssistantSection）不变；新增 `checklist` kind（present 就绪检查用）；删除内层重复标题 `.assistant-view-head`（页面标题只在 56px View Header 出现一次，与预览一致）。
+- **逐视图布局重构（App.tsx assistantSections）**：
+  - **文件传输** → 预览 `.files-split` 左右两栏：左「手机 → 电脑」表卡（badge 计数 + 卡脚刷新/打开文件夹）、右「电脑 → 手机」拖放区卡（真实 sendFileTo）；
+  - **通知中心** → `.notify-row` 列表（图标首字 + 正文 2 行截断 + time + 打开按钮）+ 卡脚「清空通知 + 本机保留 .switch 开关」；
+  - **相册** → 单卡：卡头目录名 badge + 目录 chips + 文件表 + 卡脚刷新/一键取回全部；
+  - **批量安装** → 拖放区卡（pickApksBatch）+ 队列表（状态 badge 着色）+ 全部安装/停止/清空；
+  - **截图** → `.thumb-strip` 缩略图卡（渐变 thumb + 删除 icon-btn）+ 卡脚立即截图/在文件夹中显示；
+  - **投屏演示** → kv 改 `check-list` 就绪检查（4 项状态圆点 + why 说明，真实 scrcpy/设备状态）；
+  - **镜像控制** → 画面卡（dot busy/off 状态点）+ 会话参数 kv-grid；
+  - 文件名/状态列改 `.cell-main` + `.badge ok/warn/danger/neutral`（真实状态着色，非演示数据）。
+- **组件库 CSS（App.css 追加）**：预览 §组件库全套类 + 旧类视觉收敛——primary-button 微渐变柔影 / secondary-button 描边表面；connection-card/settings-card/device-card/capability-panel/diagnostic/privacy-note 收敛为卡语言（12px 圆角、无边框柔影）；assistant-card h4 去左侧彩色竖条改卡头；**补齐缺失 token `--line-strong`（5 套主题）——修复 .switch 底色塌透明**（X10-141 引入 cmdk-trigger:hover 时就漏了，本轮暴露）。
+- **测试契约**：present 卡头「演示就绪检查」→「就绪检查」（对齐预览文案），断言同步；其余 122 测试零改动通过。
+- **质量门**：vitest 123/123、`pnpm build` 通过、Playwright 走查（soft/prism/midnight 三主题）：设备中心/镜像控制/文件传输/通知中心/相册/批量安装/设备信息/按键映射布局与预览一致、控制台 0 错误。
+- **诚实边界**：4 个 legacy 面板（home/connect/settings/help）为 CSS 视觉收敛（卡语言统一），未重写为预览的 bespoke DOM（连接页仍是真实三步指引+品牌排查，非预览演示态）；预览中依赖演示数据的缩略图墙/相册九宫格不适用（真实状态原则），对应视图用真实单文件/真实清单渲染。
+- **状态**：本地分支，未打 tag、未推远端、未触发 CI。
+
+### X10-143 NectarLink 功能/UI 基准学习 + P0 三件套（2026-11-25）
+
+用户提供开源项目 `github.com/thtbee/nectarlink`（GPL-3.0 应用 / MPL-2.0 核心）截图，要求功能+UI 一起参考学习。建立基准文档 `docs/ui-redesign/04-nectarlink-ui-benchmark.md`（12 张截图存 `nectarlink-ref/`，**只抽象交互模式、不搬代码/文案/视觉资产**），逐页对照预览 v2.5 后升级预览并完成 P0 三件套。
+
+**UI 升级（预览 HTML + 对照文档）**：Home 设备 Hero 卡（身份+连接质量徽章+电量，其余设备降权小卡）；通知卡计数 badge + 清空 + 验证码「复制验证码」按钮 + 单条 × 清除；设置页改 6 组左侧导航 + 右侧单卡行式设置（新增「设备与能力」组）；连接页每条路径增加「替代方案」提示。浏览器 4 页走查无溢出，`node --check` 通过。
+
+**P0-1 通知验证码 Copy code**：
+- 前端 `verificationCode()` 保守正则（中文/英文验证码语境 + 4~8 位数字；金额/手机号/订单号/9 位串一律不识别），2 个 vitest 测试锁定；
+- 前端 `copyCodeToClipboard()` 优先 Web API，失败走 Rust `copy_text_to_clipboard`（stdin 管道喂 pbcopy/clip/xclip，固定参数，校验 ≤64 字符无控制字符，不记明文）；
+- 通知行渲染「复制验证码」按钮；提示语不含明文。
+- 证据：vitest 125/125、cargo 230/230（含 `copy_text_validation_*`）。
+
+**P0-2 通知双向清除**：
+- Rust `companion_notification_clear(key?)` 下发 `notification_clear` 行协议（key 空=全清），返回 sent=false 表示手机不在线；
+- 伴侣端 `PersistentConnectionService` 分发 → `NotificationMirrorService.handleClear()`（companion object 内 @JvmStatic，cancelAllNotifications / 精确 key 匹配 cancelNotification，日志只记结果）；
+- 前端三处清空入口（页头动作/通知卡/能力面板）统一走同步命令；**手机不在线时保留本地列表并明确提示，不先清本地假装已同步**。
+- 证据：两道伴侣门禁全绿（静态 + 真实 kotlinc 0 error）、vitest/cargo 全绿。
+
+**P0-3 剪贴板手动触发双向**（用户先选无障碍全自动，核实 AOSP Android 10+ 限制与 Play 政策高风险后改选手动）：
+- 电脑→手机：Rust `companion_clipboard_send` 读本机系统剪贴板（pbpaste / powershell Get-Clipboard / xclip -o），≤6000 字节拒截断，下发 `clipboard` 行；前端文件页「发送本机剪贴板到手机」按钮；
+- 手机→电脑：伴侣 App 文件 Tab 新增剪贴板卡（前台按钮 `sendClipboardToPc()`，无新权限、非后台监听；日志只记 sent=，不记正文）→ Rust 事件钩子 emit `companion-clipboard` → 前端显示预览卡，**用户点「复制到本机」才写系统剪贴板**（可见可撤销，不自动替换）。
+- 前端新增 `incomingClipboard/clipboardNotice` 状态与监听清理；`.clipboard-preview` 样式。
+- 证据：两道伴侣门禁全绿、vitest 125/125、cargo 230/230、build 通过、浏览器文件页走查 0 错误无溢出。
+
+**诚实边界 / 未验证面**：
+- 真机（伴侣 APK 装到 Android 手机）未验证：通知清除的手机状态栏变化、剪贴板写入的系统提示、TLS 通道实传——仅本地 kotlinc 类型检查 + 静态检查，aapt/dex/真编译以 CI 为准。本轮**未打 tag、未推远端、未触发 CI**。
+- 有通知时的组件级交互测试未落地：mock `listen` 需要注入 `__TAURI_INTERNALS__`，会触发 App 内 12 处 hasTauri 门控的 webview API，污染 30 个既存测试；已回退该测试注入，保留纯函数测试 + 真实命令路径代码审查。
+- Play 政策/无障碍：按用户重新拍板不引入无障碍权限，Data Safety 申报面不变。
+- 隐私：验证码/剪贴板正文不写日志、不落盘、不上传；预览中的「按设备显隐」形态以真实能力为准。
+- 许可证：NectarLink GPL-3.0 应用代码一行未搬，截图仅作内部设计参考、不进发布产物。
+
+### X10-144 设置中心重排：7 组二级导航 + 全部真实设置项零丢失（2026-11-25 晚）
+
+用户指令「继续开发，保留原来设置中心所有功能设置，新版本不要丢弃设置中心的内容」。核对发现：X10-143 升级后的预览设置页只有 6 组演示开关（外观/通用/设备与能力/镜像/传输/隐私，约 15 项），**真实设置中心的全局快捷键、版本与授权、关于 MirrorDock 三整块以及镜像窗口 15 项中的大多数都被演示态替换**。本轮按「保真优先」重排。
+
+**方案（关键约束）**：不重写任何设置卡的 DOM 与事件绑定——7 张原卡片原封不动，只在外层套「左侧二级分组导航 + 右侧内容区」；每组对应原一块，`panel-hidden` 控制显隐（jsdom 与浏览器均验证切换不卸载控件、不丢输入）。预览 HTML 的 vSettings 同步重写为真实项清单（7 组、项名/说明与客户端一致），演示开关不再顶替真实项。
+
+**设置项基线对照（重构前 → 后，逐组浏览器实测）**：
+| 分组 | 真实项 | 浏览器实测 |
+| --- | --- | --- |
+| 外观主题 | 5 套主题 + 本机存储说明 | 5 主题按钮 + 1 说明 |
+| 通用 | 开机自启 / 隐藏 Dock(macOS) / 断线自动重连 | 3 行，全部在位 |
+| 镜像窗口 | 画质 / 帧率 / 摄像头 / 方向 / 全屏 / 置顶 / 保持唤醒 / 录制 / 录像位置 / 双向剪贴板 / 键盘直输 / 音频 / 触摸点 / 只读 / 修饰键 | **15 行，全部在位**（+会话中目标设备条件行） |
+| 按设备桌面模式 | 目标设备选择 / 设备状态列表 / 桌面模式 / 虚拟屏应用 | 1 行 + 设备列表（无设备时按原逻辑回落全局默认）+ 条件应用输入 |
+| 全局快捷键 | 截图 / 录制 / 旋转 + 恢复默认 | 3 输入框 + 1 按钮 |
+| 版本与授权 | 许可证输入 / 激活 / 撤销 | 1 行 + 按钮（按授权状态切换） |
+| 关于 MirrorDock | 版本 / 开发者 / 许可 / 隐私 / 更新 + 官网/GitHub/检查更新 | 5 说明 + 3 按钮 |
+
+- **改动文件**：`src/App.tsx`（SETTINGS_GROUPS 常量 + settingsGroup state + 外层导航 + 7 卡显隐）、`src/App.css`（`.settings-split/.settings-nav/.settings-nav-item/.settings-content` + <1100px 响应式）、`docs/ui-redesign/mirrordock-redesign-preview.html`（vSettings 重写为 7 组真实项 + 导航两行样式 + state.settings 键扩充）。
+- **证据**：`pnpm exec tsc --noEmit` 0 error；vitest **125/125**；`pnpm build` 通过；浏览器逐组点击 7 组（客户端 + 预览）实测每组仅 1 卡可见、项名与基线一致、`scrollWidth` 无溢出；预览内嵌脚本 `node --check` 通过。
+- **诚实边界**：无新增/删除任何设置项、无权限/数据/连接方式变更；预览中的控件是静态演示（真实值仍在客户端修改）；未打 tag、未推远端、未触发 CI。
+
+### X10-145 三个 legacy 面板组件语言对齐：首页 / 连接 / 帮助（2026-11-26 早）
+
+用户「继续」——完成 X10-144 承诺的最后三个 legacy 面板（home/connect/help）的 DOM 重排。与 X10-142 的 assistant 视图、X10-144 的设置中心同款保真原则：**只换视觉组件类，不动任何 state / 事件 / 文案 / 条件分支**。这三个页面承载真实业务（设备状态机 9 态、扫码+配对码+伴侣配对+常驻通道、诊断包预览导出），预览对应视图是简化演示态，因此不照搬演示内容，只用其组件语言组织真实内容。
+
+- **首页**：连接卡头 `connection-heading` → `card-head` + `eyebrow` 改 `badge neutral` + `h2.card-title`；三步引导与品牌步骤 `<ol>` 加 `steps`、`<li>` 加 `step-line`（**去掉手写 `<span>1/2/3</span>`，改由 CSS counter 生成**，避免双号）；品牌按钮 `device-choice/selected` → `chip/active`。
+- **连接页**：三张 `wireless-heading` → `card-head`；eyebrow 改 badge（推荐=ok / 手动方式=neutral / 伴侣 App（实验）=warn）；两个「扫码配对」h2 与「配对码配对」h2 加 `card-title`；手动配对三步 ol/li → `steps/step-line`。
+- **帮助页**：帮助文章 `capability-panel` 加 `card`、折叠头 `help-article-head` 加 `card-head`；诊断包 `connection-card` 加 `card`，内部拆 `card-head`（标题 + 「仅本机·不上传」badge）+ `card-body`（说明 + 按钮 + 预览结果），隐私承诺 `privacy-note` 保留。
+- **CSS 收敛**：`.card-head .eyebrow.badge / h2.card-title / connection-heading / wireless-heading / ol.steps li.step-line / help-article-head / card-body > .hint` 的间距与对齐规则；旧 `.device-choice` 规则成死代码（无引用、无害）。
+- **证据**：`tsc` 0 error、vitest **125/125**、`pnpm build` 通过；浏览器走查 home/connect/help 三页 + 诊断包 + Midnight 深色主题：卡头 badge+标题、数字圆点（无重复）、chip 高亮、按钮排布全部正常，0 控制台错误、无溢出。
+- **诚实边界**：纯视觉类对齐，无新增/删除功能项、无权限/数据/连接方式变更；未打 tag、未推远端、未触发 CI。
+
+### X10-146 非设置页全量收口：预览 ↔ 客户端双向对齐（2026-11-26 早）
+
+用户指令「除了设置中心外，其他页面可以根据实际预览改造，预览能实现的直接实现，预览不能实现的，在预览页面增加入口或者其他方式实现」。本轮把 X10-142 未覆盖的页面结构补齐，并对预览做反向功能补口，避免「按预览升级」静默丢功能。
+
+- **客户端按预览改造**（`src/App.tsx`、`src/assistantViews.tsx`、`src/App.css`）：
+  - `keymap`：旧 `assistant-card/chip/form-grid` 改为 `card + card-head + plan-grid + plan-card + step-row + kbd + input/select`；保留方案选中、映射条目测试/删除、按键捕获、导入导出、键盘设置、测试面板全部事件与文案。
+  - `schedule`：计划 chips 改为预览同款表格（名称/时间/时长/状态/操作）+ 添加计划卡 + 运行日志卡 + 启停动作，保留 localStorage 持久化与所有校验/日志语义。
+  - `replay`：脚本卡 + plan-card 步骤编排（上移/下移/删除/添加）+ 导入导出 + 开始/停止 + `details` 能力边界；保留编排式回放的诚实边界。
+  - `apps`：筛选框从页头下沉到预览同款卡头搜索框，排序由「按大小」改为客户端真实支持的「按名称 / 按包名」；新增 `appsSort` 只影响展示顺序，打开/卸载事件不变；`FILTERABLE_VIEWS` 移除 apps 避免双搜索框。
+  - `record/pro/mirror/present/multi`：录像补 Pro 提示与录制状态卡、Pro 激活卡改 `card-head + badge + input + btn`、镜像画布改 `canvas16/canvas-screen/phone-frame/canvas-hud`、投屏检查项补「去连接」按钮、多端保留一键全部截图。
+  - 全局 action 按钮从 `.assistant-btn` 统一到预览 `.btn/.btn-primary/.btn-secondary/.btn-danger/.btn-ghost`；CSS 补齐 `.btn*/.mono/.kbd/.input/.select/.search-box/.plan-grid/.plan-card/.step-row/.detail-row/.canvas16` 等预览组件类；`.spacer/.hint` 归位。
+- **预览补真实入口**（`docs/ui-redesign/mirrordock-redesign-preview.html`）：设备信息补电池/存储 + 诊断导出，多端补一键全部截图，镜像补会话参数 + 启停，投屏补启停/桌面模式，按键映射补导入/测试面板并把全局快捷键改为客户端真实三项，定时录制补状态/运行日志/启停，操作回放补导入导出/启停，文件传输补手动剪贴板，录像补启停，相册「按日期建文件夹」改「一键取回全部」，应用管理改为按名称/包名排序并移除假「停用」，通知补打开应用与空态说明，帮助补诊断包，连接补品牌排查和「替代方案」标签；首页 Hero 的「媒体播放」改为客户端真实具备的「镜像会话」。
+- **设计文档**：`docs/ui-redesign/01-visual-direction.md` 追加 §16，登记双向对齐原则与诚实边界。
+- **验证证据**：`pnpm exec tsc --noEmit` 0 error；vitest **125/125**；`vite build` 成功（CSS 64.29 kB / JS 465.24 kB）；预览内嵌脚本 `node --check` 通过；浏览器走查客户端 19 视图（各页 0 横向溢出、0 控制台错误）+ 预览 19 页两态（demo/非 demo，0 横向溢出，除 favicon 404 无错误）；按键映射新建方案后 plan-card 表单截图核验对齐。
+- **诚实边界**：无新增/删除真实功能；未改 Rust / 伴侣端 / 权限 / 数据流；设置中心继续零改动；预览中的 Hero 数据仍是演示态，不进客户端；未打 tag、未推远端、未触发 CI；真机与 CI 编译仍待后续验证。

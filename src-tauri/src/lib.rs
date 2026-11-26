@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -8789,6 +8789,130 @@ fn companion_notification_reply(
     Ok(sent)
 }
 
+/// P0-3 手动触发：从本机系统剪贴板读取纯文本，经常驻通道下发到手机。
+/// 用户点按钮才读，不做监听/自动同步；文本经管道读取，不写日志、不落盘。
+/// 返回 sent=false 表示手机不在线；Ok(None) 表示本机剪贴板没有可用纯文本。
+#[tauri::command]
+fn companion_clipboard_send(
+    state: State<'_, Arc<companion_pairing::PairingState>>,
+) -> Result<Option<bool>, AppError> {
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("pbpaste", &[])
+    } else if cfg!(target_os = "windows") {
+        ("powershell", &["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+    } else {
+        ("xclip", &["-selection", "clipboard", "-o"])
+    };
+    let output = Command::new(program).args(args).output().map_err(|_| {
+        AppError::new(
+            "clipboard_unavailable",
+            "无法读取本机剪贴板。",
+            "请确认系统剪贴板可用后重试。",
+        )
+    })?;
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    // 行协议 8 KiB 上限：UTF-8 字节数留足余量，超长明确拒绝，不截断成"半段剪贴板"。
+    if text.len() > 6000 || text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+        return Err(AppError::new(
+            "endpoint_invalid",
+            "剪贴板内容过长或含不支持的字符。",
+            "请缩短后重试；这里不会截断你的内容。",
+        ));
+    }
+    let line = serde_json::json!({ "type": "clipboard", "text": text });
+    Ok(Some(state.broadcast_line(line.to_string())))
+}
+
+/// P0-2：清除通知并同步到手机伴侣端。
+/// `key` 为空表示清空全部；非空只清对应通知（≤256 字节、无控制字符）。
+/// 返回 sent=false 表示手机常驻连接不在线——前端据此保留本地列表并提示，
+/// 绝不伪装成"已同步"。
+#[tauri::command]
+fn companion_notification_clear(
+    state: State<'_, Arc<companion_pairing::PairingState>>,
+    key: Option<String>,
+) -> Result<bool, AppError> {
+    let line = match key {
+        Some(k) => {
+            let k = k.trim();
+            if k.is_empty() || k.len() > 256 || k.chars().any(|c| c.is_control()) {
+                return Err(AppError::new(
+                    "endpoint_invalid",
+                    "通知标识无效，无法清除。",
+                    "请刷新通知列表后重试。",
+                ));
+            }
+            serde_json::json!({ "type": "notification_clear", "key": k })
+        }
+        None => serde_json::json!({ "type": "notification_clear" }),
+    };
+    Ok(state.broadcast_line(line.to_string()))
+}
+
+/// P0-1 复制验证码的内容校验：只接受短小的单行纯文本。
+/// 文本不写日志——诊断记录里只能出现「复制成功/失败」这两个状态词。
+fn validate_copy_text(text: &str) -> Result<&str, AppError> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().count() > 64 || text.chars().any(|c| c.is_control()) {
+        return Err(AppError::new(
+            "endpoint_invalid",
+            "复制内容无效。",
+            "请重新查看通知，或手动选中验证码复制。",
+        ));
+    }
+    Ok(text)
+}
+
+/// P0-1：把用户点「复制验证码」的文本写入系统剪贴板。
+/// 文本经 stdin 管道传给系统工具，绝不拼接进命令行参数；前端 Web API
+/// 不可用时才走这条兜底路径（macOS pbcopy / Windows clip / Linux xclip）。
+/// 成功返回 true；工具不存在或执行失败返回明确的错误，不伪装成功。
+#[tauri::command]
+fn copy_text_to_clipboard(text: String) -> Result<bool, AppError> {
+    use std::io::Write;
+    let text = validate_copy_text(&text)?;
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("pbcopy", &[])
+    } else if cfg!(target_os = "windows") {
+        ("clip", &[])
+    } else {
+        ("xclip", &["-selection", "clipboard"])
+    };
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            AppError::new(
+                "clipboard_unavailable",
+                "本机剪贴板工具不可用。",
+                "请手动选中通知里的验证码复制。",
+            )
+        })?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes()).map_err(|_| {
+            AppError::new(
+                "clipboard_unavailable",
+                "写入系统剪贴板失败。",
+                "请手动选中通知里的验证码复制。",
+            )
+        })?;
+    }
+    child.wait().map_err(|_| {
+        AppError::new(
+            "clipboard_unavailable",
+            "系统剪贴板工具执行失败。",
+            "请手动选中通知里的验证码复制。",
+        )
+    })?;
+    Ok(true)
+}
+
 /// 把录制状态变化推给当前活跃的伴侣会话（M4-3）。
 /// 无活跃会话时静默忽略——伴侣通道是附加信息通道，不构成错误。
 fn notify_companion_recording(app: &AppHandle, active: bool) {
@@ -8965,6 +9089,17 @@ pub fn run() {
                                 }),
                             );
                         }
+                        // P0-3 手动触发：手机伴侣 App 前台点「发送到电脑」后上行。
+                        // 只把文本发给前端内存，不写日志、不落盘；前端写入系统剪贴板。
+                        Some("clipboard") => {
+                            let text = value.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                            if !text.is_empty() && text.len() <= 6000 {
+                                let _ = hook_handle.emit(
+                                    "companion-clipboard",
+                                    serde_json::json!({ "text": text }),
+                                );
+                            }
+                        }
                         _ => {}
                     }
                 }));
@@ -9042,6 +9177,9 @@ pub fn run() {
             companion_begin_resident,
             companion_end_resident,
             companion_notification_reply,
+            companion_notification_clear,
+            copy_text_to_clipboard,
+            companion_clipboard_send,
             companion_paired_devices,
             companion_unpair_device,
             get_app_settings,
@@ -9919,6 +10057,15 @@ mod tests {
     fn notification_reply_validation_allows_500_chars() {
         let text = "字".repeat(500);
         assert!(validate_notification_reply("ok-key", &text).is_ok());
+    }
+
+    #[test]
+    fn copy_text_validation_accepts_code_and_rejects_unsafe() {
+        assert_eq!(validate_copy_text("  492817  ").unwrap(), "492817");
+        assert!(validate_copy_text("").is_err());
+        assert!(validate_copy_text("   ").is_err());
+        assert!(validate_copy_text(&"1".repeat(65)).is_err());
+        assert!(validate_copy_text("492817\nrm -rf /").is_err());
     }
 
     #[test]

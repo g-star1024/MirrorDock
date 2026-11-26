@@ -63,6 +63,7 @@ import App, {
   type DeviceCapabilities,
   type DeviceLockReport,
   type MirrorSession,
+  verificationCode,
 } from "./App";
 
 function adbCheck(overrides: Record<string, unknown> = {}) {
@@ -316,6 +317,25 @@ describe("notificationTime", () => {
     // 昨天的通知：带日期。
     const yesterday = new Date(2026, 9, 1, 23, 59).getTime();
     expect(notificationTime(yesterday, now)).toBe("10-01 23:59");
+  });
+});
+
+describe("verificationCode (P0-1 保守提取)", () => {
+  it("extracts codes only from explicit verification contexts", () => {
+    expect(verificationCode("您的验证码是 492817，5 分钟内有效。")).toBe("492817");
+    expect(verificationCode("校验码：1234")).toBe("1234");
+    expect(verificationCode("Your verification code is 849201")).toBe("849201");
+    expect(verificationCode("one-time password: 654321")).toBe("654321");
+    expect(verificationCode("OTP 是 334455")).toBe("334455");
+  });
+  it("never mistakes amounts, phone numbers or bare digits for codes", () => {
+    expect(verificationCode("转账金额 1234 元")).toBeNull();
+    expect(verificationCode("13800138000")).toBeNull();
+    expect(verificationCode("安全补丁可下载")).toBeNull();
+    expect(verificationCode("订单号 20261125123456789")).toBeNull();
+    // 9 位数字不能截前 8 位冒充验证码。
+    expect(verificationCode("验证码 123456789")).toBeNull();
+    expect(verificationCode("")).toBeNull();
   });
 });
 
@@ -606,8 +626,8 @@ describe("App rendering", () => {
     expect(await screen.findByRole("heading", { name: "会话参数" })).toBeInTheDocument();
 
     fireEvent.click(within(functionNav).getByRole("button", { name: "投屏演示" }));
-    // X10-132：投屏演示升级为就绪检查 + 一键演示；未实现的标注/文稿管理仍如实标注。
-    expect(await screen.findByRole("heading", { name: "演示就绪检查" })).toBeInTheDocument();
+    // X10-132：投屏演示升级为就绪检查 + 一键演示；X10-142 对齐预览 HTML 卡头文案「就绪检查」。
+    expect(await screen.findByRole("heading", { name: "就绪检查" })).toBeInTheDocument();
     expect(screen.getAllByText(/尚未实现/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/未连接手机/).length).toBeGreaterThan(0);
 

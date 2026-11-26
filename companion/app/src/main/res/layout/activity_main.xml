@@ -425,6 +425,36 @@
                             android:text="@string/action_grant_files" />
                     </LinearLayout>
                 </LinearLayout>
+
+                <!-- P0-3 手动触发剪贴板同步（无后台监听、无新权限）。 -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_4"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/clipboard_title" />
+
+                    <Button
+                        android:id="@+id/button_clipboard_to_pc"
+                        style="@style/SecondaryButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="@dimen/control_height_md"
+                        android:layout_marginTop="@dimen/space_3"
+                        android:text="@string/action_clipboard_to_pc" />
+
+                    <TextView
+                        style="@style/CardBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_2"
+                        android:text="@string/clipboard_note" />
+                </LinearLayout>
             </LinearLayout>
         </ScrollView>
     </FrameLayout>

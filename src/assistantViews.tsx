@@ -1,10 +1,16 @@
 import type { ReactElement, ReactNode } from "react";
 
 /**
- * 爱思风格手机助手视图层（X10-128）。
+ * 手机助手视图层（X10-128，X10-142 重构为「安静的诊断台」组件库）。
  *
- * 这个文件只负责「原型同款」的导航结构与通用页面组件，不持有设备/会话状态。
+ * 这个文件只负责视图结构与通用页面组件，不持有设备/会话状态。
  * 具体数据由 App.tsx 注入，避免把真实状态变成演示数据。
+ *
+ * X10-142：section 渲染从旧 assistant-card 体系整体切换到
+ * docs/ui-redesign/mirrordock-redesign-preview.html 的组件语言：
+ * card / card-head / card-body / card-foot / table / kv-grid / steps /
+ * alert / empty / device-tiles / tool-grid-home / check-list / dropzone。
+ * 数据模型（AssistantSection）不变，只换 DOM 与类名。
  */
 
 export type AssistantViewKey =
@@ -89,19 +95,42 @@ export type AssistantSection =
   | { kind: "devices"; title?: string; hint?: string; devices: ReactNode[] }
   | { kind: "tools"; title?: string; hint?: string; tools: ReactNode[] }
   | { kind: "table"; title: string; columns: string[]; rows: AssistantRow[]; tone?: number; empty?: string }
-  | { kind: "kv"; title: string; items: [string, ReactNode][]; tone?: number }
+  | { kind: "kv"; title: string; items: [string, ReactNode][]; tone?: number; two?: boolean }
   | { kind: "actions"; actions: AssistantAction[]; tone?: number }
-  | { kind: "note"; text: string; tone?: number }
+  | { kind: "note"; text: string; tone?: number; kind_of_alert?: "info" | "warn" | "danger" }
   | { kind: "steps"; title: string; items: string[]; tone?: number }
   | { kind: "details"; title: string; items: [string, string][]; tone?: number }
   | { kind: "phone"; title: string; tone?: number; children?: ReactNode }
+  | { kind: "checklist"; title: string; items: { label: string; ok: boolean; why: ReactNode }[]; tone?: number }
   | { kind: "custom"; children: ReactNode };
 
-function toneClass(tone: number | undefined): string {
-  return `assistant-tone-${tone ?? 1}`;
+function Card({
+  title,
+  badge,
+  foot,
+  children,
+  bodyClass,
+}: {
+  title: ReactNode;
+  badge?: ReactNode;
+  foot?: ReactNode;
+  children: ReactNode;
+  bodyClass?: string;
+}): ReactElement {
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h3 className="card-title">{title}</h3>
+        {badge && <span className="badge neutral">{badge}</span>}
+        <span className="spacer" />
+      </div>
+      {bodyClass ? <div className={bodyClass}>{children}</div> : <div className="card-body">{children}</div>}
+      {foot && <div className="card-foot">{foot}</div>}
+    </section>
+  );
 }
 
-function AssistantSectionView({ section, filter }: { section: AssistantSection; filter: string }) {
+function AssistantSectionView({ section, filter }: { section: AssistantSection; filter: string }): ReactElement | null {
   const query = filter.trim().toLowerCase();
   switch (section.kind) {
     case "devices":
@@ -111,7 +140,7 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
             <h3>{section.title ?? "设备列表"}</h3>
             {section.hint && <span>{section.hint}</span>}
           </div>
-          <div className="assistant-device-grid">{section.devices}</div>
+          <div className="device-tiles">{section.devices}</div>
         </section>
       );
     case "tools":
@@ -121,47 +150,71 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
             <h3>{section.title ?? "常用工具"}</h3>
             {section.hint && <span>{section.hint}</span>}
           </div>
-          <div className="assistant-tool-grid">{section.tools}</div>
+          <div className="tool-grid-home">{section.tools}</div>
         </section>
       );
     case "table": {
       const rows = query
         ? section.rows.filter((row) => (row.filterText ?? "").toLowerCase().includes(query))
         : section.rows;
+      const columnCount = section.columns.length;
       return (
-        <section className={`assistant-card ${toneClass(section.tone)}`}>
-          <h4>{section.title}</h4>
-          <div className="assistant-table-wrap" role="region" aria-label={section.title} tabIndex={0}>
-            <table className="assistant-table">
-              <thead>
-                <tr>{section.columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 ? (
-                  <tr><td colSpan={section.columns.length}>{section.empty ?? "没有匹配内容"}</td></tr>
-                ) : rows.map((row, index) => (
-                  <tr key={index}>{row.cells.map((cell, cellIndex) => (
-                    cellIndex === 0 ? <th scope="row" key={cellIndex}>{cell}</th> : <td key={cellIndex}>{cell}</td>
-                  ))}</tr>
-                ))}
-              </tbody>
-            </table>
+        <section className="card">
+          <div className="card-head">
+            <h3 className="card-title">{section.title}</h3>
+            <span className="spacer" />
           </div>
+          {rows.length === 0 ? (
+            <div className="empty hint">
+              <p>{section.empty ?? "没有匹配内容"}</p>
+            </div>
+          ) : (
+            <div className="table-wrap" role="region" aria-label={section.title} tabIndex={0}>
+              <table className="table">
+                <thead>
+                  <tr>{section.columns.map((column, index) => (
+                    <th scope="col" key={column} data-col={index === columnCount - 1 && columnCount > 2 ? "ops" : undefined}>{column}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, index) => (
+                    <tr key={index}>{row.cells.map((cell, cellIndex) => (
+                      <td key={cellIndex} className={cellIndex === 0 ? "cell-main" : undefined}>{cell}</td>
+                    ))}</tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       );
     }
     case "kv":
       return (
-        <section className={`assistant-card ${toneClass(section.tone)}`}>
-          <h4>{section.title}</h4>
-          <div className="assistant-kv-grid">
+        <Card title={section.title}>
+          <dl className={`kv-grid${section.two ? " two" : ""}`}>
             {section.items.map(([key, value], index) => (
-              <div className="assistant-kv" key={`${key}-${index}`}>
-                <b>{key}</b><span>{value}</span>
+              <div className="kv" key={`${key}-${index}`}>
+                <dt>{key}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </Card>
+      );
+    case "checklist":
+      return (
+        <Card title={section.title}>
+          <div className="check-list">
+            {section.items.map((item) => (
+              <div className="check-item" key={item.label}>
+                <span className={`dot ${item.ok ? "ok" : "warn"}`} aria-hidden="true" />
+                <span>{item.label}</span>
+                <span className="why">{item.why}</span>
               </div>
             ))}
           </div>
-        </section>
+        </Card>
       );
     case "actions":
       return (
@@ -170,7 +223,7 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
             <button
               key={action.label}
               type="button"
-              className={`assistant-btn${action.primary ? " primary" : ""}${action.danger ? " danger" : ""}`}
+              className={`btn btn-sm${action.primary ? " btn-primary" : action.danger ? " btn-danger" : " btn-secondary"}`}
               disabled={action.disabled}
               onClick={action.onClick}
             >
@@ -179,21 +232,26 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
           ))}
         </div>
       );
-    case "note":
-      return <p className="assistant-note">{section.text}</p>;
+    case "note": {
+      const alertKind = section.kind_of_alert ?? "info";
+      return (
+        <div className={`alert alert-${alertKind}`} role={alertKind === "info" ? "status" : "alert"}>
+          <div className="alert-text">{section.text}</div>
+        </div>
+      );
+    }
     case "steps":
       return (
-        <section className={`assistant-card ${toneClass(section.tone)}`}>
-          <h4>{section.title}</h4>
-          <ol className="assistant-steps">
-            {section.items.map((item) => <li key={item}>{item}</li>)}
-          </ol>
-        </section>
+        <Card title={section.title}>
+          <div className="steps">
+            {section.items.map((item) => <div className="step-line" key={item}>{item}</div>)}
+          </div>
+        </Card>
       );
     case "details":
       return (
-        <section className={`assistant-card ${toneClass(section.tone)}`}>
-          <h4>{section.title}</h4>
+        <section className="card">
+          <div className="card-head"><h3 className="card-title">{section.title}</h3><span className="spacer" /></div>
           <div className="assistant-details">
             {section.items.map(([question, answer]) => (
               <details key={question}>
@@ -206,9 +264,14 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
       );
     case "phone":
       return (
-        <section className={`assistant-card ${toneClass(section.tone)}`}>
-          <h4>{section.title}</h4>
-          <div className="assistant-phone-wrap">{section.children ?? <span className="assistant-muted">没有可显示的实时画面</span>}</div>
+        <section className="card">
+          <div className="card-head"><h3 className="card-title">{section.title}</h3><span className="spacer" /></div>
+          {/* X10-146：与预览同款 16:9 画布。真实画面在独立 scrcpy 窗口，
+              这里只呈现真实会话状态，不塞假缩略图。 */}
+          <div className="canvas16">
+            <div className="canvas-screen"><div className="phone-frame" aria-hidden="true"><i /></div></div>
+            <div className="canvas-hud">{section.children ?? <span className="assistant-muted">没有可显示的实时画面</span>}</div>
+          </div>
         </section>
       );
     case "custom":
@@ -230,12 +293,6 @@ export function AssistantViewPage({
   const meta = ASSISTANT_VIEWS[view];
   return (
     <section className="assistant-view" data-view={view} aria-label={meta.title}>
-      <div className="assistant-view-head">
-        <div>
-          <h3>{meta.title}</h3>
-          <p>{meta.subtitle}</p>
-        </div>
-      </div>
       <div className="assistant-view-stack">
         {sections.map((section, index) => (
           <AssistantSectionView key={`${view}-${index}`} section={section} filter={filter} />

@@ -531,3 +531,36 @@
 ## §12 迭代 v2.5：胶囊件全部归入 12px（2026-11-25 用户反馈）
 
 用户确认胶囊件也统一。状态徽章 `.badge`、开关轨道 `.switch`、进度条 `.progress`、画布悬浮标签 `.canvas-hud/.canvas-flag` 由 999px 改为 `var(--r-md)`（12px）。**预览中已无任何 999px 圆角**（媒体查询中的 max-width: 999px 与圆角无关，不在此列）。浏览器实测：可见元素 computed 圆角仅剩 12px / 主题菜单色块 4px / 手机示意图装饰件，全局一个圆角语言。
+
+## §13 X10-142：内容层组件库移植（预览 → React 逐视图落地）
+
+X10-141 只落地了 token + 外壳，本轮（X10-142）把预览的组件语言移植进真实客户端：
+
+1. **渲染器**（`src/assistantViews.tsx`）：section → `card / card-head / card-body / card-foot / table / kv-grid / steps / alert / empty / device-tiles / tool-grid-home / check-list`，数据模型不变。
+2. **逐视图**：files=files-split 左右栏；notify=notify-row+switch；album=单卡(chips+表+foot)；install=dropzone 卡+队列表；shot=thumb-strip；present=check-list；mirror=画面卡+kv-grid。状态一律真实着色（badge ok/warn/danger）。
+3. **token 补课**：React 侧补齐 `--line-strong`（5 套主题）——HTML 预览有、React 没搬，导致 `.switch`/`.dropzone`/`.secondary-button` 描边塌透明。**教训：搬 token 块要整块对齐，不要挑着搬。**
+4. **legacy 面板**（home/connect/settings/help）：CSS 收敛为卡语言（12px 圆角、柔影、按钮微渐变），DOM 不重写——它们承载真实业务（三步连接/品牌排查/无线表单/真实设置），不套演示态结构。
+5. **标题唯一出处**：删除内层 `.assistant-view-head`，页面标题只在 56px View Header 出现（与预览 §4.1 一致）。
+
+## §14 X10-144：设置中心信息架构升级（保真优先）
+
+1. **原则**：设置页重排属于信息架构升级，不是内容重写。真实设置中心的 7 块内容（外观主题/通用/镜像窗口/按设备桌面模式/全局快捷键/版本与授权/关于）与全部 30+ 项控件逐项保留，DOM 与事件绑定不动。
+2. **形态**：沿用 NectarLink 基准的「左侧二级分组导航 + 右侧内容区」，但分组数由预览的 6 组演示分组改为 **7 组真实分组**——快捷键、授权、关于三块不能被演示态吞掉。
+3. **显隐策略**：`panel-hidden` CSS 控制，不卸载组件；切换分组不丢输入内容（与旧 tab-panel 同一策略）。
+4. **预览同步**：`vSettings()` 重写为真实项清单（含 15 项镜像设置逐条说明），导航项改「图标 + 标题 + 小字说明」两行结构。预览不再用自造演示开关顶替真实设置项。
+5. **教训**：预览原型可以做演示态，但一旦它成为「升级目标」被落地，就必须与真实功能清单 1:1 对齐——否则「按预览升级」会静默丢功能。
+
+## §15 X10-145：首页 / 连接 / 帮助三页组件语言对齐
+
+1. **保真原则延续**：与设置中心（§14）同款——只换视觉组件类，不动 state / 事件 / 文案 / 条件。三页承载真实业务（设备状态机、QR/配对码/常驻通道、诊断包），预览对应视图是简化演示态，故只借其组件语言，不照搬演示内容。
+2. **对齐点**：卡头统一 `card-head` + `badge` + `card-title`；三步/品牌指引统一 `steps/step-line`（数字由 CSS counter 生成，移除手写 span 避免双号）；品牌芯片 `chip/active`；帮助文章与诊断包用 `card` + `card-head` + `card-body`。
+3. **卡片语法统一后**，四个 legacy 面板（home/connect/settings/help）与 15 个 assistant 视图使用同一套组件语言——圆角 12px、柔影分层、灰底表头、卡头标题唯一出处。
+
+## §16 X10-146：非设置页全量收口（预览 ↔ 客户端双向对齐）
+
+用户指令：「除了设置中心外，其他页面可以根据实际预览改造，预览能实现的直接实现，预览不能实现的，在预览页面增加入口或者其他方式实现」。本轮是**双向**对齐，不是单向照搬：
+
+1. **客户端补齐预览组件语言**：`keymap / schedule / replay / pro / record / apps` 从旧 `assistant-card / assistant-chip / assistant-form-*` 切换到预览同款 `card / card-head / card-body / plan-grid / plan-card / step-row / kbd / btn / input / select / details-block`；`mirror` 画布改为 `canvas16 + canvas-screen + phone-frame + canvas-hud`；所有 action 按钮统一 `.btn` 家族；`assistantViews.tsx` 渲染器同步改造。state / 事件 / 文案 / 条件分支一律不动。
+2. **预览补齐真实功能入口**：设备信息（电池/存储 + 诊断导出）、多端（一键全部截图）、镜像（会话参数 + 开始/结束）、投屏（开始/结束/桌面模式）、按键映射（导入/导出/测试面板 + 真实全局快捷键）、定时录制（录制状态 + 运行日志 + 启停）、操作回放（导入/导出 + 启停 + 真实边界）、文件传输（手动剪贴板）、录像（启停 + 文件夹）、相册（一键取回全部，移除假「按日期建文件夹」）、应用管理（真实排序 name/package，移除客户端没有的「按大小」与假「停用」）、通知（打开应用 + 空态说明）、帮助（诊断包）、连接（品牌排查 + 明确「替代方案」）。
+3. **诚实边界继续生效**：预览中的Hero电量/最近任务是演示态（有 demo 开关），客户端绝不写入假数据；客户端的「激光笔/白板」「按日期建文件夹」「仅授权包安装」等未实现能力从预览移除或改写为如实说明。
+4. **质量门**：`tsc --noEmit` 0 error；vitest 125/125；`vite build` 通过；预览内嵌脚本 `node --check` 通过；浏览器逐页走查 19 视图 + 预览 demo/非 demo 两态，控制台 0 错误（仅 favicon 404）、横向溢出 0。
