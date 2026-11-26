@@ -460,7 +460,7 @@ html[data-theme="paper"] .card { border: 1px solid var(--line); box-shadow: none
 .kv-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .kv { padding: var(--sp-3); background: var(--surface-2); border-radius: var(--r-sm); min-width: 0; }
 .kv dt { font-size: var(--fs-12); color: var(--muted); }
-.kv dd { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv dd { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
 .kv dd.skeleton-line { height: 14px; margin-top: 5px; }
 
 .progress { height: 6px; border-radius: var(--r-md); background: var(--surface-2); overflow: hidden; min-width: 80px; }
@@ -536,21 +536,8 @@ html[data-theme="prism"] .tool-ico.c6 { background: var(--cat-green-soft); color
 .popover .menu-item .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--line-strong); flex: none; }
 
 /* ---------- 视图专用结构 ---------- */
-.canvas16 { aspect-ratio: 16 / 9; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface-2); position: relative; overflow: hidden; display: grid; }
-.canvas16 .empty { width: 100%; }
-.canvas-screen { position: absolute; inset: 0; display: grid; place-items: center; background: linear-gradient(140deg, var(--surface-3), var(--surface-2)); }
-.phone-frame {
-  width: 96px; height: 170px; border: 3px solid var(--line-strong); border-radius: 14px;
-  background: var(--surface); position: relative; box-shadow: var(--shadow-1);
-}
-.phone-frame::before { content: ""; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: 20px; height: 3px; border-radius: 3px; background: var(--line-strong); }
-.phone-frame i { position: absolute; inset: 14px 4px 4px; border-radius: 6px; background: linear-gradient(150deg, var(--accent-soft), var(--accent)); opacity: .8; }
-.canvas-hud {
-  position: absolute; left: var(--sp-3); bottom: var(--sp-3); display: flex; align-items: center; gap: var(--sp-2);
-  padding: 4px 10px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line);
-  font-size: var(--fs-12); color: var(--text-2); box-shadow: var(--shadow-1);
-}
-.canvas-flag { position: absolute; left: var(--sp-3); top: var(--sp-3); display: inline-flex; align-items: center; gap: var(--sp-1); padding: 4px 10px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-11); color: var(--muted); }
+/* X10-147：镜像/演示画面一律在独立窗口打开，控制页不再有画布，只放真实状态行。 */
+.mirror-state { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-13); }
 .mirror-toolbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 
 .thumb-strip { display: flex; gap: var(--sp-2); overflow-x: auto; padding-bottom: var(--sp-1); }
@@ -1330,19 +1317,23 @@ function vMulti() {
 }
 
 function vMirror() {
-  var canvas;
+  // X10-147：镜像画面一律在独立窗口打开，控制页不再放画布，只放真实状态卡。
+  var status;
   if (state.demo && state.mirrorOn) {
-    canvas = '<div class="canvas16"><div class="canvas-screen"><div class="phone-frame" aria-hidden="true"><i></i></div></div>' +
-      '<span class="canvas-flag">' + ico("i-lock") + '受保护内容将显示黑屏</span>' +
-      '<div class="canvas-hud"><span class="dot busy"></span>推流中 · 1080 × 2400 · 60 fps · 38 ms</div></div>';
+    status = '<div class="card"><div class="card-head">镜像状态 <span class="badge ok">会话进行中</span></div>' +
+      '<div class="card-body"><div class="mirror-state"><span class="dot busy"></span><b>推流中 · 1080 × 2400 · 60 fps · 38 ms</b></div>' +
+      '<p class="hint"><span>' + ico("i-lock") + " 受保护内容（支付 / 密码页）由系统限制为黑屏，这不是镜像故障。</span>" +
+      "画面在<b>独立的镜像窗口</b>中显示，本页只负责发起、结束与参数调整，不重复显示画面。</p></div></div>";
   } else if (state.demo) {
-    canvas = '<div class="canvas16">' + emptyState("i-mirror", "设备已授权，随时可以开始",
-      "点右上角「开始镜像」建立会话；画面与键鼠输入都走本机直连通道。", null) + "</div>";
+    status = '<div class="card"><div class="card-head">镜像状态 <span class="badge neutral">未开始</span></div>' +
+      '<div class="card-body"><div class="mirror-state"><span class="dot off"></span><b>设备已授权，随时可以开始</b></div>' +
+      '<p class="hint">点下方「开始镜像」建立会话；画面与键鼠输入都走本机直连通道，画面在独立镜像窗口打开。</p></div></div>';
   } else {
-    canvas = '<div class="canvas16">' + emptyState("i-mirror", "设备授权后即可开始镜像",
-      "未连接设备。连接并授权后，这里会显示实时画面。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
+    status = '<div class="card"><div class="card-head">镜像状态 <span class="badge neutral">未开始</span></div>' +
+      '<div class="card-body"><div class="mirror-state"><span class="dot off"></span><b>未连接设备</b></div>' +
+      '<p class="hint">连接并授权后即可开始镜像。 <button class="btn-ghost" data-act="nav" data-view="connect">去连接</button></p></div></div>';
   }
-  return canvas +
+  return status +
     '<div class="mirror-toolbar">' +
     (state.demo && state.mirrorOn
       ? '<button class="btn btn-secondary" data-act="mirror-pause">暂停</button><button class="btn btn-secondary" data-act="toast" data-arg="原型演示：旋转画面">旋转</button>'
@@ -1379,16 +1370,13 @@ function vPresent() {
       (!ok && c[0] === "目标设备已连接" ? ' · <button class="btn-ghost" data-act="nav" data-view="connect">去连接</button>' : "") +
       "</span></div>";
   }).join("");
-  var canvas = state.demo
-    ? '<div class="canvas16"><div class="canvas-screen"><div class="phone-frame" aria-hidden="true"><i></i></div></div><div class="canvas-hud">演示就绪 · 投屏画面只在本机渲染</div></div>'
-    : '<div class="canvas16">' + emptyState("i-present", "未连接设备", "连接设备并通过就绪检查后即可开始演示。", { label: "连接设备 →", act: "nav", view: "connect" }) + "</div>";
-  return '<div class="card"><div class="card-head">就绪检查</div><div class="card-body"><div class="check-list">' + list + "</div></div></div>" + canvas +
+  return '<div class="card"><div class="card-head">就绪检查</div><div class="card-body"><div class="check-list">' + list + "</div></div></div>" +
     '<div class="card"><div class="card-body"><div style="display:flex;gap:8px;flex-wrap:wrap">' +
     '<button class="btn btn-primary" data-act="mirror-start">开始演示</button>' +
     '<button class="btn btn-secondary" data-act="mirror-end">结束演示</button>' +
     '<button class="btn btn-secondary" data-act="toast" data-arg="原型演示：切换桌面模式">开启桌面模式</button>' +
     "</div></div></div>" +
-    '<p style="font-size:var(--fs-12);color:var(--muted)">演示 = 按当前画质与桌面模式发起真实镜像会话，画面在独立窗口全屏投到外部显示器。激光笔 / 白板标注、演示文稿管理尚未实现，不伪装。 <button class="btn-ghost" data-act="toast" data-arg="原型演示：查看演示能力边界">了解更多</button></p>';
+    '<p style="font-size:var(--fs-12);color:var(--muted)">演示 = 按当前画质与桌面模式发起真实镜像会话，画面在独立窗口全屏投到外部显示器，本页不重复显示画面。激光笔 / 白板标注、演示文稿管理尚未实现，不伪装。 <button class="btn-ghost" data-act="toast" data-arg="原型演示：查看演示能力边界">了解更多</button></p>';
 }
 
 function vKeymap() {

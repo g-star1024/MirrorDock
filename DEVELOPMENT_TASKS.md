@@ -1471,3 +1471,13 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **Release 实体核验**（id `458862260`，非 draft、prerelease）：**34 资产全齐**——四平台安装包 + 各自 updater `.sig`（rpm/deb/AppImage/exe/msi/dmg/tar.gz）、伴侣 APK 0.4.28、`latest.json`（自动更新清单）、8 份 SBOM、4 份 SHA256SUMS、4 份 version-check 日志；body 以 CI 注入的「## 本版更新内容」开头，文档内容无重复顶级标题。
 - **CI 产物级证据**：本轮 X10-142~146 的 Kotlin 改动经 CI gradle 真编译（aapt + dex + 打包）通过；合并 main 时（`f13884e`）Companion App 工作流已先产出 `mirrordock-companion-debug` artifact——「APK 真编译未验证」缺口在本版发版前即已关闭。
 - **仍待真机验收**（不变）：验证码复制点击体验、通知下行清除（含取消全部）、手动双向剪贴板（系统剪贴板提示）、镜像/注入/相册/定时录制的实机行为。桌面端用户需重启客户端让内置更新器拉取 0.4.28。
+
+### X10-147 无意义功能窗口清退 + 布局细节修正（2026-11-26 10:35）
+
+用户指令：镜像在新窗口打开后「镜像控制」页的画布无意义，复盘所有功能去掉类似假窗口，并修正边距/错行/贴边/窗口放大不自适应。
+
+- **复盘结论**：19 视图中只有镜像控制页（假手机画布 `kind:"phone"`）与预览的镜像/演示页存在「画面在新窗口打开后无意义」的假窗口；投屏演示、多端、设备信息等本就是真实状态呈现，无需改动。
+- **客户端**（`src/assistantViews.tsx`、`src/App.tsx`、`src/App.css`）：删 `phone` 渲染器与全部画布 CSS；镜像页改真实状态卡；`.content` 上限 1020→1600px（窗口放大内容跟随）；`.kv dd` 允许换行（修「录制经既有会话，不绕过授权」被裁切）；`note` 渲染器空文本不渲染空壳 alert（修文件页裸蓝条）。
+- **预览**（`mirrordock-redesign-preview.html`）：vMirror/vPresent 删画布（两态），加 `.mirror-state`；`.kv dd` 同步允许换行。
+- **证据**：tsc 0 error；vitest 125/125；vite build 通过；Playwright 多宽度审计（1000/1280/1848）：19 视图统一 24px 边距、0 裁切、0 溢出、0 控制台错误（仅预览站 favicon 404 无害）；镜像/按键映射/文件传输截图目检通过；缩放验证 contentW 732→776→1344 随窗口增长。
+- **诚实边界**：纯视觉与布局修正，无功能增删、无权限/数据/连接方式变更；未打 tag、未推远端。

@@ -100,9 +100,8 @@ export type AssistantSection =
   | { kind: "note"; text: string; tone?: number; kind_of_alert?: "info" | "warn" | "danger" }
   | { kind: "steps"; title: string; items: string[]; tone?: number }
   | { kind: "details"; title: string; items: [string, string][]; tone?: number }
-  | { kind: "phone"; title: string; tone?: number; children?: ReactNode }
-  | { kind: "checklist"; title: string; items: { label: string; ok: boolean; why: ReactNode }[]; tone?: number }
-  | { kind: "custom"; children: ReactNode };
+  | { kind: "custom"; children?: ReactNode }
+  | { kind: "checklist"; title: string; items: { label: string; ok: boolean; why: ReactNode }[]; tone?: number };
 
 function Card({
   title,
@@ -233,6 +232,8 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
         </div>
       );
     case "note": {
+      // X10-147：空文案不渲染空壳提示条（文件页 transferError/transferMessage 皆空时的裸蓝条）。
+      if (!section.text) return null;
       const alertKind = section.kind_of_alert ?? "info";
       return (
         <div className={`alert alert-${alertKind}`} role={alertKind === "info" ? "status" : "alert"}>
@@ -259,18 +260,6 @@ function AssistantSectionView({ section, filter }: { section: AssistantSection; 
                 <p>{answer}</p>
               </details>
             ))}
-          </div>
-        </section>
-      );
-    case "phone":
-      return (
-        <section className="card">
-          <div className="card-head"><h3 className="card-title">{section.title}</h3><span className="spacer" /></div>
-          {/* X10-146：与预览同款 16:9 画布。真实画面在独立 scrcpy 窗口，
-              这里只呈现真实会话状态，不塞假缩略图。 */}
-          <div className="canvas16">
-            <div className="canvas-screen"><div className="phone-frame" aria-hidden="true"><i /></div></div>
-            <div className="canvas-hud">{section.children ?? <span className="assistant-muted">没有可显示的实时画面</span>}</div>
           </div>
         </section>
       );

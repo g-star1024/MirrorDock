@@ -3770,13 +3770,30 @@ function App() {
         ];
       case "mirror":
         return [
-          { kind: "phone", title: "镜像画面", tone: 1, children: (
-            <div className="assistant-phone-state">
-              <span className={`dot ${sessionActive ? "busy" : "off"}`} aria-hidden="true" />
-              <strong>{statusMessage ?? "尚未开始镜像"}</strong>
-              <span>{session ? `阶段：${session.phase} · 首帧：${session.first_frame === "reached" ? "已到达" : "未确认"}` : "设备授权后即可开始"}</span>
-            </div>
-          ) },
+          {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">镜像状态</h3>
+                  <span className="spacer" />
+                  <span className={`badge ${sessionActive ? "ok" : "neutral"}`}>{sessionActive ? "会话进行中" : "未开始"}</span>
+                </div>
+                <div className="card-body">
+                  <div className="mirror-state">
+                    <span className={`dot ${sessionActive ? "busy" : "off"}`} aria-hidden="true" />
+                    <strong>{statusMessage ?? "尚未开始镜像"}</strong>
+                  </div>
+                  <p className="hint">
+                    {session
+                      ? `阶段：${session.phase} · 首帧：${session.first_frame === "reached" ? "已到达" : "未确认"}`
+                      : "设备授权后即可开始"}
+                    。画面在<b>独立的镜像窗口</b>中打开，本页只负责发起、结束与参数调整，不重复显示画面。
+                  </p>
+                </div>
+              </section>
+            ),
+          },
           {
             kind: "kv",
             title: "会话参数",
