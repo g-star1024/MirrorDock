@@ -5010,12 +5010,7 @@ function App() {
                   </div>
                 </div>
               );
-            })() : (
-              <div className="page-head">
-                <h1>在电脑上安心使用手机</h1>
-                <p className="intro">用数据线或同一 Wi-Fi 连接手机，画面只出现在这台电脑上。</p>
-              </div>
-            )}
+            })() : null}
 
             <section className="connection-card" aria-live="polite">
               {/* X10-145：组件语言对齐预览——卡头用 card-head + badge，正文用 card-body，
@@ -5242,6 +5237,15 @@ function App() {
                         </span>
                       </div>
                     ))}
+                </div>
+              )}
+
+              {/* X10-154：对齐预览——「在电脑上安心使用手机」由卡片外大标题改为卡片内
+                  引导（statusStack 后、三步前），与预览 card-body 内 <b>+hint 结构一致。 */}
+              {!isChecking && !readyDevice && (
+                <div className="conn-empty-lead">
+                  <b>在电脑上安心使用手机</b>
+                  <p className="hint">用数据线或同一 Wi-Fi 连接手机，画面只出现在这台电脑上。</p>
                 </div>
               )}
 
@@ -5667,16 +5671,20 @@ function App() {
               </div>}
 
               {wirelessMessage && <p className="diagnostic">{wirelessMessage}</p>}
-              {trustedDevices.length > 0 && <div className="trusted-devices" aria-label="本机已保存的无线设备">
+              {/* X10-154：对齐预览——「本机已保存的无线设备」常显（含空态），不再
+                  只有存在已保存设备时才出现。 */}
+              <div className="trusted-devices" aria-label="本机已保存的无线设备">
                 <strong>本机已保存的无线设备</strong>
-                {trustedDevices.map((device) => <div className="trusted-device" key={device.endpoint}>
+                {trustedDevices.length > 0 ? trustedDevices.map((device) => <div className="trusted-device" key={device.endpoint}>
                   <code>{device.endpoint}</code>
                   <span>
                     <button className="text-button" type="button" disabled={wirelessBusy} onClick={() => void reconnect(device.endpoint)}>重新连接</button>
                     <button className="text-button danger" type="button" disabled={wirelessBusy} onClick={() => void forgetDevice(device.endpoint)}>忘记</button>
                   </span>
-                </div>)}
-              </div>}
+                </div>) : (
+                  <p className="capability-pending">完成一次配对后，设备端点会保存在这里。</p>
+                )}
+              </div>
             </section>
 
             <section className="connection-card" aria-live="polite">
@@ -5756,6 +5764,14 @@ function App() {
                     ))}
                   </ul>
                 )}
+              </div>
+            </section>
+
+            {/* X10-154：对齐预览——USB 连接在「设备中心」完成的收尾引导卡 + 跳转入口。 */}
+            <section className="connection-card">
+              <p className="capability-pending">USB 连接与授权在「设备中心」完成：插上数据线、在手机上允许 USB 调试后，设备卡会出现在设备中心。</p>
+              <div className="action-row" style={{ marginTop: 8 }}>
+                <button className="secondary-button" type="button" onClick={() => openView("home")}>打开设备中心</button>
               </div>
             </section>
           </section>
