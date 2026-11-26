@@ -605,27 +605,30 @@ describe("device nicknames (X10-88)", () => {
 describe("App rendering", () => {
   it("persists_the_selected_ui_theme_without_touching_device_state", async () => {
     render(<App />);
-    const functionNav = screen.getByRole("navigation", { name: "功能导航" });
-    fireEvent.click(within(functionNav).getByRole("button", { name: "设置" }));
+    // X10-153：侧栏改为重构预览结构（side-scroll 内多组静态导航），用侧栏 aside 作用域。
+    const sidebar = screen.getByRole("complementary", { name: "主导航" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "设置" }));
     // v2.5：主题切换入口在顶栏「主题 · …」菜单里（menuitemradio）。
     fireEvent.click(await screen.findByRole("button", { name: /切换外观主题/ }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /深空 Midnight/ }));
 
     expect(document.documentElement.dataset.theme).toBe("b");
     expect(localStorage.getItem("mirrordock.uiTheme")).toBe("b");
-    // 主题外壳不是设备状态机：没有设备时仍如实写"未检测到设备"，不伪造连接。
-    expect(screen.getByText("未检测到设备")).toBeInTheDocument();
+    // 主题外壳不是设备状态机：没有设备时仍如实写空态，不伪造连接。
+    // X10-153：侧栏设备树已移除，无设备空态改由「设备中心」主区 page-head 如实承载。
+    expect(screen.getByText("在电脑上安心使用手机")).toBeInTheDocument();
   });
 
   it("switches_i4_style_function_views_and_keeps_unimplemented_capabilities_honest", async () => {
     render(<App />);
-    const functionNav = screen.getByRole("navigation", { name: "功能导航" });
+    // X10-153：侧栏改为重构预览结构（side-scroll 内多组静态导航），用侧栏 aside 作用域。
+    const sidebar = screen.getByRole("complementary", { name: "主导航" });
 
     // v2.5：顶栏模块 Tab 移除，直接从侧栏功能树跳到镜像控制。
-    fireEvent.click(within(functionNav).getByRole("button", { name: "镜像控制" }));
+    fireEvent.click(within(sidebar).getByRole("button", { name: "镜像控制" }));
     expect(await screen.findByRole("heading", { name: "会话参数" })).toBeInTheDocument();
 
-    fireEvent.click(within(functionNav).getByRole("button", { name: "投屏演示" }));
+    fireEvent.click(within(sidebar).getByRole("button", { name: "投屏演示" }));
     // X10-132：投屏演示升级为就绪检查 + 一键演示；X10-142 对齐预览 HTML 卡头文案「就绪检查」。
     expect(await screen.findByRole("heading", { name: "就绪检查" })).toBeInTheDocument();
     expect(screen.getAllByText(/尚未实现/).length).toBeGreaterThan(0);
@@ -633,12 +636,12 @@ describe("App rendering", () => {
 
     // X10-129：相册已升级为真实能力（白名单目录浏览 + 取回）。
     // 没有设备时依然诚实：提示尚未读取，不伪造照片列表。
-    fireEvent.click(within(functionNav).getByRole("button", { name: "相册" }));
+    fireEvent.click(within(sidebar).getByRole("button", { name: "相册" }));
     expect(await screen.findByRole("heading", { name: "相册目录" })).toBeInTheDocument();
     expect(screen.getByText(/尚未读取相册目录/)).toBeInTheDocument();
 
     // X10-134：应用管理升级为启动/卸载；卸载需要显式确认，旧「只读」文案已下线。
-    fireEvent.click(within(functionNav).getByRole("button", { name: "应用管理" }));
+    fireEvent.click(within(sidebar).getByRole("button", { name: "应用管理" }));
     expect(await screen.findByText(/「打开」用系统默认入口启动应用/)).toBeInTheDocument();
     expect(screen.queryByText(/应用清单只读/)).not.toBeInTheDocument();
   });

@@ -784,7 +784,9 @@ const FILTERABLE_VIEWS = new Set<AssistantViewKey>([
 ]);
 
 // Context Panel（右栏）只在设备相关的视图渲染（重设计 §4：右栏从全量降级为情境面板）。
-const RAIL_VIEWS = new Set<AssistantViewKey>(["home", "info", "multi", "mirror", "files", "apps"]);
+// X10-153：右栏按重构预览 1:1——情境右栏仅设备相关视图显示（connect/info/multi/mirror/present），
+// 其余视图隐藏（重构约束 #2：避免空栏占位 280px）。与预览 CTX_VIEWS 完全一致。
+const RAIL_VIEWS = new Set<AssistantViewKey>(["connect", "info", "multi", "mirror", "present"]);
 
 function tabForAssistantView(view: AssistantViewKey): TabKey {
   if (view === "home") return "home";
@@ -864,9 +866,8 @@ function App() {
   const [viewFilter, setViewFilter] = useState("");
   // X10-146：应用管理按预览在卡头提供名称 / 包名排序；只影响展示顺序。
   const [appsSort, setAppsSort] = useState<"name" | "package">("name");
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(ASSISTANT_GROUPS.map((group) => [group.name, group.openByDefault])),
-  );
+  // X10-153：侧栏按重构预览 1:1 复刻——静态分组标题 + 常显导航项（无折叠、无设备树）。
+  // 分组数据与视图键见 assistantViews.tsx ASSISTANT_GROUPS（与预览 NAV 完全一致）。
   const [uiTheme, setUiTheme] = useState<UiThemeKey>(() => readUiTheme());
   // 重设计 v2.5：⌘K 命令面板、顶栏主题菜单、⌘B 侧栏折叠。
   const [cmdkOpen, setCmdkOpen] = useState(false);
@@ -4812,10 +4813,10 @@ function App() {
       {/* X10-127 外观层：顶部一级导航 + 工具栏 + 设备树 + 工作区 + 右侧状态栏。
           只是外壳与视觉；设备选择、页签、镜像按钮仍走原有状态机。 */}
       <header className="titlebar">
+        {/* X10-153：标题栏按重构预览 1:1——brand-mark「MD」+ MirrorDock，无副标题；右侧为 pill + 图标按钮。 */}
         <div className="title-brand">
-          <span className="brand-mark" aria-hidden="true">M</span>
+          <span className="brand-mark" aria-hidden="true">MD</span>
           <strong>MirrorDock</strong>
-          <small>ANDROID DEVICE ASSISTANT</small>
         </div>
         <button
           type="button"
@@ -4835,13 +4836,14 @@ function App() {
           <div className="theme-menu">
             <button
               type="button"
-              className="title-button"
+              className="icon-btn"
               aria-haspopup="menu"
               aria-expanded={themeMenuOpen}
               aria-label="切换外观主题"
+              title={`主题 · ${themeMeta(uiTheme).label}`}
               onClick={() => setThemeMenuOpen((open) => !open)}
             >
-              主题 · {themeMeta(uiTheme).label}
+              <NavIcon d="M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
             </button>
             {themeMenuOpen && (
               <div className="theme-menu-pop" role="menu" aria-label="外观主题">
@@ -4865,73 +4867,50 @@ function App() {
               </div>
             )}
           </div>
-          <button className="title-button" type="button" aria-label="打开帮助中心" onClick={() => openView("help")}>帮助</button>
+          <button className="icon-btn" type="button" aria-label="打开帮助中心" title="帮助中心" onClick={() => openView("help")}>
+            <NavIcon d="M12 17h.01M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />
+          </button>
         </div>
       </header>
 
       <div className="workspace">
-        <aside className="sidebar">
-          <section className="device-tree" aria-label="设备列表">
-            <h3>我的设备 <small>{check?.devices.length ?? 0}</small></h3>
-            {(check?.devices ?? []).length === 0 ? (
-              <p className="tree-empty">未检测到设备</p>
-            ) : (
-              <ul>
-                {(check?.devices ?? []).map((device) => {
-                  const label = displayLabels[device.serial] ?? device.label;
-                  return (
-                    <li key={device.serial}>
-                      <button
-                        type="button"
-                        className={device.serial === selectedSerial ? "tree-device active" : "tree-device"}
-                        onClick={() => setSelectedSerial(device.serial)}
-                        aria-current={device.serial === selectedSerial ? "true" : undefined}
-                      >
-                        <span className={`status-dot ${device.state}`} aria-hidden="true" />
-                        <span className="tree-device-label">{label}</span>
-                        <small>{connectionLabel(device) || device.state}</small>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
-          <nav className="side-nav assistant-nav" aria-label="功能导航">
+        <aside className="sidebar" aria-label="主导航">
+          {/* X10-153：侧栏按重构预览 1:1 复刻——side-scroll 内为静态分组标题 + 常显导航项。
+              移除设备树与可折叠分组（预览无此结构）；设备选择/动作已由「设备中心」主区
+              的设备卡与 Hero 卡承载（selectedSerial 缺省回退首个就绪设备）。
+              分组/顺序/图标与预览 NAV 一致（assistantViews.tsx ASSISTANT_GROUPS）。 */}
+          <div className="side-scroll">
             {ASSISTANT_GROUPS.map((group) => (
-              <div className="assistant-nav-group" key={group.name}>
-                <button
-                  type="button"
-                  className="assistant-nav-group-head"
-                  aria-expanded={expandedGroups[group.name]}
-                  onClick={() => setExpandedGroups((prev) => ({ ...prev, [group.name]: !prev[group.name] }))}
-                >
-                  <span aria-hidden="true">{expandedGroups[group.name] ? "▾" : "▸"}</span>
-                  {group.name}
-                </button>
-                {expandedGroups[group.name] && (
-                  <div className="assistant-nav-items">
-                    {group.ids.map((id) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className={view === id ? "nav-item active" : "nav-item"}
-                        aria-current={view === id ? "page" : undefined}
-                        onClick={() => openView(id)}
-                      >
-                        {assistantViewIcons[id]}
-                        <span>{ASSISTANT_VIEWS[id].title}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <nav aria-label={group.name} key={group.name}>
+                <div className="nav-group-title">{group.name}</div>
+                {group.ids.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={view === id ? "nav-item active" : "nav-item"}
+                    aria-current={view === id ? "page" : undefined}
+                    onClick={() => openView(id)}
+                    title={ASSISTANT_VIEWS[id].title}
+                  >
+                    <span className="ic" aria-hidden="true">{assistantViewIcons[id]}</span>
+                    <span className="nav-label">{ASSISTANT_VIEWS[id].title}</span>
+                  </button>
+                ))}
+              </nav>
             ))}
-          </nav>
-          <div className="sidebar-foot">
-            <span className="edition-pill">{editionLabel(entitlement?.edition)}</span>
-            <span className="local-pill">本地优先 · 无需账号</span>
-            <p>镜像、传输、卸载都需设备显式授权；通知正文默认不持久化。</p>
+          </div>
+          <div className="side-foot">
+            <button
+              className="icon-btn"
+              type="button"
+              aria-label={railCollapsed ? "展开侧栏" : "折叠侧栏"}
+              title="折叠侧栏 ⌘B"
+              onClick={() => setRailCollapsed((collapsed) => !collapsed)}
+            >
+              <NavIcon d="M4 5h16v14H4zM9.5 5v14" />
+            </button>
+            <span className="hint-line">本地版 · 无需账号</span>
+            <span className="spacer" />
           </div>
         </aside>
 
@@ -6326,47 +6305,68 @@ function App() {
         </div>
 
         {RAIL_VIEWS.has(view) && (
-        <aside className="right-rail" aria-label="设备状态与快捷工具">
-          <section className="rail-card">
-            <h3>设备状态</h3>
-            <p className="rail-device">{currentDeviceLabel ?? topbarStatus}</p>
-            <dl className="rail-facts">
-              <div><dt>连接</dt><dd>{readyDevice ? connectionLabel(readyDevice) || "已授权" : "等待设备"}</dd></div>
-              <div><dt>会话</dt><dd>{activeSessionCount > 0 ? `${activeSessionCount} 台进行中` : "未开始"}</dd></div>
-              <div><dt>镜像引擎</dt><dd>{scrcpyReady ? "就绪" : "不可用"}</dd></div>
-              <div><dt>版本</dt><dd>{editionLabel(entitlement?.edition)}</dd></div>
-            </dl>
-          </section>
-          <section className="rail-card">
-            <h3>常用工具</h3>
-            <div className="rail-tools">
-              {(["mirror", "shot", "record", "files", "apps", "notify", "info", "settings"] as AssistantViewKey[]).map((key) => (
-                <button key={key} type="button" aria-label={`常用工具：${ASSISTANT_VIEWS[key].title}`} onClick={() => openView(key)}>
-                  <span aria-hidden="true">{assistantViewIcons[key]}</span>
-                  {ASSISTANT_VIEWS[key].title.replace("与控制", "").replace("管理", "")}
-                </button>
-              ))}
-            </div>
-          </section>
-          <section className="rail-card">
-            <h3>APK 快速安装</h3>
-            <button type="button" className="rail-dropzone" onClick={() => openView("install")}>把 APK 拖到这里安装<small>仍需在手机上逐次确认</small></button>
-          </section>
-          <section className="rail-card">
-            <h3>最近任务</h3>
-            <div className="rail-tasks">
-              {apkReceipt && <p><strong>{apkReceipt.file_name}</strong><small>已发送到设备 · 等待手机确认</small></p>}
-              {screenshot && <p><strong>{screenshot.file_name}</strong><small>已保存到本机 MirrorDock</small></p>}
-              {recording && <p><strong>{recording.file_name}</strong><small>{recording.active ? "正在录制" : "录制已结束"}</small></p>}
-              {filesChangedHint !== null && <p><strong>手机发送区有新文件</strong><small>{relativeTime(filesChangedHint / 1000)}</small></p>}
-              {!apkReceipt && !screenshot && !recording && filesChangedHint === null && <p className="assistant-muted">暂无最近任务</p>}
-            </div>
-          </section>
-          <section className="rail-card">
-            <h3>安全边界</h3>
-            <p className="rail-note">数据不出本机；不读取短信正文，不做静默安装与远程清除。撤销授权后立即离线。</p>
-            <button className="rail-link" type="button" onClick={() => openView("settings")}>外观主题 · {themeMeta(uiTheme).label} →</button>
-          </section>
+        <aside className="right-rail" aria-label="情境上下文">
+          {/* X10-153：右栏按重构预览 1:1 复刻——情境右栏（ctx-block/ctx-note/ctx-dl），
+              仅设备相关视图显示；数据全部接真实状态，无演示数据。
+              原右栏的「设备状态/常用工具/APK 拖放/最近任务/安全边界」均已存在于主区
+              （设备中心 Hero+设备卡、工具格、安装页拖放区、安全边界说明），故不重复。 */}
+          {view === "connect" && (
+            <>
+              <section className="ctx-block">
+                <h3>排查要点</h3>
+                <p className="ctx-note">连接失败先看三点：数据线是否支持数据传输、USB 调试是否开启、手机上是否点过「始终允许」。</p>
+              </section>
+              <section className="ctx-block">
+                <h3>替代方案</h3>
+                <p className="ctx-note">插线无效时，可先走无线连接或配对码；两种都失败再考虑品牌排查指引。</p>
+              </section>
+            </>
+          )}
+          {view === "info" && (
+            <section className="ctx-block">
+              <h3>诊断快照</h3>
+              {readyDevice ? (
+                <p className="ctx-note">{displayLabels[readyDevice.serial] ?? readyDevice.label} · {connectionLabel(readyDevice) || "已授权"} · Android 设备</p>
+              ) : (
+                <p className="ctx-note">连接后，每次刷新会保存一条诊断快照。</p>
+              )}
+            </section>
+          )}
+          {view === "multi" && (
+            <section className="ctx-block">
+              <h3>会话概览</h3>
+              {readyDevice || activeSessionCount > 0 ? (
+                <dl className="ctx-dl">
+                  <div><dt>在线设备</dt><dd>{check?.devices?.filter((device) => device.state === "ready").length ?? 0} 台</dd></div>
+                  <div><dt>进行中会话</dt><dd>{activeSessionCount}</dd></div>
+                </dl>
+              ) : (
+                <p className="ctx-note">未连接设备。</p>
+              )}
+            </section>
+          )}
+          {view === "mirror" && (
+            <>
+              <section className="ctx-block">
+                <h3>通道与画质</h3>
+                <dl className="ctx-dl">
+                  <div><dt>通道</dt><dd>{readyDevice ? connectionLabel(readyDevice) || "已授权" : "—"}</dd></div>
+                  <div><dt>画质</dt><dd>{options.quality === "smooth" ? "流畅" : options.quality === "sharp" ? "高清" : "均衡"}</dd></div>
+                  <div><dt>桌面模式</dt><dd>{options.desktop_mode ? "开启" : "关闭"}</dd></div>
+                </dl>
+              </section>
+              <section className="ctx-block">
+                <h3>保护内容</h3>
+                <p className="ctx-note">受 Android 安全标志保护的应用（如支付页）画面将显示黑屏，画布左下角有常驻角标。</p>
+              </section>
+            </>
+          )}
+          {view === "present" && (
+            <section className="ctx-block">
+              <h3>演示边界</h3>
+              <p className="ctx-note">画面全屏投到外部显示器；激光笔 / 白板标注、演示文稿管理尚未实现，不伪装。</p>
+            </section>
+          )}
         </aside>
         )}
       </div>

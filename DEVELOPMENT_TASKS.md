@@ -1548,3 +1548,16 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - 骨架：左栏 232px（折叠 56）、右栏 280px、内容 1600 上限、顶栏 44、状态条 28。
 - **验证**：pnpm build 0 error；vitest 125/125；cargo check 过；客户端 26 导航视图自动走查 0 横向溢出；浅色云鲸+深色深空截图目视核对通过。
 - **诚实边界**：视觉语言已按预览采纳，客户端信息架构（设备树+分组侧栏、常驻右栏）按 X10-146 保真原则保留未改；设置中心仅重排、零丢项。
+
+### X10-153 结构层按重构预览 1:1 复刻（2026-11-26 23:00，用户反馈「新版本离预览版还差十万八千里」闭环）
+
+- **背景**：用户对比预览与客户端截图，指出结构层仍差：侧栏有「我的设备」设备树+可折叠分组、标题栏右侧为文字按钮（主题·瓷贴 Aurora/帮助）、右栏在连接与授权等视图缺失。
+- **落地（src/App.tsx 结构 + App.css 样式，与预览 NAV/CTX_VIEWS 完全一致）**：
+  - **侧栏**：移除 device-tree 与可折叠分组（expandedGroups 状态删除），改为 `side-scroll` + 4 组静态 `nav-group-title`（设备/镜像与会话/内容与传输/系统）+ 常显 `nav-item`（ic 图标 + nav-label）。分组/顺序/19 项与预览 NAV 一致（assistantViews.tsx ASSISTANT_GROUPS 原本就同构）。
+  - **侧栏底部**：改预览 `side-foot`（折叠 icon-btn + 「本地版 · 无需账号」hint），折叠按钮复用 railCollapsed 状态（⌘B/命令面板入口不变）。
+  - **标题栏**：brand-mark「M」→「MD」、去掉「ANDROID DEVICE ASSISTANT」副标题；右侧「主题 · …/帮助」文字按钮 → 图标按钮（太阳/帮助），保留主题下拉菜单与 openView("help")；搜索触发对齐 `.tb-search`（居中 360px 弹性）。
+  - **右栏**：RAIL_VIEWS 改为预览 CTX_VIEWS（connect/info/multi/mirror/present）；内容改 ctx-block/ctx-note/ctx-dl 情境面板（排查要点/诊断快照/会话概览/通道与画质/演示边界），全部接真实状态（options.quality/desktop_mode、activeSessionCount、check.devices），无演示数据；`.workspace` 用 `:has(.right-rail)` 自适应网格，非 CTX 视图不占 280px（预览约束 #2 无空栏）。
+  - **响应式**：<1200px 右栏隐藏（对齐预览 @media 1199px）；折叠态 56px 图标栏（label/分组标题隐藏，对齐 .app.side-alt）。
+  - **功能保全（X10-146 不丢项）**：原右栏的设备状态/常用工具/APK 拖放/最近任务/安全边界均已存在于主区（设备中心 Hero+设备卡、工具格、安装页拖放区、安全边界说明），故右栏改情境面板无功能丢失；设备切换由主区设备卡/Hero 承载，selectedSerial 缺省回退首个就绪设备。
+- **验证**：pnpm build 0 error；vitest 125/125（更新 2 条侧栏断言：功能导航→主导航 aside 作用域、未检测到设备→home 诚实空态）；cargo check 过；Playwright 19 视图×1600px + 19 视图×1000px + 折叠态全部 0 横向溢出、0 控制台错误、右栏显隐与 CTX 集逐一匹配。
+- **诚实边界**：预览的「演示数据/模拟加载」demo 开关按真实状态原则不引入客户端；home 无设备态标题（在电脑上安心使用手机）位置为客户端 X10-150 既有结构，与预览卡内标题存在排版差异（后续可再对齐）。
