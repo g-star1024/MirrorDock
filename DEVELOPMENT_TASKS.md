@@ -1461,3 +1461,13 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **设计文档**：`docs/ui-redesign/01-visual-direction.md` 追加 §16，登记双向对齐原则与诚实边界。
 - **验证证据**：`pnpm exec tsc --noEmit` 0 error；vitest **125/125**；`vite build` 成功（CSS 64.29 kB / JS 465.24 kB）；预览内嵌脚本 `node --check` 通过；浏览器走查客户端 19 视图（各页 0 横向溢出、0 控制台错误）+ 预览 19 页两态（demo/非 demo，0 横向溢出，除 favicon 404 无错误）；按键映射新建方案后 plan-card 表单截图核验对齐。
 - **诚实边界**：无新增/删除真实功能；未改 Rust / 伴侣端 / 权限 / 数据流；设置中心继续零改动；预览中的 Hero 数据仍是演示态，不进客户端；未打 tag、未推远端、未触发 CI；真机与 CI 编译仍待后续验证。
+
+### X10-146 发版闭环补记：v0.4.28-beta 已真实发布（2026-11-26 09:55-10:10）
+
+用户拍板「发版吧」。发版前置修订 + CI 全链路 + Release 实体核验，全部完成。
+
+- **发版前文档修订**：`docs/releases/v0.4.28-beta.md` 补「## 界面统一与伴侣端新能力（能力层）」小节（全 19 视图组件语言统一、设置分组导航、验证码复制、通知下行清除、手动双向剪贴板、预览双向对齐），测试数 123/229 → **125/230**（commit `bf046d2`）。
+- **发版链路**：tag `v0.4.28-beta` 推送 → run `45739109177` 全 job 绿：verify ✅ / 四平台打包（linux-x64、macos-arm64、macos-x64、windows-x64）✅ / 伴侣 APK ✅ / 发布 GitHub Release ✅。
+- **Release 实体核验**（id `458862260`，非 draft、prerelease）：**34 资产全齐**——四平台安装包 + 各自 updater `.sig`（rpm/deb/AppImage/exe/msi/dmg/tar.gz）、伴侣 APK 0.4.28、`latest.json`（自动更新清单）、8 份 SBOM、4 份 SHA256SUMS、4 份 version-check 日志；body 以 CI 注入的「## 本版更新内容」开头，文档内容无重复顶级标题。
+- **CI 产物级证据**：本轮 X10-142~146 的 Kotlin 改动经 CI gradle 真编译（aapt + dex + 打包）通过；合并 main 时（`f13884e`）Companion App 工作流已先产出 `mirrordock-companion-debug` artifact——「APK 真编译未验证」缺口在本版发版前即已关闭。
+- **仍待真机验收**（不变）：验证码复制点击体验、通知下行清除（含取消全部）、手动双向剪贴板（系统剪贴板提示）、镜像/注入/相册/定时录制的实机行为。桌面端用户需重启客户端让内置更新器拉取 0.4.28。
