@@ -1,23 +1,23 @@
 {
-  "version": "0.4.29",
-  "notes": "## 镜像控制页清退假画布（界面层）\n\n- 镜像 / 演示画面一律在**独立的镜像窗口**打开，「镜像控制」页不再显示假画布（此前的装饰性手机框与空白画布已移除）。页面改为真实的「镜像状态」卡：会话是否进行中、阶段、首帧是否到达，一眼可读；下方保留会话参数与开始 / 结束 / 设备信息操作。\n- 「投屏演示」页说明同步明确：画面在独立窗口全屏投到外部显示器，控制页不重复显示画面。\n\n## 布局细节修正\n\n- **窗口放大内容跟随放大**：此前工作区内容被固定在约 1020px 宽，放大窗口后两侧留白不变；现放宽上限，内容随窗口增长（外接大屏 / 全屏时表格、分栏明显更宽敞）。\n- **四向边距统一**：内容区与页面标题条边距统一为 24px，元素不再贴边。\n- **长文案不再被裁切**：会话参数等键值卡里的长说明（如「录制经既有会话，不绕过授权」）此前被截断，现正常换行完整显示。\n- **空提示条修复**：文件传输页在无任何消息时会渲染一条空的蓝色提示条，现已移除；各页提示只在有真实内容时出现。\n\n## 不变的部分\n\n- 本版只做界面与布局修正，不加账号 / 云端 / 新系统权限；连接授权、镜像、文件传输、截图、录制与授权逻辑都没有改动。镜像引擎、会话行为与 v0.4.28 完全一致。\n\n## 验证范围\n\n- 前端类型检查与生产构建通过；125 个前端测试通过。\n- 浏览器多宽度（1000 / 1280 / 1848）全量走查 19 个视图：边距统一 24px、无裁切、无横向溢出、0 控制台错误；镜像控制、按键映射、文件传输逐页截图核对。\n- 四平台安装包、伴侣 APK 与自动更新清单由 CI 流水线随 tag 生成；镜像与注入的真实设备行为沿用 v0.4.28 待真机验收结论，本版未改动相关逻辑。",
-  "pub_date": "2026-11-26T03:58:29Z",
+  "version": "0.4.30",
+  "notes": "## 实测细节修复（界面层）\n\n来自 v0.4.28 真机实测的 6 张截图反馈，逐项修复：\n\n- **按钮与标签不再竖排错行**：全局按钮、侧栏设备标签（如「无线」）、顶栏按钮统一单行显示；多端表格「镜像」「截图」等窄列按钮不再一字一行竖排。\n- **页头不再贴边**：页面标题条与内容列同宽居中（左右 24px 呼吸边距），右上角「连接设备」按钮不再贴窗口右缘，标题不再与顶栏重叠。\n- **设置页分组导航不再挤压换行**：窄窗口下分组跳转条由 flex 挤压改为网格铺排，「按设备 · 桌面模式」等分组按钮不再按钮内换行。\n- **删除重复大标题**：设置 / 无线 / 帮助三个页面此前同时出现页头标题与页内大标题，现只保留一处。\n\n## 镜像失败不再「毫无反应」\n\n- 此前镜像启动失败时，错误只显示在主页状态区，镜像控制页毫无反馈，看起来像「点了没反应」。现镜像控制页状态卡会直接显示**失败原因原文**（红色高亮），例如模拟器不支持的音频采集 / 编码器等问题，一眼可读。\n- 注意：本版只修「反馈缺失」，镜像窗口在部分模拟器上不显示的底层原因需在新版上看到错误原文后进一步定位；真机行为不受影响。\n\n## 设备中心按新版模板重构\n\n- **主设备卡**：就绪设备一眼可见——手机图标与真实电量（进入页面自动读取电池，读不到就不显示数字）、设备名、Android 版本、连接方式徽标、镜像会话真实状态，右侧是完整操作列（重新检查 / 屏幕唤醒 / 开始镜像 / 收藏 / 取消授权）。\n- **常用工具六宫格**：镜像控制、文件传输、应用管理、通知中心、截图、设备信息六个真实入口，直达对应功能页。\n- **最近任务**：记录本次运行的截图、安装、录制等真实操作（最多 8 条，不持久化；空状态如实说明），不再是装饰性假数据。\n- **安全边界说明**：明确「画面只出现在这台电脑上」等隐私边界。\n- 未连接设备时保留原有的三步连接引导与品牌排查说明。\n- 数据全部真实：电量来自真实电池读取、会话状态来自真实镜像进程、演示性假数据（如假延迟、假媒体播放）一律未写入客户端。\n\n## 不变的部分\n\n- 镜像引擎、会话行为、文件传输、授权与自动更新逻辑与 v0.4.29 完全一致，本版只改界面层与反馈层。\n\n## 验证范围\n\n- 前端类型检查 0 错误；125 个前端测试通过。\n- 浏览器多宽度（1080 / 859）走查：设备中心整页截图逐区块核对、多端表格按钮单行、设置导航整齐、镜像失败时错误原文可见、截图成功后最近任务出现真实记录；0 横向溢出。\n- 四平台安装包、伴侣 APK 与自动更新清单由 CI 流水线随 tag 生成；镜像窗口在模拟器环境的底层根因待真机错误原文反馈，不在本版范围内。",
+  "pub_date": "2026-11-26T07:13:49Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTNpYWVyMlorRktFM1pIYytzaTdPanBGVUF1cEw3NXBwemNiaEkxem9LdVQ3NytQUXExZlh6L0JVQ2cwNy9pd2hyL1VMYWE2U3MvOHpGSnl3b0xuWHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjY1MzE0CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjI5ClZXakVRVGV0amZXSnNVK0YrRlpFdXloQVZBN25DN2JCYk40L2w4TE1oVXVpVkQxM1ZoN1FBak4rVEtrMDBGcXVQa2xSL1JhbXZaeHFNMjBQeUlkTkF3PT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.29-beta/MirrorDock_0.4.29_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaSs2Ly8yUHNBM1R0YzNzcFZ4cDdiZnVWWE1mT1pFYWVwQ2hqK3pGVjM5L1EwUjBSbTJTdThYZ201WEwySFhac3Z0Y2FZZUgrTmtJVUJkanpMN2kwYWdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njc2ODM1CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjMwCmtjTUtYdjA0ZkttdmFvVXVhMWlYdXkxUi90ZjFoRklLZis0TnIxTEoyaWZkUHlWNmU5UFk3eERGcWpCZ0Y2WTM1a0VrS1BuZDFlbXJ3N1YxbXpyQUFRPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.30-beta/MirrorDock_0.4.30_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaS9xT1E4N2doeDF0WndDMXR6QXcxOXJpeUFTOEhBNGRabUIySEYyQzhwanNGSWlWSFRLWllDT3NKbi9YYzlNL1A5Vis4ODBmbyt3MU1yYmRzQngwYVFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjY1MzY2CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjI5CjdMejVKN0kwbXVhV0dVTmJldElkVFlhSGVGb1hHSXpDREw1MWd0TG1VUi9hbnVyZmc0N2Q2Sjl5WExhNnJsVHpDZitmSjI5bFRNSytHNitXb0F3VkJBPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.29-beta/MirrorDock_0.4.29_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTZCVGhCY3dURzk4TDlnUkhtWStINnJPRWh4RGwzTkxNbm9VU3NaMFVkem02bC9NbVJyZzRVVVhKUmc4N2s4SGxOVUNickJPSGlHcUZQQlMwY25mZVE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njc3MTcyCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjMwCkFUQWFwQnVmVHlzMVJidkUxeWxMZmFNay9IeUxpNHIrcXdRWEhya2NJOFNpd0piUmIzNU1GSThzZmE3ZkxOcHMvajRLWW5lNS9Tb1BFK0VHWFc4WURnPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.30-beta/MirrorDock_0.4.30_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTRRUmVMVFJobjhydmxLUCtxK3hTUEx4QURjVUcxcXR1Vm56WjFTRG1ZRlpRem1TaXhLNEp1ZDg4RFJ6YUJKMjJvWUp0M1ZBbEZhcDZtb0pqMndsWkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjY1NDc0CWZpbGU6TWlycm9yRG9ja18wLjQuMjlfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMjkKalJlYmlLWXRKbkhoVFdmTGNLeGdiV3Jrc2JiT1ptRm10NHdxQ01rbEJFS2J6TkhJbmVISU85Rm9abTNsUjBLRmFlTDJiaDAvRHZPTENxUm5FL2QyQ2c9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.29-beta/MirrorDock_0.4.29_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXh0RFc2RjRCVU9PU01wVmE1RjNjNlc5R2ZEUzhndldPNnEzS1dtNkU2cWJ0R1lVMWY1T21DQjFsUjF0QjU2c3dPNkxvUkZ5bVFkcEhtOGRlLzVjYkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njc2OTc3CWZpbGU6TWlycm9yRG9ja18wLjQuMzBfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMzAKcHYyc2xPOVBCcFhId0d1TGtkM0pZNHpnSnUvM1VsS2NhKzlzb1RkZXQ5cmNTOFZhQzcvQUxEd0xyVHNMbXR3QXhRQTdyTTVVbjM2RkQ5RU5POE9GQWc9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.30-beta/MirrorDock_0.4.30_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXlnT0ZoNFUvK28yYTdBRllvcUwzTDZvUzRVUktZK2hFU3EvcDZ4cklVRkNJU2hQeHNCZmwzdlZSVHpJeGx1U3pRODdpY1VEa3p4Qi9WZDBMYTR3YUFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjY1MjIxCWZpbGU6TWlycm9yRG9ja18wLjQuMjlfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4yOQp3RXlWQXZ3YUNCZTdYWmVrcEYyd0FhbWI4amYxNiszeG4vWDk1OXZxUHBGWGNaZHJNQmZ5bUJIazcxWlFlUWF6bi9Xb0I0eHY1MXdOd2pzMTVab0xBQT09Cg==",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.29-beta/MirrorDock_0.4.29_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTdMcUVYZmZ2VEJTbjhtK01wTWlBd1FXQ1lNV1R6alJ5VkVjZ1N4OTNYTXROdyt4empsTG56K29aQlIzTGVGU0hNRURZbUY5NW1QR3VIT2xCbWhDVlEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njc2OTU4CWZpbGU6TWlycm9yRG9ja18wLjQuMzBfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4zMApYbk04WFY0U0pyRG9SSmFlWEhJazlTZWRYWTJZVW00eGlIajFReVA3SlFPT2Q4NHQ5ZUVtMWRCcE1sNVZZYkFRcEkvcXdidjR2aThWK29TVVNRR0REUT09Cg==",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.30-beta/MirrorDock_0.4.30_x64-setup.exe"
     }
   }
 }
