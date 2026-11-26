@@ -735,6 +735,20 @@ const stateCopy: Record<DeviceState, { label: string; detail: string }> = {
   },
 };
 
+// X10-150：设备中心「常用工具」六宫格——全部是既存真实视图的跳转入口，没有假能力。
+const HOME_TOOLS: { view: AssistantViewKey; title: string; hint: string; icon: string; tone: string }[] = [
+  { view: "mirror", title: "镜像控制", hint: "画面 · 键鼠直输", icon: "M8 5l11 7-11 7z", tone: "c1" },
+  { view: "files", title: "文件传输", hint: "双向传输 · 本机目录", icon: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z", tone: "c2" },
+  { view: "apps", title: "应用管理", hint: "列表 / 卸载 / 导出", icon: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z", tone: "c3" },
+  { view: "notify", title: "通知中心", hint: "实时镜像 · 按应用筛选", icon: "M6 9a6 6 0 1 1 12 0c0 5 2 5 2 6H4c0-1 2-1 2-6zM10 19h4", tone: "c4" },
+  { view: "shot", title: "截图", hint: "保存到本机", icon: "M4 7h3l1.5-2h7L17 7h3v12H4zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z", tone: "c5" },
+  { view: "info", title: "设备信息", hint: "只读诊断摘要", icon: "M12 11v5M12 8h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z", tone: "c6" },
+];
+
+// X10-150：设备中心「最近任务」——本应用运行期间真实执行过的操作记录，
+// 只保留最近 8 条、不持久化。没有发生过的操作绝不会出现在这里。
+type RecentTask = { id: number; title: string; status: "done" | "failed" | "active"; time: string };
+
 // 左侧导航（参照 ToDesk / UU 远程的分栏布局）。每个面板都常驻渲染、由 CSS
 // 控制显隐：切换导航不销毁任何状态（输入框内容、上传结果都不丢）。
 type TabKey = "home" | "tools" | "wireless" | "settings" | "help";
@@ -1485,6 +1499,20 @@ function App() {
   const [powerSerial, setPowerSerial] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState(false);
   const [powerError, setPowerError] = useState<string | null>(null);
+  // X10-150：设备中心「最近任务」。只记录真实完成的操作（截图/安装/录制），
+  // 会话内存态、最多 8 条、不持久化——与预览模板的演示数据严格区分。
+  const [recentTasks, setRecentTasks] = useState<RecentTask[]>([]);
+  const recentTaskSeq = useRef(0);
+  function pushRecentTask(title: string, status: RecentTask["status"]) {
+    recentTaskSeq.current += 1;
+    const entry: RecentTask = {
+      id: recentTaskSeq.current,
+      title,
+      status,
+      time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    };
+    setRecentTasks((prev) => [entry, ...prev].slice(0, 8));
+  }
 
   async function loadPowerStorage(serial: string) {
     setPowerBusy(true);
@@ -1968,9 +1996,11 @@ function App() {
         fileName: screenshotFileName(new Date()),
       });
       setScreenshot(saved);
+      if (saved) pushRecentTask(`${saved.file_name} 已保存`, "done");
     } catch (error) {
       setScreenshot(null);
       setScreenshotError(errorMessage(error, "无法保存截图。"));
+      pushRecentTask(`截图失败：${errorMessage(error, "无法保存截图。")}`, "failed");
     } finally {
       setScreenshotBusy(false);
     }
@@ -2002,6 +2032,7 @@ function App() {
       `全部截图结束：${done}/${targets.length} 台成功，保存在「图片 / MirrorDock」。` +
         (failures.length > 0 ? `失败：${failures.join("；")}` : ""),
     );
+    pushRecentTask(`全部截图：${done}/${targets.length} 台成功`, failures.length > 0 ? "failed" : "done");
   }
 
   // 撤销：删除刚刚保存的那张截图。只删这一个文件，不动其它内容。
@@ -2042,7 +2073,7 @@ function App() {
     try {
       if (recording?.active) {
         const stopped = await invoke<Recording | null>("stop_recording", {});
-        if (stopped) setRecording(stopped);
+        if (stopped) { setRecording(stopped); pushRecentTask(`${stopped.file_name} 已保存`, "done"); }
         else setRecording(null);
       } else {
         const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
@@ -2050,6 +2081,7 @@ function App() {
           fileName: `mirrordock-record-${stamp}.mp4`,
         });
         setRecording(started);
+        if (started) pushRecentTask(`${started.file_name} 录制中`, "active");
       }
     } catch (error) {
       setRecordingError(errorMessage(error, recording?.active ? "无法结束录制。" : "无法开始录制。"));
@@ -2402,8 +2434,10 @@ function App() {
       const receipt = await invoke<ApkInstallReceipt>("install_apk_to_device", { serial, apkPath });
       setApkReceipt(receipt);
       setApkMessage(`${receipt.summary}手机上可能出现「安装未知应用」等确认，需要你本人同意。`);
+      pushRecentTask(`${apkPath.split(/[\\/]/).pop() ?? apkPath} 已安装`, "done");
     } catch (error) {
       setApkError(errorMessage(error, "安装没有完成。"));
+      pushRecentTask(`安装失败：${apkPath.split(/[\\/]/).pop() ?? apkPath}`, "failed");
     } finally {
       setApkBusy(false);
     }
@@ -2462,6 +2496,7 @@ function App() {
         `批量安装结束：${done} 个成功${failed > 0 ? `，${failed} 个失败` : ""}${skipped > 0 ? `，${skipped} 个未执行` : ""}。` +
           "安装过程手机上可能逐个出现确认，需要你本人同意。",
       );
+      pushRecentTask(`批量安装：${done} 个成功${failed > 0 ? ` · ${failed} 个失败` : ""}`, failed > 0 ? "failed" : "done");
     } finally {
       setBatchBusy(false);
     }
@@ -3586,8 +3621,9 @@ function App() {
   }, [view, appsTargetSerial, ensureDeviceApps]);
 
   // X10-136：进入设备信息视图自动读取一次电池与存储；换设备即重读。
+  // X10-150：设备中心 Hero 卡需要真实电量，进入设备中心也自动读取。
   useEffect(() => {
-    if (view !== "info" || !readySerial) return;
+    if ((view !== "info" && view !== "home") || !readySerial) return;
     if (powerSerial === readySerial && (powerStorage || powerBusy)) return;
     void loadPowerStorage(readySerial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3660,6 +3696,85 @@ function App() {
       default:
         break;
     }
+  }
+
+  // X10-150：设备卡动作簇抽取——连接卡设备列表与设备中心 Hero 卡共用同一份真实动作，
+  // 保证「每个动作全页只出现一次」；文案、禁用条件与事件一字未改。
+  function deviceActions(device: Device, owned: boolean, favorite: boolean, usbAlt: string | null) {
+    return (
+      <>
+        {/* X10-68：收藏置顶开关（只影响最近设备列表排序）。 */}
+        <button
+          className="text-button fav-toggle"
+          type="button"
+          aria-label={favorite ? `取消收藏 ${displayLabels[device.serial] ?? device.label}` : `收藏 ${displayLabels[device.serial] ?? device.label}`}
+          title={favorite ? "取消收藏" : "收藏（最近列表置顶）"}
+          onClick={() => toggleFavoriteDevice(device.serial)}
+        >
+          {favorite ? "★" : "☆"}
+        </button>
+        {device.state === "ready" && (
+          <>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={lockBusy}
+              onClick={() => { setSelectedSerial(device.serial); void wakeDevice(device.serial); }}
+            >
+              {lockBusy && selectedSerial === device.serial ? "正在唤醒…" : "屏幕唤醒"}
+            </button>
+            {owned ? (
+              <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
+                {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
+              </button>
+            ) : (
+              <>
+                <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
+                  {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
+                </button>
+                {/* X10-111（B）：首选是无线但有 ready USB 时，给一键改用有线的入口。 */}
+                {usbAlt && (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!scrcpyReady || isLaunching || isStopping}
+                    title="检测到你插着数据线——有线更稳、不易断连，点击改走 USB 启动镜像"
+                    onClick={() => void startMirroring(usbAlt)}
+                  >
+                    {launchingSerial === usbAlt ? "正在启动…" : "改用有线"}
+                  </button>
+                )}
+              </>
+            )}
+          </>
+        )}
+        {!owned && device.state !== "ready" && looksLikeWirelessEndpoint(device.serial) && device.state === "offline" && (
+          <button className="secondary-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
+        )}
+        {!owned && device.state !== "ready" && (
+          <span className="status-label">{stateCopy[device.state].label}</span>
+        )}
+        {!owned && (revokeArmedSerial === device.serial ? (
+          <>
+            <button className="secondary-button danger-stop" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
+              {revoking ? "正在执行…" : "确认取消"}
+            </button>
+            <button className="secondary-button" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
+              算了
+            </button>
+          </>
+        ) : (
+          <button
+            className="secondary-button revoke-button"
+            type="button"
+            title="关闭手机调试开关、断开本机连接并清理记录；最后一步需在手机上点「撤销 USB 调试授权」"
+            onClick={() => setRevokeArmedSerial(device.serial)}
+          >
+            取消授权
+          </button>
+        ))}
+      </>
+    );
   }
 
   function assistantSections(current: AssistantViewKey): AssistantSection[] {
@@ -3780,10 +3895,18 @@ function App() {
                   <span className={`badge ${sessionActive ? "ok" : "neutral"}`}>{sessionActive ? "会话进行中" : "未开始"}</span>
                 </div>
                 <div className="card-body">
-                  <div className="mirror-state">
-                    <span className={`dot ${sessionActive ? "busy" : "off"}`} aria-hidden="true" />
-                    <strong>{statusMessage ?? "尚未开始镜像"}</strong>
-                  </div>
+                  {/* X10-149：失败原因直接显示在状态行（发起错误 > 会话错误 > 常规状态）。
+                      之前 launchError / sessionError 只渲染在主页状态栈，镜像页点了
+                      「开始镜像」失败时毫无反馈，用户感知为「窗口不显示、没反应」。 */}
+                  {(() => {
+                    const mirrorError = launchError ?? sessionError ?? (session?.error ? sessionErrorText(session, "") : null);
+                    return (
+                      <div className={`mirror-state ${mirrorError ? "error" : ""}`} role={mirrorError ? "alert" : undefined}>
+                        <span className={`dot ${mirrorError ? "off" : sessionActive ? "busy" : "off"}`} aria-hidden="true" />
+                        <strong>{mirrorError ?? statusMessage ?? "尚未开始镜像"}</strong>
+                      </div>
+                    );
+                  })()}
                   <p className="hint">
                     {session
                       ? `阶段：${session.phase} · 首帧：${session.first_frame === "reached" ? "已到达" : "未确认"}`
@@ -4855,14 +4978,72 @@ function App() {
           <>
           {/* -- 连接（主页） ------------------------------------------------ */}
           <section className={`tab-panel ${tab === "home" ? "" : "panel-hidden"}`} aria-label="连接">
-            <div className="page-head">
-              <h1>在电脑上安心使用手机</h1>
-              <p className="intro">用数据线或同一 Wi-Fi 连接手机，画面只出现在这台电脑上。</p>
-            </div>
+            {/* X10-150：按预览模板重构设备中心。有就绪设备时显示主设备 Hero 卡
+                （身份/系统/连接/电量/镜像会话，全部真实数据），无设备时保留原引导页。 */}
+            {readyDevice ? (() => {
+              const primary = readyDevice;
+              const primaryLabel = displayLabels[primary.serial] ?? primary.label;
+              const ownSession = sessionFor(primary.serial);
+              const primaryOwned = ownSession?.phase === "connecting" || ownSession?.phase === "streaming";
+              const primaryFavorite = favoriteDevices.includes(primary.serial);
+              const primaryUsbAlt = primary.state === "ready" && !primaryOwned ? suggestedUsbSerial(primary) : null;
+              const heroPower = powerSerial && powerSerial === readySerial ? powerStorage : null;
+              const heroBattery = heroPower && heroPower.battery_level !== null
+                ? `${heroPower.battery_level}%${heroPower.charging ? " · 充电中" : ""}`
+                : null;
+              const heroSub = capabilities?.android_release
+                ? `Android ${capabilities.android_release}`
+                : "系统版本可在「设备信息」页读取";
+              const heroChannel = connectionLabel(primary);
+              const prefBadge = preferredChannelLabel(primary);
+              return (
+                <div className="device-hero" aria-label="主设备概览">
+                  <div className="hero-phone" aria-hidden="true">
+                    <NavIcon d="M8 3.5h8a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1ZM10.5 17h3" />
+                    {heroBattery !== null && <small>{heroBattery}</small>}
+                  </div>
+                  <div className="hero-id">
+                    <b>{primaryLabel}</b>
+                    <span>{heroSub}</span>
+                    <div className="hero-chips">
+                      <span className="badge ok"><span className="dot ok" aria-hidden="true" />{heroChannel ? `${heroChannel} · 已授权` : "已授权"}</span>
+                      {prefBadge && (
+                        <span className="badge neutral" title="本次点「开始镜像」实际会走的通道（USB 更稳）">{prefBadge}</span>
+                      )}
+                      <span className="badge neutral">主设备</span>
+                    </div>
+                  </div>
+                  <div className="hero-divider" aria-hidden="true" />
+                  <div className="hero-media">
+                    <span className="tool-ico c2" aria-hidden="true"><NavIcon d="M8 5l11 7-11 7z" /></span>
+                    <div>
+                      <b>{sessionActive
+                        ? (activeSessionCount > 1 ? `镜像会话进行中 · ${activeSessionCount} 台` : "镜像会话进行中")
+                        : "镜像会话未开始"}</b>
+                      <small>画面在独立镜像窗口渲染 · 本机直连，不经过任何服务器</small>
+                    </div>
+                  </div>
+                  <div className="hero-actions">
+                    <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
+                      {isChecking ? "检查中…" : "重新检查"}
+                    </button>
+                    <span className="device-card-actions">{deviceActions(primary, primaryOwned, primaryFavorite, primaryUsbAlt)}</span>
+                  </div>
+                </div>
+              );
+            })() : (
+              <div className="page-head">
+                <h1>在电脑上安心使用手机</h1>
+                <p className="intro">用数据线或同一 Wi-Fi 连接手机，画面只出现在这台电脑上。</p>
+              </div>
+            )}
 
             <section className="connection-card" aria-live="polite">
               {/* X10-145：组件语言对齐预览——卡头用 card-head + badge，正文用 card-body，
                   状态提示用 alert。文案、状态分支与事件保持原样。 */}
+              {/* X10-150：有就绪设备时「第一步/已就绪」卡头由 Hero 卡替代，避免同屏重复；
+                  状态提示与设备卡列表（其余设备）保持原样。 */}
+              {!readyDevice && (
               <div className="card-head connection-heading">
                 <div>
                   <span className="eyebrow badge neutral">
@@ -4890,6 +5071,7 @@ function App() {
                   {isChecking ? "检查中…" : "重新检查"}
                 </button>
               </div>
+              )}
 
               {/* 状态/错误提示集中在一处，纵向紧凑排列；容器为空时不占位。 */}
               <div className="status-stack">
@@ -4959,10 +5141,12 @@ function App() {
                   镜像中 →「结束镜像」；就绪 →「开始镜像」；待授权/离线 → 文字说明。
                   任何状态都有「取消授权」按钮（X10-33）；取消成功后该设备立即从列表移除，
                   重新就绪（用户重新授权）时自动恢复显示。
-                  会话仍在但设备已从列表消失（如无线瞬断）时，补一张兜底卡保留结束入口。 */}
+                  会话仍在但设备已从列表消失（如无线瞬断）时，补一张兜底卡保留结束入口。
+                  X10-150：主设备已由 Hero 卡承载（动作共用 deviceActions），列表只显示其余设备。 */}
               {!isChecking && check?.devices && check.devices.length > 0 && (
                 <div className="device-cards" aria-label="已连接的设备">
                   {check.devices
+                    .filter((device) => !(readyDevice && device.serial === readyDevice.serial))
                     .filter((device) => device.state === "ready" || !hiddenRevokedSerials.includes(device.serial))
                     .map((device) => {
                     const badge = connectionLabel(device);
@@ -5058,76 +5242,7 @@ function App() {
                           </p>
                         </div>
                         <span className="device-card-actions">
-                          {/* X10-68：收藏置顶开关（只影响最近设备列表排序）。 */}
-                          <button
-                            className="text-button fav-toggle"
-                            type="button"
-                            aria-label={favorite ? `取消收藏 ${displayLabels[device.serial] ?? device.label}` : `收藏 ${displayLabels[device.serial] ?? device.label}`}
-                            title={favorite ? "取消收藏" : "收藏（最近列表置顶）"}
-                            onClick={() => toggleFavoriteDevice(device.serial)}
-                          >
-                            {favorite ? "★" : "☆"}
-                          </button>
-                          {device.state === "ready" && (
-                            <>
-                              <button
-                                className="secondary-button"
-                                type="button"
-                                disabled={lockBusy}
-                                onClick={() => { setSelectedSerial(device.serial); void wakeDevice(device.serial); }}
-                              >
-                                {lockBusy && selectedSerial === device.serial ? "正在唤醒…" : "屏幕唤醒"}
-                              </button>
-                              {owned ? (
-                                <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
-                                  {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
-                                </button>
-                              ) : (
-                                <>
-                                  <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
-                                    {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
-                                  </button>
-                                  {/* X10-111（B）：首选是无线但有 ready USB 时，给一键改用有线的入口。 */}
-                                  {usbAlt && (
-                                    <button
-                                      className="secondary-button"
-                                      type="button"
-                                      disabled={!scrcpyReady || isLaunching || isStopping}
-                                      title="检测到你插着数据线——有线更稳、不易断连，点击改走 USB 启动镜像"
-                                      onClick={() => void startMirroring(usbAlt)}
-                                    >
-                                      {launchingSerial === usbAlt ? "正在启动…" : "改用有线"}
-                                    </button>
-                                  )}
-                                </>
-                              )}
-                            </>
-                          )}
-                          {!owned && device.state !== "ready" && looksLikeWirelessEndpoint(device.serial) && device.state === "offline" && (
-                            <button className="secondary-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
-                          )}
-                          {!owned && device.state !== "ready" && (
-                            <span className="status-label">{stateCopy[device.state].label}</span>
-                          )}
-                          {!owned && (revokeArmedSerial === device.serial ? (
-                            <>
-                              <button className="secondary-button danger-stop" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
-                                {revoking ? "正在执行…" : "确认取消"}
-                              </button>
-                              <button className="secondary-button" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
-                                算了
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              className="secondary-button revoke-button"
-                              type="button"
-                              title="关闭手机调试开关、断开本机连接并清理记录；最后一步需在手机上点「撤销 USB 调试授权」"
-                              onClick={() => setRevokeArmedSerial(device.serial)}
-                            >
-                              取消授权
-                            </button>
-                          ))}
+                          {deviceActions(device, owned, favorite, usbAlt)}
                         </span>
                       </div>
                     );
@@ -5203,6 +5318,58 @@ function App() {
                 <div className="recent-devices" aria-label="设备记录操作反馈">
                   <p className="recent-note" role="status">{recentMessage}</p>
                 </div>
+              )}
+
+              {/* X10-150：按预览模板补齐设备中心下半区——常用工具六宫格（全部是真实
+                  视图入口）、最近任务（仅本会话真实操作，不持久化）、安全边界说明。 */}
+              {readyDevice && (
+                <>
+                  <section className="card" aria-label="常用工具">
+                    <div className="card-head"><h3 className="card-title">常用工具</h3></div>
+                    <div className="card-body">
+                      <div className="tool-grid-home">
+                        {HOME_TOOLS.map((tool) => (
+                          <button key={tool.view} className="tool-card" type="button" onClick={() => openView(tool.view)}>
+                            <span className={`tool-ico ${tool.tone}`} aria-hidden="true"><NavIcon d={tool.icon} /></span>
+                            <span><b>{tool.title}</b><small>{tool.hint}</small></span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </section>
+                  <section className="card" aria-label="最近任务">
+                    <div className="card-head">
+                      <h3 className="card-title">最近任务</h3>
+                      <span className="spacer" />
+                      <span className="badge neutral">本次运行 · 不持久化</span>
+                    </div>
+                    {recentTasks.length === 0 ? (
+                      <div className="card-body tight">
+                        <p className="hint">本次运行还没有操作记录。截图、安装、录制完成后会显示在这里，只保留最近 8 条。</p>
+                      </div>
+                    ) : (
+                      <div className="table-wrap" role="region" aria-label="最近任务列表" tabIndex={0}>
+                        <table className="table">
+                          <thead><tr><th>任务</th><th data-col="secondary">状态</th><th data-col="meta">时间</th></tr></thead>
+                          <tbody>
+                            {recentTasks.map((task) => (
+                              <tr key={task.id}>
+                                <td><b>{task.title}</b></td>
+                                <td data-col="secondary">
+                                  <span className={`badge ${task.status === "done" ? "ok" : task.status === "failed" ? "warn" : "neutral"}`}>
+                                    {task.status === "done" ? "已完成" : task.status === "failed" ? "失败" : "进行中"}
+                                  </span>
+                                </td>
+                                <td data-col="meta">{task.time}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </section>
+                  <p className="assistant-note" role="note">安全边界：无需账号、数据不出本机；镜像、传输、卸载都需要设备显式授权。</p>
+                </>
               )}
             </section>
 
@@ -5456,8 +5623,8 @@ function App() {
 
           {/* -- 无线 -------------------------------------------------------- */}
           <section className={`tab-panel ${tab === "wireless" ? "" : "panel-hidden"}`} aria-label="无线">
+            {/* X10-148：页标题已在上方页头（连接与授权），这里只保留说明行，去掉重复大标题。 */}
             <div className="page-head">
-              <h1>无线连接</h1>
               <p className="intro">同一 Wi-Fi 下连接 Android 11+；推荐扫码配对，全程免输入。</p>
             </div>
             <section className="connection-card" aria-live="polite">
@@ -5616,8 +5783,8 @@ function App() {
 
           {/* -- 设置 -------------------------------------------------------- */}
           <section className={`tab-panel ${tab === "settings" ? "" : "panel-hidden"}`} aria-label="设置">
+            {/* X10-148：页标题已在上方页头（设置），这里只保留说明行，去掉重复大标题。 */}
             <div className="page-head">
-              <h1>设置</h1>
               <p className="intro">外观主题、镜像窗口、快捷键与授权。全部设置项按分组保留，切换分组不会清除任何配置。</p>
             </div>
 
@@ -6084,8 +6251,8 @@ function App() {
 
           {/* -- 帮助 -------------------------------------------------------- */}
           <section className={`tab-panel ${tab === "help" ? "" : "panel-hidden"}`} aria-label="帮助">
+            {/* X10-148：页标题已在上方页头（帮助中心），这里只保留说明行，去掉重复大标题。 */}
             <div className="page-head">
-              <h1>帮助与诊断</h1>
               <p className="intro">常用问题都在下面的帮助主题里；联系支持时先在这里预览诊断内容，确认无误后再导出。</p>
             </div>
 

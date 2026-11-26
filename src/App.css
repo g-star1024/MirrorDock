@@ -586,6 +586,8 @@ button, input, select { font-family: inherit; }
 .title-right { margin-inline-start: auto; display: flex; align-items: center; gap: 8px; }
 .theme-chip { padding: 4px 10px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
 .title-button { padding: 5px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); color: var(--text); font-size: 12px; cursor: pointer; }
+/* X10-148：顶栏按钮文字不换行——窄窗口下「帮助」「主题」曾被挤成一字一行竖排。 */
+.title-button, .module-button { white-space: nowrap; }
 
 .subbar {
   grid-area: subbar; display: flex; align-items: center; gap: 16px; padding: 0 18px;
@@ -617,13 +619,14 @@ button, input, select { font-family: inherit; }
 .tree-device:hover { background: var(--surface-2); }
 .tree-device.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; }
 .tree-device-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-device small { margin-inline-start: auto; color: var(--muted); font-size: 10px; }
+.tree-device small { margin-inline-start: auto; color: var(--muted); font-size: 10px; white-space: nowrap; flex: none; }
 .side-nav { display: grid; gap: 3px; }
 .side-nav .nav-item { padding: 8px 11px; border-radius: var(--radius-sm); }
 .main-area { min-width: 0; overflow-y: auto; }
 .main-area .topbar { display: none; }
-/* X10-147：放宽内容上限——窗口放大时内容跟随放大；左右留 24px 呼吸边距（不贴边）。 */
-.content { width: min(1600px, 100% - 48px); margin-inline: auto; padding: 20px 0 48px; }
+/* X10-147：放宽内容上限——窗口放大时内容跟随放大；左右留 24px 呼吸边距（不贴边）。
+   X10-148：页头自带 12px 下内边距，这里只补 6px，避免头与正文间隔过大。 */
+.content { width: min(1600px, 100% - 48px); margin-inline: auto; padding: 6px 0 48px; }
 
 .right-rail { display: grid; align-content: start; gap: 12px; padding: 14px 12px; overflow-y: auto; border-left: 1px solid var(--line); background: var(--surface); }
 .rail-card { padding: 13px; border: 0; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
@@ -684,10 +687,12 @@ button, input, select { font-family: inherit; }
 .assistant-nav-items .nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-strong); font-weight: 650; }
 .sidebar-foot p { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 
+/* X10-148：页头不再通栏负边距吸顶——标题带与内容列同宽居中（按钮不再贴窗口右缘，
+   标题不再顶着顶栏）。滚动时页头随页面滚走，与预览模板的静态页头一致。 */
 .assistant-work-head {
-  position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 12px;
-  min-height: 44px; margin: -20px -24px 14px; padding: 8px 24px;
-  border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+  display: flex; align-items: center; gap: 12px;
+  width: min(1600px, 100% - 48px); margin: 0 auto; padding: 14px 0 12px;
+  border-bottom: 1px solid var(--line); background: transparent; color: var(--text);
 }
 .assistant-work-head h1 { margin: 0; font-size: 15px; }
 .assistant-work-head > span { color: var(--muted); font-size: 11.5px; }
@@ -972,6 +977,51 @@ button, input, select { font-family: inherit; }
 .tool-card b { display: block; color: var(--text); font-weight: 600; }
 .tool-card small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 
+/* X10-150：设备中心主设备 Hero 卡——对齐预览模板（身份 + 连接 + 电量 + 镜像会话一眼可见）。
+   数据全部真实：电量来自电池读取，缺字段就不显示，不造假数字。 */
+.tool-ico {
+  width: 32px; height: 32px; border-radius: var(--radius-sm); display: grid; place-items: center;
+  background: var(--surface-2); color: var(--text); flex: none;
+}
+.tool-ico.c1 { background: var(--cat-blue-soft); color: var(--cat-blue); }
+.tool-ico.c2 { background: var(--cat-teal-soft); color: var(--cat-teal); }
+.tool-ico.c3 { background: var(--cat-violet-soft); color: var(--cat-violet); }
+.tool-ico.c4 { background: var(--cat-pink-soft); color: var(--cat-pink); }
+.tool-ico.c5 { background: var(--cat-amber-soft); color: var(--cat-amber); }
+.tool-ico.c6 { background: var(--cat-green-soft); color: var(--cat-green); }
+.device-hero {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) 1px minmax(180px, 1fr) auto; gap: 16px;
+  align-items: center; padding: 18px; border-radius: var(--radius); background: var(--accent-soft);
+  margin-bottom: 14px;
+}
+.hero-phone {
+  width: 60px; height: 100px; border: 2px solid var(--accent); border-radius: 12px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  color: var(--accent); background: var(--surface); font-size: 12px; font-weight: 700;
+}
+.hero-phone svg { width: 26px; height: 26px; }
+.hero-id { min-width: 0; }
+.hero-id b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.hero-id > span { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.hero-chips .badge { display: inline-flex; align-items: center; gap: 6px; }
+.hero-divider { width: 1px; height: 72px; background: var(--line); }
+.hero-media { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.hero-media b { display: block; font-size: 13px; }
+.hero-media small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.hero-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.hero-actions .device-card-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; white-space: normal; }
+.hero-actions .primary-button, .hero-actions .secondary-button { margin: 0; }
+@media (max-width: 1199px) {
+  .device-hero { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .hero-divider, .hero-media { display: none; }
+}
+@media (max-width: 859px) { .device-hero { grid-template-columns: 1fr; } .hero-phone { display: none; } }
+
+/* X10-149：镜像状态卡的失败态——错误原文直接显示在状态行，不再只弹在主页。 */
+.mirror-state.error { color: var(--danger); }
+.mirror-state.error .dot { background: var(--danger); animation: none; }
+
 .check-list { display: grid; gap: 8px; }
 .check-item {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius-sm);
@@ -1126,8 +1176,10 @@ button, input, select { font-family: inherit; }
 .settings-content .settings-card { margin-bottom: 0; }
 @media (max-width: 1100px) {
   .settings-split { grid-template-columns: 1fr; }
-  .settings-nav { flex-direction: row; flex-wrap: wrap; }
-  .settings-nav-item { width: auto; flex: 1 1 150px; min-height: 38px; }
+  /* X10-148：窄窗口下分组导航改网格铺排——flex 挤压会让「按设备 · 桌面模式」等
+     文字在按钮内换行错行。auto-fill 保证每列不小于 160px，整行整齐换行。 */
+  .settings-nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
+  .settings-nav-item { width: auto; min-height: 38px; }
 }
 
 /* X10-145 三个 legacy 面板的组件语言对齐（保真：只换视觉类，不动文案/事件）：
@@ -1266,6 +1318,9 @@ ol.wireless-steps.steps > li.step-line { font-size: 13px; }
 .btn-ghost:hover:not(:disabled) { background: var(--accent-soft); }
 .btn-ghost.danger:hover:not(:disabled) { background: var(--danger-soft); }
 .btn-sm { height: 26px; padding: 0 10px; font-size: 12px; }
+/* X10-148：按钮文字不换行——窄表格里「镜像」「截图」曾被挤成一字一行竖排。 */
+.btn { white-space: nowrap; }
+.assistant-row-actions .btn { flex: none; }
 
 .mono { font-family: var(--mono); font-size: 12px; }
 .kbd {

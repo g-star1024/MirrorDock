@@ -574,3 +574,9 @@ X10-141 只落地了 token + 外壳，本轮（X10-142）把预览的组件语�
 - **裁切修复**：`.kv dd` 去掉 `nowrap+ellipsis`（长文案如「录制经既有会话，不绕过授权」改为正常换行）；客户端与预览同步。
 - **空壳提示条修复**：`kind:"note"` 渲染器对空文本返回 null（文件页 transferError/transferMessage 皆空时的裸蓝条）。
 - **验证**：tsc 0 error、vitest 125/125、vite build 通过；浏览器多宽度（1000/1280/1848）审计——19 视图统一 24px 边距、0 裁切、0 横向溢出、0 控制台错误；镜像/按键映射/文件传输页截图目检通过；预览页两态（demo/非 demo）画布零残留。
+
+## 18. X10-150 设备中心落地与 X10-148 细节修正（2026-11-26）
+
+- 设备中心按 §2 模板落地：主设备 Hero 卡（`device-hero/hero-phone/hero-id/hero-chips/hero-divider/hero-media/hero-actions`）+ 其余设备卡 + 常用工具六宫格（`tool-grid-home/tool-card/tool-ico c1~c6`）+ 最近任务表（`table`）+ 安全边界 note。数据全部真实：电量来自电池读取（缺字段不显示）、镜像会话状态真实、最近任务只记本会话真实操作（最多 8 条不持久化）；预览 demo 态的 38ms 延迟/媒体播放/演示任务表不进客户端。
+- 页头体系定型：`.assistant-work-head` 与内容列同宽（`min(1600px, 100% - 48px)` 居中）、静态不吸顶；legacy 页不再重复大标题 `h1`，页头唯一标题 + 页内说明行。
+- 全局防错行三律：`.btn`、侧栏设备标签、顶栏按钮一律 `white-space: nowrap`；窄窗口设置分组导航用 `auto-fill minmax(160px,1fr)` 网格，不用 flex 挤压。
