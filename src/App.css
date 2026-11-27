@@ -1637,6 +1637,23 @@ ol.setup-steps.steps li.step-line::before { top: 0; }
 .settings-nav-item { border-radius: var(--r-control); min-height: 40px; }
 .settings-nav-item:hover { background: var(--surface-2); }
 .settings-nav-item.active { background: var(--accent-soft); box-shadow: none; }
+
+/* X10-155：设备中心/连接页主容器对齐预览 .card——发丝线边框 + 6px 圆角 + 无投影 + 标准内边距
+   （旧视觉 1156 行 border:0 + var(--radius) + var(--shadow) 重影 + 24/26 过宽内边距，观感与预览差距大）。
+   容器统一水平内边距；card-head 负 margin 拉满到卡边（保留发丝线分隔），其余子元素自然继承。 */
+.connection-card { border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: none; background: var(--surface); padding: var(--sp-4) var(--sp-5); }
+.connection-card > .card-head,
+.connection-card > .connection-heading { margin: calc(-1 * var(--sp-4)) calc(-1 * var(--sp-5)) var(--sp-3); padding: var(--sp-3) var(--sp-5); }
+.connection-card > .device-cards { margin-top: var(--sp-3); }
+
+/* 品牌引导对齐预览独立 .card（白底 + 发丝线 + card-head 分隔线），替代旧灰底 surface-2 */
+.capability-panel.brand-guide { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); margin-top: var(--sp-3); }
+.brand-guide > strong { display: block; padding: var(--sp-3) var(--sp-5); font-size: var(--fs-14); border-bottom: 1px solid var(--line); }
+.brand-guide > .capability-pending { padding: 0 var(--sp-5); }
+.brand-guide .device-picker { padding: 0 var(--sp-5); }
+.brand-guide .brand-steps,
+.brand-guide .brand-notes { padding: 0 var(--sp-5); }
+.brand-guide > .capability-pending:last-child { padding-bottom: var(--sp-4); }
 .settings-nav-item.active span { color: var(--accent); }
 .settings-row { padding: var(--sp-3) 0; }
 .settings-row .set-text b { font-weight: 500; }
