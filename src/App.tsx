@@ -5015,9 +5015,9 @@ function App() {
             <section className="connection-card" aria-live="polite">
               {/* X10-145：组件语言对齐预览——卡头用 card-head + badge，正文用 card-body，
                   状态提示用 alert。文案、状态分支与事件保持原样。 */}
-              {/* X10-150：有就绪设备时「第一步/已就绪」卡头由 Hero 卡替代，避免同屏重复；
+              {/* X10-155：按预览 1:1 复刻——连接卡头不再因就绪设备而隐藏（预览 demo 在
+                  Hero 卡下方仍显示「第一步：连接手机 / 手机已准备就绪」+ 重新检查）。
                   状态提示与设备卡列表（其余设备）保持原样。 */}
-              {!readyDevice && (
               <div className="card-head connection-heading">
                 <div>
                   <span className="eyebrow badge neutral">
@@ -5045,7 +5045,6 @@ function App() {
                   {isChecking ? "检查中…" : "重新检查"}
                 </button>
               </div>
-              )}
 
               {/* 状态/错误提示集中在一处，纵向紧凑排列；容器为空时不占位。 */}
               <div className="status-stack">
