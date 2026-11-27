@@ -1,23 +1,23 @@
 {
-  "version": "0.4.34",
-  "notes": "## 修复与增强\n\n- **设备中心（home）**：把「在电脑上安心使用手机」从卡片外的页头大标题改为卡片内引导（置于状态栈后、三步前），与重构预览的卡片结构一致；卡片头、状态栈、三步引导、按品牌查看开启步骤的顺序与预览对齐。\n- **连接与授权（connect）**：「本机已保存的无线设备」改为常显（原来只有存在已保存设备时才出现），无数据时如实显示空态提示；新增预览的收尾引导卡「USB 连接与授权在「设备中心」完成…」与「打开设备中心」入口。\n- 上述两页的卡顺序、分节方式（卡内发丝线分节）、右栏情境面板均与重构预览 1:1 对齐；本次只改结构与样式，未改任何状态、事件与文案逻辑。\n\n## 说明\n\n- 连接页展示的「已配对的伴侣设备」与预览一致；「评估设备」字样为旧版本截图误读，当前版本为「已配对的伴侣设备」。\n- 预览的「演示数据/模拟加载」开关为演示环境专属，客户端按「真实状态原则」不引入。",
-  "pub_date": "2026-11-26T23:23:10Z",
+  "version": "0.4.35",
+  "notes": "## 修复：设备中心恢复显示「第一步：连接手机 / 手机已准备就绪」连接卡\n\n上一版本（0.4.34）在有就绪设备时，设备中心的「第一步：连接手机 / 手机已准备就绪」连接卡被隐藏，导致 Hero 主设备卡下方直接是「常用工具」，与重构预览的结构不一致。\n\n本版修复：连接卡头（第一步：连接手机 / 手机已准备就绪 + 重新检查）现在无条件显示，与预览保持一致。设备未连接时仍显示「等待连接手机」引导。\n\n### 为什么之前看起来差很多\n你对比图里的诊断横幅（输入法/无线断开/崩溃记录）、备用机卡、最近任务表格行，都是预览**演示态假数据**——客户端按「真实状态原则」不伪造，真实设备没有这些问题时正确地为空；设备真有对应情况时，状态栈会如实显示。",
+  "pub_date": "2026-11-27T01:30:33Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTF3R2FnSm1YRElKQlhDSFNPRGdhSldGSTg5UEM1TWJhMVJxQkRjVTFrNERMdUEyVGlKSzF1alRvSENRd0RndkFBRU83SVBabDc4OFVNOG5MMnJnY2drPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzM1MTUzCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM0CmEyQjRhNTFUTnhJajhUYkFVUVpUNEg1endiWmYrRDdXK2RpZ0dVZUplMDBHS0dYUkRPc21uMVhSZkhncHc3dVVDY0c5OFJmczlpY1RnWG1Idk9UdURRPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.34-beta/MirrorDock_0.4.34_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTlJUXV0UHBrajFna0UxeFRKTS9vdStlV25GRUw0WUdpOGhMYVIwMEJyTlEzMzJ4Z1NwZU55b0h5T212c28ySHd1VTNVbjY3ZU1pbkkyTTJaRTlXakFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzQyODg3CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM1Cm5nUWlsQ2NwR3ZqL2lYK09ZOElsNTRiQy9zeUVodTBNMjVWd3dVRnN5cHMyWEY1NGp5WW4xaGVKQ0k0MWlZQTAzcGs5bkNpWGs4clRVc1RqZDNBbUFBPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.35-beta/MirrorDock_0.4.35_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTRJc1RNSHVDRUh6UytaNEZ6WlRjdnY2M3hFdlZJK1pLMFowYUtvRmRqQW1tQThySHIxREdrbStkS2N5WHd6TUtwRWJzQUtKOUNWbW90MzlnTXhvQnd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzM1MzQ2CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM0CmQrZXI1cnZma0tXd2Ruc0gyNzVzM0RhMEo0cmpXZ3RQMXJ3eGhhSE5uN05OL1EyQVR4Zk93QVh3enJaTWJuczVJRE0zRnRocTgzSGVLb0FuSjR4V0NBPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.34-beta/MirrorDock_0.4.34_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTJudjVUaitMNHJQeUdzMGtHUktVS0w4UVFEdG43YVhvL0c2TlZOSEpCVWlQNFRpYzVrOVpjM3MrRUtlUmpZa1BwcEZxeGgyZDhIUEVNUkNwN0FLSXdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzQyOTcxCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM1ClNIcWt6MHQzQVpPbmdzbHVCWk9BV2x3UVl2d2kvODNtelVmRGNWMFpWaFVCWmVwYVZGVkR2UFFvVWUzeGhpd1hGODNhdGFWeUtyWHFSUWtsSjB4R0RRPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.35-beta/MirrorDock_0.4.35_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaThUSUdOTzJocSs0RW5MNk9ucjMrSkNNbkFIVnVlY09QSC9sSlcxY21zRjNNdlR5cnFkeDNDN291QlBTMEZBRm4wSkVUQWltcHZZbVNBa1M4NTBoTXdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzM1MTA3CWZpbGU6TWlycm9yRG9ja18wLjQuMzRfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMzQKZkw4WlVpTnJCM3hDemhzbGllYzRJSjdwRlI0blFXMlozRVVBNytYTFRET2NjTnl5cXFQZUlkTTFtNWwxVG1YemhzZCtocnJmUlM4QUxuZWRNcjEzQkE9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.34-beta/MirrorDock_0.4.34_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTF3dUVJbVNyRjVybVhkN1hDaERHQUlBSkU2VEUxalVod3ZjcSs1aXY5aU52SHRVUXNPYjZqL1ZYTVpPMTJieWdzUzBMbC9iVWxoS1haTHpGWG9Dd2dBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzQyODIzCWZpbGU6TWlycm9yRG9ja18wLjQuMzVfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMzUKa3hFYkQwQ0JScFA3K2JYaHNvMkxqRERNMTVRL0lWRXc0MDFnZnBoZ1RwL2RuMEVpNmExMFI0dytoOHdpdnpiRTBPZEgrOU51THd3RC9CdjA2ZGtoQWc9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.35-beta/MirrorDock_0.4.35_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXp1SGV1djBCNG1lejFsbXJ2eWJ5SDlXRGJ1SEZjRDdQNjlYR0VyN3licnlGS1Y2NWk3SnRXMy84MVN1ZmRJSlN0aHNYOWNrOEVlR21VbjBZaXppS2c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzM1MzI0CWZpbGU6TWlycm9yRG9ja18wLjQuMzRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4zNAo4SS9ma0JibjJOeEpUYUw0QWhpbDBTOU5od1NDdHc5NS91N1l5Z3E5aXRjMnE2MlVscm1NTmwxOEtHSDRML0t5bXliK1RvMnB6KzhTalJXRjBnYjNBUT09Cg==",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.34-beta/MirrorDock_0.4.34_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTFzaEI1TDZzNXNrT01yUVE1OTU0N1ZYYkFaZ1ZEKzdUVElObzZveldJaVZvVzJVYkFaRmRlTGJodG1SM3pLd05BQWRxUzc0REd4RWZScnJ3QzhZR3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzQyNzgyCWZpbGU6TWlycm9yRG9ja18wLjQuMzVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4zNQpUMFJNbEhiQzU3dHhpRXo4cnZrRmJieFQ0Nm12bng5Zy9ZdHJqOW0vN1lEZlVEenBvVFl1UksvRENlQXpZSUdZN3BpY0p0c3F5aDNhbit3RmlJbERCUT09Cg==",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.35-beta/MirrorDock_0.4.35_x64-setup.exe"
     }
   }
 }
