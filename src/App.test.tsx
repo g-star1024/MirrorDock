@@ -634,11 +634,12 @@ describe("App rendering", () => {
     expect(screen.getAllByText(/尚未实现/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/未连接手机/).length).toBeGreaterThan(0);
 
-    // X10-129：相册已升级为真实能力（白名单目录浏览 + 取回）。
+    // X10-161：相册升级为 MediaStore 全机媒体库（图片 + 视频）。
     // 没有设备时依然诚实：提示尚未读取，不伪造照片列表。
     fireEvent.click(within(sidebar).getByRole("button", { name: "相册" }));
-    expect(await screen.findByRole("heading", { name: "相册目录" })).toBeInTheDocument();
-    expect(screen.getByText(/尚未读取相册目录/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "相册媒体库" })).toBeInTheDocument();
+    expect(screen.getByText(/尚未读取相册媒体库/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "视频" })).toBeInTheDocument();
 
     // X10-134：应用管理升级为启动/卸载；卸载需要显式确认，旧「只读」文案已下线。
     // X10-159：静态说明移入帮助中心知识库，页面底部只显示动态状态（目标设备/进度）。

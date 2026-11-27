@@ -4,11 +4,13 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#本地开发)
 [![Built with](https://img.shields.io/badge/built%20with-Tauri%202%20%7C%20React%2019%20%7C%20scrcpy%204.1-24C8D8.svg)](#技术栈与致谢)
 
+> **语言 / Language:** 中文 · [English](README.en.md)
+
 MirrorDock 是一个**本地优先**的 Android 桌面镜像与控制工具，面向非技术用户：在 Windows、macOS 和 Linux 上，用一根数据线或一次无线配对，把自己的手机安全地投到电脑屏幕上。
 
 画面、音频与控制仅在电脑与已授权手机之间点对点传输。**不依赖云端、不默认上传任何数据、不收集遥测。**
 
-当前版本：`0.4.28`（桌面端）· `0.3.2`（伴侣 App）。
+当前版本：`0.4.39`（桌面端）· `0.3.2`（伴侣 App）。最新发布：<https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.39-beta>
 
 ## 功能特性
 
@@ -48,8 +50,13 @@ MirrorDock 是一个**本地优先**的 Android 桌面镜像与控制工具，�
 
 ### 帮助
 
-- **内置帮助中心**：11 篇完整帮助文档随应用分发，离线可查，覆盖授权原理、无线连接、锁屏与保持唤醒、黑屏与屏蔽操作、文件与通知镜像、多设备管理等常见问题；连接页只留操作，说明性内容全部收进帮助中心。
-- **官方主页**：<https://g-star1024.github.io/MirrorDock/>
+- **内置帮助中心**：11 篇完整帮助文档 + 16 条功能说明知识库随应用分发，离线可查，覆盖授权原理、无线连接、锁屏与保持唤醒、黑屏与屏蔽操作、文件与通知镜像、多设备管理等常见问题；连接页只留操作，说明性内容全部收进帮助中心。
+- **官方主页**：<https://g-star1024.github.io/MirrorDock/>（中文 / English）
+
+### 语言
+
+- **界面语言**：设置 → 通用 → 界面语言，支持简体中文与 English，切换后立即生效并记住选择（仅影响本机界面）。
+- **官网与文档**：主页、兼容性矩阵和本 README 均提供中英双语版本。
 
 ## 安全与隐私边界
 

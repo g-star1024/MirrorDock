@@ -21,6 +21,7 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
 import { helpArticles } from "./helpContent";
 import { knowledgeEntries } from "./knowledgeBase";
+import { readLocale, useLocaleBridge, writeLocale, type Locale } from "./i18n";
 import {
   UI_THEMES,
   applyUiTheme,
@@ -394,13 +395,16 @@ type BatchApkItem = {
   message?: string;
 };
 
-// X10-129 相册可浏览目录（与后端 GALLERY_ROOTS 对齐的白名单子集，无自由路径）。
-const GALLERY_DIRS: { dir: string; label: string }[] = [
-  { dir: "/sdcard/DCIM", label: "DCIM" },
-  { dir: "/sdcard/DCIM/Camera", label: "相机" },
-  { dir: "/sdcard/Pictures", label: "图片" },
-  { dir: "/sdcard/Pictures/Screenshots", label: "截图" },
-];
+// X10-161 相册媒体库：来自 Android MediaStore 的真实记录（图片 + 视频）。
+type GalleryMedia = {
+  id: string;
+  name: string;
+  path: string;
+  kind: "image" | "video";
+  dateAdded: number;
+  size: number;
+};
+type GalleryFilter = "all" | "image" | "video";
 
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, desktop_app: null, camera_source: false };
 export function readOptions(): SessionOptions {
@@ -879,6 +883,12 @@ function App() {
   const [railCollapsed, setRailCollapsed] = useState(false);
   // X10-144：设置中心二级分组（默认外观，与原设置页首屏一致）。
   const [settingsGroup, setSettingsGroup] = useState<SettingsGroupKey>("appearance");
+  // X10-160：界面语言（中文 / English），仅影响本机界面， localStorage 持久化。
+  const [locale, setLocale] = useState<Locale>(() => readLocale());
+  useLocaleBridge(locale);
+  useEffect(() => {
+    document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+  }, [locale]);
 
   function openView(next: AssistantViewKey) {
     setView(next);
@@ -976,15 +986,16 @@ function App() {
   const [batchApks, setBatchApks] = useState<BatchApkItem[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
   const batchCancelRef = useRef(false);
-  // X10-129 相册：固定白名单目录浏览；列表与取回失败都如实展示，不伪装空态。
-  const [galleryDir, setGalleryDir] = useState<string>(GALLERY_DIRS[0].dir);
-  const [galleryFiles, setGalleryFiles] = useState<string[] | null>(null);
+  // X10-161 相册媒体库：全机图片 + 视频（MediaStore），按类型 / 文件名筛选。
+  const [galleryItems, setGalleryItems] = useState<GalleryMedia[] | null>(null);
+  const [galleryFilter, setGalleryFilter] = useState<GalleryFilter>("all");
+  const [galleryQuery, setGalleryQuery] = useState("");
   const [galleryBusy, setGalleryBusy] = useState(false);
   const [galleryError, setGalleryError] = useState<string | null>(null);
   const [galleryMessage, setGalleryMessage] = useState<string | null>(null);
   const [galleryFetched, setGalleryFetched] = useState<Record<string, TransferReceipt>>({});
   const [galleryErrors, setGalleryErrors] = useState<Record<string, string>>({});
-  const [fetchingGalleryName, setFetchingGalleryName] = useState<string | null>(null);
+  const [fetchingGalleryPath, setFetchingGalleryPath] = useState<string | null>(null);
   // X10-130 按键映射：方案与绑定只保存在本机 localStorage。
   const [keymaps, setKeymaps] = useState<{ profiles: KeymapProfile[]; activeId: string | null }>(() => readKeymaps());
   const [capturingKey, setCapturingKey] = useState(false);
@@ -1432,12 +1443,41 @@ function App() {
   }
 
   // 在手机上打开「实体键盘」设置页（X10-46）：UHID 打字依赖手机端启用的布局。
-  async function openKeyboardSettings() {    if (!readySerial) return;
+  const [keyboardNotice, setKeyboardNotice] = useState<string | null>(null);
+  const [keyboardBusy, setKeyboardBusy] = useState(false);
+  async function openKeyboardSettings() {
+    if (!readySerial) return;
+    setKeyboardBusy(true);
+    setKeyboardNotice(null);
     try {
       await invoke("open_keyboard_settings", { serial: readySerial });
-      setSettingsNotice("已在手机上打开「实体键盘」设置：请确认 scrcpy 键盘已启用「英语（美国）」布局，镜像窗口里按 MOD+k 也能打开这个页面。");
+      const notice = "已在手机【物理屏】打开「实体键盘」设置，请确认 scrcpy 键盘已启用「英语（美国）」布局。桌面模式镜像窗口不受影响；镜像窗口里按 MOD+k 也会在手机屏打开同一页面。";
+      setKeyboardNotice(notice);
+      setSettingsNotice(notice);
     } catch (error) {
-      setSettingsNotice(errorMessage(error, "无法打开手机的键盘设置（设备可能未连接）。"));
+      const text = errorMessage(error, "无法打开手机的键盘设置（设备可能未连接）。");
+      setKeyboardNotice(text);
+      setSettingsNotice(text);
+    } finally {
+      setKeyboardBusy(false);
+    }
+  }
+
+  // X10-161：设置页万一一度落到 scrcpy 虚拟屏（白屏且虚拟屏无导航栏），
+  // 用户可在按键映射页点这里恢复，无需关闭整个镜像。
+  async function restoreDesktopView() {
+    if (!readySerial) return;
+    setKeyboardBusy(true);
+    try {
+      const note = await invoke<string>("restore_desktop_display", {
+        serial: readySerial,
+        package: options.desktop_mode ? options.desktop_app : null,
+      });
+      setKeyboardNotice(note);
+    } catch (error) {
+      setKeyboardNotice(errorMessage(error, "无法恢复桌面模式画面。"));
+    } finally {
+      setKeyboardBusy(false);
     }
   }
 
@@ -2524,79 +2564,75 @@ function App() {
     });
   }
 
-  // -- X10-129 相册 --
+  // -- X10-161 相册媒体库 --
 
-  async function refreshGallery(dir: string = galleryDir) {
+  async function refreshGallery() {
     if (!transferDeviceSerial) return;
     setGalleryBusy(true);
     setGalleryError(null);
     setGalleryMessage(null);
     try {
-      const names = await invoke<string[]>("list_device_gallery", { serial: transferDeviceSerial, dir });
-      setGalleryFiles(names);
+      const items = await invoke<GalleryMedia[]>("list_gallery_media", { serial: transferDeviceSerial });
+      setGalleryItems(items);
     } catch (error) {
       // 读取失败置空并如实报错，不伪装成「相册是空的」。
-      setGalleryFiles(null);
-      setGalleryError(errorMessage(error, "无法读取相册目录。"));
+      setGalleryItems(null);
+      setGalleryError(errorMessage(error, "无法读取相册媒体库。"));
     } finally {
       setGalleryBusy(false);
     }
   }
 
-  function chooseGalleryDir(dir: string) {
-    setGalleryDir(dir);
-    setGalleryFiles(null);
-    setGalleryError(null);
-    setGalleryMessage(null);
-    setGalleryFetched({});
-    setGalleryErrors({});
-    void refreshGallery(dir);
-  }
-
-  async function fetchGalleryFile(fileName: string): Promise<boolean> {
+  async function fetchGalleryFile(item: GalleryMedia): Promise<boolean> {
     if (!transferDeviceSerial) return false;
     setGalleryMessage(null);
     setGalleryError(null);
-    setFetchingGalleryName(fileName);
+    setFetchingGalleryPath(item.path);
     setGalleryErrors((prev) => {
-      if (!(fileName in prev)) return prev;
+      if (!(item.path in prev)) return prev;
       const next = { ...prev };
-      delete next[fileName];
+      delete next[item.path];
       return next;
     });
     try {
-      const receipt = await invoke<TransferReceipt>("fetch_device_gallery_file", {
+      const receipt = await invoke<TransferReceipt>("fetch_gallery_media", {
         serial: transferDeviceSerial,
-        dir: galleryDir,
-        fileName,
+        path: item.path,
+        name: item.name,
       });
-      setGalleryFetched((prev) => ({ ...prev, [fileName]: receipt }));
-      setGalleryMessage(`已取回「${fileName}」，保存在「下载 / MirrorDock / 相册」。`);
+      setGalleryFetched((prev) => ({ ...prev, [item.path]: receipt }));
+      setGalleryMessage(`已取回「${item.name}」，保存在「下载 / MirrorDock / 相册」。`);
       return true;
     } catch (error) {
-      setGalleryErrors((prev) => ({ ...prev, [fileName]: errorMessage(error, "没有取回成功。") }));
+      setGalleryErrors((prev) => ({ ...prev, [item.path]: errorMessage(error, "没有取回成功。") }));
       return false;
     } finally {
-      setFetchingGalleryName(null);
+      setFetchingGalleryPath(null);
     }
   }
 
-  // X10-138 一键取回全部：按顺序逐个取回未成功过的文件，单个失败不阻断后续；
-  // 已取回的文件不重复下载。
+  // 一键取回当前筛选结果里未成功过的媒体；单个失败不阻断后续，不重复下载。
   async function fetchAllGalleryFiles() {
-    if (!transferDeviceSerial || galleryFiles === null || fetchingGalleryName !== null) return;
-    const pending = galleryFiles.filter((name) => !galleryFetched[name]);
+    if (!transferDeviceSerial || galleryItems === null || fetchingGalleryPath !== null) return;
+    const pending = visibleGalleryItems.filter((item) => !galleryFetched[item.path]);
     if (pending.length === 0) {
-      setGalleryMessage("这个目录里的文件都已取回过，没有需要重复下载的。");
+      setGalleryMessage("当前筛选里的文件都已取回过，没有需要重复下载的。");
       return;
     }
     let done = 0;
-    for (const name of pending) {
-      const ok = await fetchGalleryFile(name);
-      if (ok) done += 1;
+    for (const item of pending) {
+      if (await fetchGalleryFile(item)) done += 1;
     }
     setGalleryMessage(`一键取回结束：${done}/${pending.length} 个成功，保存在「下载 / MirrorDock / 相册」。`);
   }
+
+  const visibleGalleryItems = (galleryItems ?? []).filter((item) => {
+    if (galleryFilter !== "all" && item.kind !== galleryFilter) return false;
+    const query = galleryQuery.trim().toLowerCase();
+    return !query || item.name.toLowerCase().includes(query) || item.path.toLowerCase().includes(query);
+  });
+  const galleryImageCount = (galleryItems ?? []).filter((item) => item.kind === "image").length;
+  const galleryVideoCount = (galleryItems ?? []).filter((item) => item.kind === "video").length;
 
   // -- X10-130 按键映射 --
 
@@ -3488,13 +3524,12 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesChangedHint]);
-  // X10-129 相册视图打开时自动读取当前目录：与文件传输同策略，不要求先点按钮。
-  // 目录切换由 chooseGalleryDir 自己刷新；这里只负责「进页面 / 换设备」两个时机。
+  // X10-161 相册视图打开 / 换设备时自动读取媒体库：与文件传输同策略，不要求先点按钮。
   useEffect(() => {
     if (view !== "album") return;
-    if (galleryFiles !== null || galleryBusy) return;
+    if (galleryItems !== null || galleryBusy) return;
     if (!transferDeviceSerial) return;
-    void refreshGallery(galleryDir);
+    void refreshGallery();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, transferDeviceSerial]);
   // X10-60：伴侣端崩溃堆栈上报（本地点对点，仅界面展示）。
@@ -3657,7 +3692,7 @@ function App() {
         };
       case "keymap":
         return {
-          label: "打开键盘设置", className: "btn btn-primary",
+          label: "打开键盘设置（手机屏）", className: "btn btn-primary",
           onClick: () => { if (readySerial) void openKeyboardSettings(); else openView("connect"); },
         };
       case "schedule":
@@ -3940,6 +3975,7 @@ function App() {
               { label: "开始演示", primary: true, onClick: () => readyDevice ? void startMirroring(readyDevice.serial) : openView("connect"), disabled: isLaunching || !scrcpyReady },
               { label: "结束演示", onClick: () => void stopMirroring(), disabled: isStopping || activeSessionCount === 0, danger: true },
               { label: options.desktop_mode ? "关闭桌面模式" : "开启桌面模式", onClick: () => void applyOptionsUpdate({ ...options, desktop_mode: !options.desktop_mode }), disabled: applyingOptions },
+              { label: "查看演示指南", onClick: () => { setExpandedKbIds(new Set(["kb-demo"])); openView("help"); } },
             ],
           },
           // X10-159：静态说明移入帮助中心知识库（kb-demo）。
@@ -4041,9 +4077,11 @@ function App() {
                     </div>
                   ) : (
                     <>
-                      <div className="alert alert-info" style={{ marginTop: 12 }}>
-                        <div className="alert-text">{keymaps.profiles.length > 0 ? `本机已恢复 ${keymaps.profiles.length} 个方案；点方案名选中后编辑。` : "还没有映射方案；点「＋ 新建方案」开始编排。"}</div>
-                      </div>
+                      {keymaps.profiles.length > 0 && (
+                        <div className="alert alert-info" style={{ marginTop: 12 }}>
+                          <div className="alert-text">本机已恢复 {keymaps.profiles.length} 个方案；点方案名选中后编辑。</div>
+                        </div>
+                      )}
                       <div className="assistant-action-row" style={{ marginTop: 8 }}>
                         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportKeymaps()} disabled={keymaps.profiles.length === 0}>导出方案</button>
                         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void importKeymaps()}>导入方案</button>
@@ -4068,8 +4106,12 @@ function App() {
               </section>
             ),
           },
-          { kind: "actions", actions: [{ label: "打开键盘设置", onClick: () => readySerial ? void openKeyboardSettings() : openView("connect") }] },
-          // X10-159：静态说明移入帮助中心知识库（kb-keymap）。
+          { kind: "actions", actions: [
+            { label: keyboardBusy ? "正在处理…" : "打开键盘设置（手机屏）", onClick: () => readySerial ? void openKeyboardSettings() : openView("connect"), disabled: keyboardBusy },
+            ...(options.desktop_mode ? [{ label: "恢复桌面模式画面", onClick: () => void restoreDesktopView(), disabled: keyboardBusy }] : []),
+          ] },
+          // X10-159：静态说明移入帮助中心知识库（kb-keymap）；这里是操作回执，属动态状态。
+          ...(keyboardNotice ? [{ kind: "note" as const, text: keyboardNotice }] : []),
         ];
       }
       case "schedule":
@@ -4211,9 +4253,11 @@ function App() {
                     </div>
                   ) : (
                     <>
-                      <div className="alert alert-info" style={{ marginTop: 12 }}>
-                        <div className="alert-text">{replays.length > 0 ? `本机已恢复 ${replays.length} 个脚本；点脚本名选中后编排或回放。` : "还没有回放脚本；点「＋ 新建脚本」开始编排。"}</div>
-                      </div>
+                      {replays.length > 0 && (
+                        <div className="alert alert-info" style={{ marginTop: 12 }}>
+                          <div className="alert-text">本机已恢复 {replays.length} 个脚本；点脚本名选中后编排或回放。</div>
+                        </div>
+                      )}
                       <div className="assistant-action-row" style={{ marginTop: 8 }}>
                         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportReplays()} disabled={replays.length === 0}>导出脚本</button>
                         <button type="button" className="btn btn-secondary btn-sm" onClick={() => void importReplays()}>导入脚本</button>
@@ -4400,44 +4444,55 @@ function App() {
             kind: "custom",
             children: (
               <section className="card">
-                <div className="card-head">                  <h3 className="card-title">相册目录</h3>
-                  <span className="badge neutral">{GALLERY_DIRS.find((item) => item.dir === galleryDir)?.label ?? galleryDir}</span>
+                <div className="card-head">
+                  <h3 className="card-title">相册媒体库</h3>
+                  <span className="badge neutral">{galleryItems === null ? "读取中" : `${galleryImageCount} 张图片 · ${galleryVideoCount} 段视频`}</span>
                   <span className="spacer" />
                 </div>
                 <div className="card-body tight">
-                  <div className="assistant-chip-row" role="group" aria-label="相册目录">
-                    {GALLERY_DIRS.map((item) => (
+                  <div className="assistant-chip-row" role="group" aria-label="媒体类型">
+                    {([["all", "全部"], ["image", "图片"], ["video", "视频"]] as const).map(([kind, label]) => (
                       <button
-                        key={item.dir}
+                        key={kind}
                         type="button"
-                        className={`assistant-chip${galleryDir === item.dir ? " active" : ""}`}
-                        disabled={galleryBusy || !transferDeviceSerial}
-                        onClick={() => chooseGalleryDir(item.dir)}
+                        className={`assistant-chip${galleryFilter === kind ? " active" : ""}`}
+                        onClick={() => setGalleryFilter(kind)}
                       >
-                        {item.label}
+                        {label}
                       </button>
                     ))}
                   </div>
+                  <input
+                    className="input"
+                    aria-label="搜索相册文件"
+                    placeholder="搜索文件名或目录"
+                    value={galleryQuery}
+                    onChange={(event) => setGalleryQuery(event.target.value)}
+                  />
                 </div>
-                {galleryFiles === null || galleryFiles.length === 0 ? (
+                {galleryItems === null || visibleGalleryItems.length === 0 ? (
                   <div className="empty hint">
-                    <p>{galleryFiles === null ? "尚未读取相册目录；连接设备后会自动读取，也可以点「刷新相册」。" : "这个目录里没有照片或视频。"}</p>
+                    <p>{galleryItems === null
+                      ? "尚未读取相册媒体库；连接设备后会自动读取，也可以点「刷新媒体库」。"
+                      : "没有符合当前筛选的照片或视频。"}</p>
                   </div>
                 ) : (
-                  <div className="table-wrap" role="region" aria-label="相册文件" tabIndex={0}>
+                  <div className="table-wrap" role="region" aria-label="相册媒体库" tabIndex={0}>
                     <table className="table">
                       <thead>
-                        <tr><th>文件</th><th>状态</th><th data-col="ops">操作</th></tr>
+                        <tr><th>类型</th><th>文件</th><th>来源目录</th><th>状态</th><th data-col="ops">操作</th></tr>
                       </thead>
                       <tbody>
-                        {galleryFiles.map((name) => (
-                          <tr key={name}>
-                            <td className="cell-main">{name}</td>
-                            <td>{galleryFetched[name] ? <span className="badge ok">已取回</span> : galleryErrors[name] ?? <span className="badge neutral">可取回</span>}</td>
+                        {visibleGalleryItems.map((item) => (
+                          <tr key={item.path}>
+                            <td><span className="badge neutral">{item.kind === "image" ? "图片" : "视频"}</span></td>
+                            <td className="cell-main" title={item.name}>{item.name}</td>
+                            <td title={item.path}>{item.path.replace(/^\/storage\/emulated\/0\//, "/sdcard/").split("/").slice(0, -1).join("/")}</td>
+                            <td>{galleryFetched[item.path] ? <span className="badge ok">已取回</span> : galleryErrors[item.path] ?? <span className="badge neutral">可取回</span>}</td>
                             <td data-col="ops">
-                              {fetchingGalleryName === name ? "正在取回…" : galleryFetched[name] ? "完成" : (
-                                <button type="button" className="btn-ghost" disabled={fetchingGalleryName !== null} onClick={() => void fetchGalleryFile(name)}>
-                                  {galleryErrors[name] ? "重试" : "取回到电脑"}
+                              {fetchingGalleryPath === item.path ? "正在取回…" : galleryFetched[item.path] ? "完成" : (
+                                <button type="button" className="btn-ghost" disabled={fetchingGalleryPath !== null || !transferDeviceSerial} onClick={() => void fetchGalleryFile(item)}>
+                                  {galleryErrors[item.path] ? "重试" : "取回到电脑"}
                                 </button>
                               )}
                             </td>
@@ -4448,9 +4503,8 @@ function App() {
                   </div>
                 )}
                 <div className="card-foot">
-                  <button type="button" className="btn btn-primary" onClick={() => void refreshGallery()} disabled={galleryBusy || !transferDeviceSerial}>刷新相册</button>
-                  {/* X10-138：一键取回本目录全部未取回的文件，逐个执行、失败不阻断。 */}
-                  <button type="button" className="btn btn-secondary" onClick={() => void fetchAllGalleryFiles()} disabled={galleryBusy || fetchingGalleryName !== null || !transferDeviceSerial || galleryFiles === null || (galleryFiles ?? []).every((name) => galleryFetched[name])}>一键取回全部</button>
+                  <button type="button" className="btn btn-primary" onClick={() => void refreshGallery()} disabled={galleryBusy || !transferDeviceSerial}>刷新媒体库</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => void fetchAllGalleryFiles()} disabled={galleryBusy || fetchingGalleryPath !== null || !transferDeviceSerial || galleryItems === null || visibleGalleryItems.every((item) => galleryFetched[item.path])}>一键取回当前筛选</button>
                   <span className="spacer" />
                   <span>文件保存到本机「下载 / MirrorDock / 相册」</span>
                 </div>
@@ -5838,6 +5892,26 @@ function App() {
                 <h2>通用</h2>
               </header>
               <div className="settings-rows">
+                {/* X10-160：界面语言切换（中文 / English）；只改本机界面，不动连接与数据。 */}
+                <div className="setting-row">
+                  <div className="setting-info">
+                    <span className="setting-name">界面语言</span>
+                    <span className="setting-desc">仅影响本机界面，不改变连接、授权或数据。</span>
+                  </div>
+                  <AppSelect
+                    ariaLabel="界面语言"
+                    value={locale}
+                    options={[
+                      { value: "zh", label: "简体中文" },
+                      { value: "en", label: "English" },
+                    ]}
+                    onChange={(next) => {
+                      const chosen: Locale = next === "en" ? "en" : "zh";
+                      setLocale(chosen);
+                      writeLocale(chosen);
+                    }}
+                  />
+                </div>
                 <div className="setting-row">
                   <div className="setting-info">
                     <span className="setting-name">开机自动启动 MirrorDock</span>

@@ -1761,9 +1761,9 @@ function vKeymap() {
       '<button class="btn-ghost danger" style="margin-inline-start:auto" data-act="km-del-profile">删除方案</button></div>' +
       "</div>";
   } else {
-    html += '<div class="alert alert-info" role="status" style="margin-top:12px"><div class="alert-text">' +
-      (profiles.length > 0 ? "本机已恢复 " + profiles.length + " 个方案；点方案名选中后编辑。" : "还没有映射方案；点「＋ 新建方案」开始编排。") +
-      "</div></div>" +
+    if (profiles.length > 0) html += '<div class="alert alert-info" role="status" style="margin-top:12px"><div class="alert-text">' +
+      ("本机已恢复 " + profiles.length + " 个方案；点方案名选中后编辑。") +
+      "</div></div>";
       '<div class="action-row" style="margin-top:8px">' +
       '<button class="btn btn-secondary btn-sm" data-act="km-export"' + (profiles.length === 0 ? " disabled" : "") + ">导出方案</button>" +
       '<button class="btn btn-secondary btn-sm" data-act="km-import">导入方案</button></div>';
@@ -1897,9 +1897,9 @@ function vReplay() {
       '<button class="btn-ghost danger" style="margin-inline-start:auto" data-act="rp-del-script"' + (state.replayRunning ? " disabled" : "") + '>删除脚本</button></div>' +
       "</div>";
   } else {
-    html += '<div class="alert alert-info" role="status" style="margin-top:12px"><div class="alert-text">' +
-      (scripts.length > 0 ? "本机已恢复 " + scripts.length + " 个脚本；点脚本名选中后编排或回放。" : "还没有回放脚本；点「＋ 新建脚本」开始编排。") +
-      "</div></div>" +
+    if (scripts.length > 0) html += '<div class="alert alert-info" role="status" style="margin-top:12px"><div class="alert-text">' +
+      ("本机已恢复 " + scripts.length + " 个脚本；点脚本名选中后编排或回放。") +
+      "</div></div>";
       '<div class="action-row" style="margin-top:8px">' +
       '<button class="btn btn-secondary btn-sm" data-act="rp-export"' + (scripts.length === 0 ? " disabled" : "") + ">导出脚本</button>" +
       '<button class="btn btn-secondary btn-sm" data-act="rp-import">导入脚本</button></div>';

@@ -288,6 +288,19 @@ trait AdbRuntime: Send + Sync {
     fn make_directory(&self, serial: &str, remote_dir: &str) -> Result<(), std::io::Error>;
     /// 列出设备目录内容（`ls -1` 原始输出，每行一个条目）。
     fn list_directory(&self, serial: &str, remote_dir: &str) -> Result<String, std::io::Error>;
+    /// 读取 `dumpsys display` 原文，用于定位 scrcpy 桌面模式虚拟屏的 display id（X10-161）。
+    fn display_info(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 查询 Android MediaStore（`content query`），枚举全机图片 / 视频（X10-161）。
+    /// `collection` 只允许 "images" / "video" 两个固定值，URI 在实现里拼装，绝不透传任意内容URI。
+    fn content_query_media(&self, serial: &str, collection: &str) -> Result<String, std::io::Error>;
+    /// 从虚拟屏上夺回桌面模式：关闭被推到虚拟屏的系统设置页，并把指定应用重新拉回虚拟屏。
+    /// `package` 为空时只关闭设置页，让虚拟屏回到原来的内容。
+    fn restore_desktop_app(
+        &self,
+        serial: &str,
+        display_id: u32,
+        package: Option<&str>,
+    ) -> Result<(), std::io::Error>;
     /// 把本机文件推送到设备目录。返回 adb 的输出摘要。
     fn push_file(
         &self,
@@ -873,6 +886,23 @@ impl SystemAdbRuntime {
     }
 }
 
+/// 「实体键盘设置」的 adb argv（X10-161）：显式指定物理屏 0。
+/// 抽成顶层函数便于单测锁定这个参数——桌面模式下漏掉它会让设置页落到
+/// scrcpy 虚拟屏，白屏且虚拟屏没有导航栏可退出。
+fn keyboard_settings_args<'a>(serial: &'a str) -> [&'a str; 9] {
+    [
+        "-s",
+        serial,
+        "shell",
+        "am",
+        "start",
+        "--display",
+        "0",
+        "-a",
+        "android.settings.HARD_KEYBOARD_SETTINGS",
+    ]
+}
+
 impl AdbRuntime for SystemAdbRuntime {
     fn list_devices(&self) -> Result<Vec<AdbDevice>, std::io::Error> {
         let output = Self::output_with_timeout(&["devices", "-l"])?;
@@ -1019,6 +1049,47 @@ impl AdbRuntime for SystemAdbRuntime {
         Self::capture(&["-s", serial, "shell", "ls", "-1", remote_dir])
     }
 
+    fn display_info(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "dumpsys", "display"])
+    }
+
+    fn content_query_media(&self, serial: &str, collection: &str) -> Result<String, std::io::Error> {
+        // 只接受两个固定集合名；URI 由代码拼装，设备/网络传来的任何字符串都无法注入。
+        let uri = match collection {
+            "images" => "content://media/external/images/media",
+            "video" => "content://media/external/video/media",
+            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid media collection")),
+        };
+        Self::capture(&[
+            "-s", serial, "shell", "content", "query", "--uri", uri,
+            "--projection", "_id:_display_name:_data:date_added:_size",
+        ])
+    }
+
+    fn restore_desktop_app(
+        &self,
+        serial: &str,
+        display_id: u32,
+        package: Option<&str>,
+    ) -> Result<(), std::io::Error> {
+        // 系统设置页被误推到虚拟屏时会白屏且虚拟屏没有导航栏可退出。
+        // 用户显式点「恢复桌面模式」后：先关掉设置页，再把桌面应用重新拉回虚拟屏。
+        let _ = Self::run(&["-s", serial, "shell", "am", "force-stop", "com.android.settings"]);
+        let Some(package) = package else { return Ok(()) };
+        // 包名在调用方已按 Android 包名字符集校验；这里再按单个 argv 传递。
+        let resolved = Self::capture(&[
+            "-s", serial, "shell", "cmd", "package", "resolve-activity", "--brief", package,
+        ])?;
+        let component = resolved.lines().next().unwrap_or("").trim();
+        if component.is_empty() {
+            return Err(std::io::Error::other("no launchable activity for package"));
+        }
+        let display = display_id.to_string();
+        Self::run(&[
+            "-s", serial, "shell", "am", "start", "--display", &display, "-n", component,
+        ])
+    }
+
     fn push_file(
         &self,
         serial: &str,
@@ -1146,15 +1217,12 @@ impl AdbRuntime for SystemAdbRuntime {
 
     fn open_keyboard_layout_settings(&self, serial: &str) -> Result<(), std::io::Error> {
         // X10-37 真机实证：该 action 直接落到「实体键盘」页（HARD_KEYBOARD_SETTINGS）。
-        Self::run(&[
-            "-s",
-            serial,
-            "shell",
-            "am",
-            "start",
-            "-a",
-            "android.settings.HARD_KEYBOARD_SETTINGS",
-        ])
+        // X10-161：必须显式 `--display 0`。桌面模式（scrcpy --new-display）下，
+        // 不指定 display 时 MIUI 会把设置 Activity 推到 scrcpy 虚拟屏——那块屏
+        // 没有系统导航栏，页面白屏且无法返回，只能强关镜像。真机复现：
+        // `am start --display 7 -a ...` 后虚拟屏 topResumedActivity 变成
+        // com.android.settings/.Settings$PhysicalKeyboardActivity，窗口全白。
+        Self::run(&keyboard_settings_args(serial))
     }
 
     fn disable_wireless_debugging(&self, serial: &str) -> Result<(), std::io::Error> {
@@ -4978,6 +5046,244 @@ fn fetch_device_gallery_file_with(
 }
 
 // ---------------------------------------------------------------------------
+// 相册媒体库（X10-161）：用 Android MediaStore 枚举全机图片 / 视频。
+// 旧目录浏览只列固定几个目录的**第一层**，子目录与微信等应用目录里的照片看不到；
+// MediaStore 是系统自己的媒体索引，覆盖全机且不需要任何额外权限（adb shell 身份）。
+// ---------------------------------------------------------------------------
+
+/// 一条真实的媒体记录（全部来自设备 MediaStore，不填充演示数据）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GalleryMedia {
+    id: String,
+    name: String,
+    /// 设备上的完整路径，仅用于本次取回；输入校验见 `validate_media_path`。
+    path: String,
+    /// "image" / "video"
+    kind: String,
+    /// MediaStore date_added（Unix 秒）
+    date_added: i64,
+    size: i64,
+}
+
+/// 解析 `content query` 的一行。按字段名定位而不是按 ", " 盲切：
+/// 文件名本身可以包含逗号，盲切会把 `_display_name` 截断。
+fn parse_media_row(line: &str) -> Option<GalleryMedia> {
+    let body = line.strip_prefix("Row:").unwrap_or(line).trim();
+    let keys = ["_id=", "_display_name=", "_data=", "date_added=", "_size="];
+    let mut positions: Vec<(usize, &str)> = keys
+        .iter()
+        .filter_map(|key| body.find(key).map(|pos| (pos, *key)))
+        .collect();
+    positions.sort_by_key(|(pos, _)| *pos);
+    let mut fields: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for (index, (pos, key)) in positions.iter().enumerate() {
+        let start = pos + key.len();
+        let end = positions
+            .get(index + 1)
+            .map(|(next, _)| *next)
+            .unwrap_or(body.len());
+        let value = body[start..end].trim().trim_end_matches(',').trim();
+        fields.insert(key.trim_end_matches('='), value);
+    }
+    let path = fields.get("_data").copied().unwrap_or("").trim();
+    if path.is_empty() {
+        return None;
+    }
+    let id = fields.get("_id").copied().unwrap_or("").trim().to_owned();
+    let name = {
+        let shown = fields.get("_display_name").copied().unwrap_or("").trim();
+        if shown.is_empty() {
+            path.rsplit('/').next().unwrap_or("").to_owned()
+        } else {
+            shown.to_owned()
+        }
+    };
+    if !is_gallery_media(&name) {
+        return None;
+    }
+    Some(GalleryMedia {
+        id,
+        name,
+        path: path.to_owned(),
+        kind: String::new(), // 由调用方按查询集合填入
+        date_added: fields
+            .get("date_added")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
+        size: fields
+            .get("_size")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0),
+    })
+}
+
+/// 只接受手机内部共享存储里的媒体文件；`/storage/emulated/0/` 归一化成 `/sdcard/`。
+/// 不接受 `..`、反斜杠、非媒体扩展名——UI 没有自由路径输入框，这里仍按最小权限校验。
+fn validate_media_path(path: &str) -> Result<String, AppError> {
+    let path = path.trim();
+    let relative = path
+        .strip_prefix("/storage/emulated/0/")
+        .or_else(|| path.strip_prefix("/sdcard/"))
+        .ok_or_else(|| {
+            AppError::new(
+                "gallery_path_invalid",
+                "这个媒体文件路径不在可访问范围内。",
+                "只允许取回手机内部存储里的照片和视频；其他位置请用文件传输。",
+            )
+        })?;
+    if relative.is_empty() || relative.contains("..") || relative.contains('\\') {
+        return Err(AppError::new(
+            "gallery_path_invalid",
+            "这个媒体文件路径无效。",
+            "请刷新媒体库后重试。",
+        ));
+    }
+    if !is_gallery_media(relative) {
+        return Err(AppError::new(
+            "gallery_path_invalid",
+            "这个文件不是照片或视频。",
+            "请在相册媒体库中选择图片或视频。",
+        ));
+    }
+    Ok(format!("/sdcard/{relative}"))
+}
+
+/// 解析 `dumpsys display`：找到以 `Display N:` 开头且 `mPrimaryDisplayDevice=scrcpy` 的块。
+fn find_scrcpy_display_id(raw: &str) -> Option<u32> {
+    let mut current = None;
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Display ") {
+            if let Some(id) = rest.strip_suffix(':').and_then(|value| value.trim().parse().ok()) {
+                current = Some(id);
+            }
+        } else if trimmed == "mPrimaryDisplayDevice=scrcpy" {
+            if let Some(id) = current {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+/// 枚举全机媒体：图片 + 视频，按添加时间倒序，最多 2000 条（防止 UI 一次渲染过多）。
+fn list_gallery_media_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<Vec<GalleryMedia>, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let mut items = Vec::new();
+    for (collection, kind) in [("images", "image"), ("video", "video")] {
+        let raw = runtimes
+            .adb
+            .content_query_media(&serial, collection)
+            .map_err(|_| {
+                AppError::new(
+                    "gallery_media_query_failed",
+                    "无法读取手机相册媒体库。",
+                    "请确认设备已解锁并重新连接；某些机型会限制系统媒体索引访问。",
+                )
+            })?;
+        for line in raw.lines() {
+            if let Some(mut item) = parse_media_row(line) {
+                item.kind = kind.to_owned();
+                items.push(item);
+            }
+        }
+    }
+    items.sort_by(|a, b| b.date_added.cmp(&a.date_added).then_with(|| a.name.cmp(&b.name)));
+    items.truncate(2000);
+    Ok(items)
+}
+
+/// 从媒体库取回一条记录到本机「下载 / MirrorDock / 相册」。
+fn fetch_gallery_media_with(
+    runtimes: &AppRuntimes,
+    directory: &Path,
+    serial: String,
+    remote_path: String,
+    name: String,
+) -> Result<TransferReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+    let remote = validate_media_path(&remote_path)?;
+    let name = validate_transfer_name(&name)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    fs::create_dir_all(directory).map_err(|_| transfer_dir_unavailable_error())?;
+    let local = unique_file_path(directory, &name);
+    runtimes
+        .adb
+        .pull_file(&serial, &remote, &local)
+        .map_err(|_| {
+            AppError::new(
+                "gallery_fetch_failed",
+                "文件没有从手机取回来。",
+                "请确认手机上这个文件还在、存储可用，然后重试。",
+            )
+        })?;
+    let bytes = fs::metadata(&local)
+        .map(|metadata| metadata.len())
+        .map_err(|_| transfer_dir_unavailable_error())?;
+    Ok(TransferReceipt {
+        file_name: local
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or(name),
+        path: local.to_string_lossy().into_owned(),
+        bytes,
+    })
+}
+
+/// 把误入 scrcpy 虚拟屏的系统设置页清掉，并（可选）把桌面应用拉回虚拟屏。
+fn restore_desktop_display_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    package: Option<String>,
+) -> Result<String, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes.adb.display_info(&serial).map_err(|_| {
+        AppError::new(
+            "desktop_display_unavailable",
+            "无法读取手机的屏幕信息。",
+            "请确认设备仍已连接并解锁，然后重试。",
+        )
+    })?;
+    let id = find_scrcpy_display_id(&raw).ok_or_else(|| {
+        AppError::new(
+            "desktop_display_not_found",
+            "没有找到正在运行的桌面模式虚拟屏。",
+            "如果镜像已关闭，无需恢复；重新开启桌面模式即可。",
+        )
+    })?;
+    let package = package.map(|value| value.trim().to_owned()).filter(|value| {
+        !value.is_empty()
+            && value.len() <= 120
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+    });
+    runtimes
+        .adb
+        .restore_desktop_app(&serial, id, package.as_deref())
+        .map_err(|_| {
+            AppError::new(
+                "desktop_display_restore_failed",
+                "无法恢复桌面模式画面。",
+                "请在手机上按返回键退出设置页；仍不行时关闭镜像后重新开启。",
+            )
+        })?;
+    Ok(format!("已恢复虚拟屏 {id}：系统设置页已关闭。"))
+}
+
+// ---------------------------------------------------------------------------
 // 输入注入：按键映射与操作回放的执行底座（X10-130）
 // ---------------------------------------------------------------------------
 
@@ -8140,6 +8446,45 @@ fn fetch_device_gallery_file(
     result
 }
 
+/// 列出手机全机照片 / 视频（MediaStore，X10-161）。
+#[tauri::command]
+fn list_gallery_media(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+) -> Result<Vec<GalleryMedia>, AppError> {
+    list_gallery_media_with(&runtimes, serial)
+}
+
+/// 从媒体库取回一张照片 / 一段视频（X10-161）。
+#[tauri::command]
+fn fetch_gallery_media(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    path: String,
+    name: String,
+) -> Result<TransferReceipt, AppError> {
+    let mut directory = transfer_download_dir(&app)?;
+    directory.push("相册");
+    let result = fetch_gallery_media_with(&runtimes, &directory, serial.clone(), path, name.clone());
+    log.record_outcome("gallery_media_fetch", result.as_ref().err(), &[&serial, &name]);
+    result
+}
+
+/// 桌面模式虚拟屏被系统设置页覆盖后的恢复入口（X10-161）。
+#[tauri::command]
+fn restore_desktop_display(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    package: Option<String>,
+) -> Result<String, AppError> {
+    let result = restore_desktop_display_with(&runtimes, serial.clone(), package);
+    log.record_outcome("desktop_display_restore", result.as_ref().err(), &[&serial]);
+    result
+}
+
 /// 注入一次按键（按键映射 / 测试面板，X10-130）。按键码只接受白名单。
 #[tauri::command]
 fn inject_device_key(
@@ -9151,6 +9496,9 @@ pub fn run() {
             install_apk_to_device,
             list_device_gallery,
             fetch_device_gallery_file,
+            list_gallery_media,
+            fetch_gallery_media,
+            restore_desktop_display,
             inject_device_key,
             inject_device_tap,
             inject_device_swipe,
@@ -9306,6 +9654,10 @@ mod tests {
         probe_bytes: Option<u64>,
         /// 设备传输目录的 `ls -1` 输出；`None` 表示读取失败。
         device_listing: Option<String>,
+        /// `dumpsys display` 全文（X10-161 虚拟屏定位测试用）。
+        full_display_dump: Option<String>,
+        /// `content query` 的 canned 输出（X10-161 媒体库解析测试用）。
+        media_query_output: Option<String>,
         /// 为真时传输类调用（mkdir/push/pull）一律失败。
         transfer_fails: bool,
         /// `adb install` 的原始输出（stdout+stderr 合并）；`None` 表示进程本身失败。
@@ -9602,6 +9954,38 @@ mod tests {
                 Some(raw) => Ok(raw.clone()),
                 None => Err(std::io::Error::other("listing unavailable")),
             }
+        }
+
+        fn display_info(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls.lock().unwrap().push(format!("display_info {serial}"));
+            Ok(self.full_display_dump.clone().unwrap_or_default())
+        }
+
+        fn content_query_media(&self, serial: &str, collection: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("media_query {serial} {collection}"));
+            match &self.media_query_output {
+                Some(raw) => Ok(raw.clone()),
+                None => Err(std::io::Error::other("media query unavailable")),
+            }
+        }
+
+        fn restore_desktop_app(
+            &self,
+            serial: &str,
+            display_id: u32,
+            package: Option<&str>,
+        ) -> Result<(), std::io::Error> {
+            self.calls.lock().unwrap().push(format!(
+                "restore_desktop {serial} {display_id} {}",
+                package.unwrap_or("-")
+            ));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
+            Ok(())
         }
 
         fn push_file(
@@ -10349,6 +10733,24 @@ mod tests {
                 _remote_dir: &str,
             ) -> Result<String, std::io::Error> {
                 Ok(String::new())
+            }
+            fn display_info(&self, _serial: &str) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn content_query_media(
+                &self,
+                _serial: &str,
+                _collection: &str,
+            ) -> Result<String, std::io::Error> {
+                Ok(String::new())
+            }
+            fn restore_desktop_app(
+                &self,
+                _serial: &str,
+                _display_id: u32,
+                _package: Option<&str>,
+            ) -> Result<(), std::io::Error> {
+                Ok(())
             }
             fn push_file(
                 &self,
@@ -14941,6 +15343,111 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    // -- 相册媒体库 + 桌面模式恢复（X10-161）--
+
+    #[test]
+    fn keyboard_settings_are_pinned_to_the_physical_display() {
+        let args = keyboard_settings_args("phone");
+        assert_eq!(args[5], "--display");
+        assert_eq!(args[6], "0");
+        assert_eq!(args[8], "android.settings.HARD_KEYBOARD_SETTINGS");
+    }
+
+    #[test]
+    fn media_rows_with_commas_in_names_are_parsed_intact() {
+        let row = "Row: 0 _id=100, _display_name=2026, 五月 照片.jpg, _data=/storage/emulated/0/Pictures/WeiXin/2026, 五月 照片.jpg, date_added=1783303606, _size=12345";
+        let item = parse_media_row(row).unwrap();
+        assert_eq!(item.name, "2026, 五月 照片.jpg");
+        assert_eq!(item.path, "/storage/emulated/0/Pictures/WeiXin/2026, 五月 照片.jpg");
+        assert_eq!(item.date_added, 1783303606);
+        assert_eq!(item.size, 12345);
+        assert!(parse_media_row("Row: 1 _id=1, _display_name=a.txt, _data=/sdcard/a.txt").is_none());
+    }
+
+    #[test]
+    fn real_mediastore_row_shape_is_supported() {
+        // 2026-11-27 从用户真机 M2104K10AC 实采的 content query 输出格式。
+        let row = "Row: 0 _id=1000000127, _display_name=wx_camera_1774426774582.jpg, _data=/storage/emulated/0/Pictures/WeiXin/wx_camera_1774426774582.jpg, date_added=1774426774, _size=742318";
+        let item = parse_media_row(row).unwrap();
+        assert_eq!(item.id, "1000000127");
+        assert_eq!(item.name, "wx_camera_1774426774582.jpg");
+        assert_eq!(item.path, "/storage/emulated/0/Pictures/WeiXin/wx_camera_1774426774582.jpg");
+        assert_eq!(item.date_added, 1774426774);
+        assert_eq!(item.size, 742318);
+    }
+
+    #[test]
+    fn media_paths_are_confined_to_shared_storage() {
+        assert_eq!(
+            validate_media_path("/storage/emulated/0/DCIM/Camera/IMG_1.jpg").unwrap(),
+            "/sdcard/DCIM/Camera/IMG_1.jpg"
+        );
+        assert_eq!(
+            validate_media_path("/sdcard/Pictures/WeiXin/视频.mp4").unwrap(),
+            "/sdcard/Pictures/WeiXin/视频.mp4"
+        );
+        for bad in [
+            "/data/data/com.x/file.jpg",
+            "/sdcard/../secret.jpg",
+            "/sdcard/notes.txt",
+            "relative.jpg",
+        ] {
+            assert!(validate_media_path(bad).is_err(), "“{bad}”必须被拒绝");
+        }
+    }
+
+    #[test]
+    fn scrcpy_virtual_display_id_is_found_from_dumpsys() {
+        let dump = "Display 0:\n  mDisplayId=0\n  mPrimaryDisplayDevice=内置屏幕\n\nDisplay 7:\n  mDisplayId=7\n  mPrimaryDisplayDevice=scrcpy\n";
+        assert_eq!(find_scrcpy_display_id(dump), Some(7));
+        assert_eq!(find_scrcpy_display_id("Display 0:\n  mPrimaryDisplayDevice=内置屏幕\n"), None);
+    }
+
+    #[test]
+    fn media_library_merges_images_and_videos_newest_first() {
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            media_query_output: Some(
+                "Row: 0 _id=1, _display_name=old.jpg, _data=/sdcard/DCIM/old.jpg, date_added=100, _size=10\n\
+                 Row: 1 _id=2, _display_name=new.jpg, _data=/sdcard/Pictures/new.jpg, date_added=300, _size=20\n"
+                    .to_owned(),
+            ),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        // 两个集合共用一份 canned 输出；用文件名去重只是为了验证排序与种类标注。
+        let items = list_gallery_media_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0].name, "new.jpg");
+        assert_eq!(items[2].kind, "image");
+        assert!(calls.lock().unwrap().iter().any(|c| c.contains("media_query phone images")));
+        assert!(calls.lock().unwrap().iter().any(|c| c.contains("media_query phone video")));
+    }
+
+    #[test]
+    fn desktop_restore_only_targets_the_scrcpy_display() {
+        let adb = FakeAdb {
+            devices: vec![device("phone", DeviceState::Ready)],
+            full_display_dump: Some("Display 7:\n  mDisplayId=7\n  mPrimaryDisplayDevice=scrcpy\n".into()),
+            ..FakeAdb::default()
+        };
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let note = restore_desktop_display_with(
+            &runtimes,
+            "phone".into(),
+            Some("com.example.app".into()),
+        )
+        .unwrap();
+        assert!(note.contains('7'));
+        assert!(calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c == "restore_desktop phone 7 com.example.app"));
     }
 
     // -- 输入注入（X10-130）--

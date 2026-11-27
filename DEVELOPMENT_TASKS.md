@@ -1640,3 +1640,22 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **测试**：App.test.tsx 应用管理断言更新（静态文案改查知识库行为：页面显示「目标设备：」、不再显示静态说明）。tsc 0 error、vite build 过、vitest 125/125。
 - **X10-159-8 回退（用户裁定）**：「按品牌查看开启步骤」改回原条件 `!isChecking && !readyDevice`（仅无就绪设备时显示）。vitest 125/125 复跑全绿（原测试场景即无设备场景，不受影响）。
 - **✅ X10-159 已发版 v0.4.38-beta（2026-11-27 14:50）**：版本号 0.4.37→0.4.38 四处精确编辑（cargo metadata --locked 验证），官网 site/index.html 30 处同步 0.4.38，发版文档 docs/releases/v0.4.38-beta.md（纯 ## 小节）。CI run `45954517921` 全绿（约 15 分钟），Release id `460264194` **34 资产全齐**（四平台安装包+sig+APK+latest.json+SHA256SUMS×4+SBOM×8+version-check×4），Release 正文注入正常（## 本版更新内容 + ## 修复，无重复顶级标题）。latest.json 实测下载核验：version=0.4.38、四平台（darwin-aarch64/darwin-x86_64/linux-x86_64/windows-x86_64）signature/url 字段齐全、pub_date 2026-11-27T07:05:35Z。
+
+
+## X10-160 README / 官网双语 + 客户端界面语言（2026-11-27 下午，未 commit）
+- **README**：README.md 版本 0.4.28 → 0.4.38（伴侣 App 仍 0.3.2，与 build.gradle.kts versionName 一致）；新增 README.en.md 全量英文版；两版顶部互链语言。帮助文档篇数校正为 11（helpContent.ts 真实条数，原 README 写 12 导致 helpContent.test.ts 失败）。
+- **官网**：site/index.html + compatibility.html 生成对应 *-en.html 全量英文版（词典精确替换 146 / 90 处，正文残留中文仅语言切换链接），`<html lang>` / title / meta description / 站内链接全部切英文；中英四页导航与页脚互加语言切换；主页/兼容页导航加入「重构预览 / Redesign preview」。
+- **重构预览入官网**：docs/ui-redesign/mirrordock-rebuild-preview.html → site/rebuild-preview.html（自包含原样复制，仅附加右下角「← 返回官网 / Back to site」悬浮入口）。本地静态站 5 页全部 200、0 控制台错误、0 横向溢出、19 视图正常渲染。
+- **客户端 i18n（X10-160）**：新增 src/i18n.ts（Locale 类型 + localStorage `mirrordock.locale` + EN 词典四批 ≈600 条 + DOM 桥接 applyLocale/useLocaleBridge）+ src/i18n.test.ts（5 用例）；App.tsx 引入 locale 状态/桥接/html lang，设置→通用新增「界面语言」AppSelect（简体中文 / English）。
+  - 架构取舍：不改 6000 行 JSX，新增文案只需补词典；词典未命中保持中文（不伪造翻译）；只做整段/前缀精确匹配，**不做全文子串替换**，避免篡改设备名/文件名等用户数据。
+  - 关键坑：**WKWebView 离线/后台不跑 display link，requestAnimationFrame 回调不触发**——初版用 rAF 调度桥接导致语言切换只改 lang/localStorage、界面仍中文；改同步 applyLocale 后通过。已写入模块注释。
+  - 验证：tsc 0 error、vite build 过、vitest 130/130；真实 WKWebView 实测语言切换生效（lang=en、localStorage=en、设置分组/General/帮助中心全英文）；英文态 19 视图审计：设置/帮助中心/通知中心 0 中文残留，设备中心 6 处、Pro 6 处等动态错误文案/短标签仍中文（待后续补词典）。
+- **状态**：未 commit 未发版；官网需 push main 触发 pages.yml 才会上线。
+
+## X10-161 用户 6 图复检（键盘白屏 / 空状态文案 / 演示指南 / 相册升级）
+- **① 桌面模式打开键盘设置白屏（真机复现 + 修复）**：用户截图——点按键映射页「打开键盘设置」后镜像窗口（M2104K10AC）全白、无法退出。真机取证：`am start --display 7 -a android.settings.HARD_KEYBOARD_SETTINGS` 后虚拟屏 topResumedActivity 变成 `com.android.settings/.Settings$PhysicalKeyboardActivity`，虚拟屏没有导航栏 → 白屏卡死。修复：`keyboard_settings_args()` 固定 `--display 0`（物理屏），Rust 单测锁定 argv；真机复测 `--display 0` 后虚拟屏仍保持游戏应用。补救：新增 `restore_desktop_display` Tauri 命令（解析 `dumpsys display` 中 `mPrimaryDisplayDevice=scrcpy` 的 display id → `am force-stop com.android.settings` → 可选把桌面应用 resolve 后拉回虚拟屏），按键映射页新增「恢复桌面模式画面」按钮；设置提示从仅设置页可见改为在本页回执。
+- **② 两处空状态说明删除**：按键映射「还没有映射方案；点「+ 新建方案」开始编排。」与操作回放「还没有回放脚本…」从 App.tsx 与预览页（含官网副本）移除；有方案/脚本时仍显示恢复数量提示。
+- **③ 投屏演示「怎么用 / 还缺什么」**：演示页新增「查看演示指南」按钮，直达帮助中心 kb-demo（展开对应条目）。知识库写明五步真实用法和能力边界（不是 PPT 播放器；激光笔/白板标注/演示文稿/多屏排版未实现；受保护页面黑屏；麦克风不采集；MIUI 启动器需指定普通应用）。
+- **④ 相册升级为媒体库**：旧实现只列固定 4 个白名单目录第一层，微信/子目录照片看不到。新实现用 `content query --uri content://media/external/{images,video}/media --projection _id:_display_name:_data:date_added:_size`（adb argv 形式，真机与模拟器实测可用），解析 MediaStore 行（按字段名定位，兼容文件名含逗号），按时间倒序最多 2000 条；前端新增类型筛选/搜索/来源目录列/单条取回/一键取回当前筛选。路径校验只接受 `/storage/emulated/0/` 或 `/sdcard/` 下媒体扩展名，无自由路径输入，只读不改不删不上传。
+- **验证**：cargo test 237/237（新增 6 用例：真实 MediaStore 行、路径白名单、虚拟屏定位、键盘 argv、合并排序、恢复落点）；tsc 0 error、vite build、vitest 130/130；真实 WKWebView 中英两态走查相册/按键映射/演示指南全部正常，英文文案齐全。
+- **状态**：v0.4.39-beta 发版中。X10-160（README/官网双语 + 客户端语言切换）一并纳入本次 commit 与发版。
