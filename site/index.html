@@ -65,14 +65,14 @@
   .site-head .wrap{
     display:flex;align-items:center;gap:28px;height:64px
   }
-  .brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em}
+  .brand{display:flex;flex:none;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em;white-space:nowrap}
   .brand:hover{text-decoration:none}
   .brand svg{display:block}
-  .nav{display:flex;gap:22px;margin-left:auto}
-  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500}
+  .nav{display:flex;flex:none;gap:22px;margin-left:auto}
+  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500;white-space:nowrap}
   .nav a:hover{color:#fff;text-decoration:none}
   .head-cta{
-    display:inline-flex;align-items:center;height:36px;padding:0 16px;border-radius:8px;
+    display:inline-flex;flex:none;align-items:center;height:36px;padding:0 16px;border-radius:8px;white-space:nowrap;
     background:var(--blue-600);color:#fff;font-size:14.5px;font-weight:600
   }
   .head-cta:hover{background:var(--blue-700);text-decoration:none}
@@ -281,6 +281,15 @@
     .rows li:nth-last-child(-n+2){border-bottom:1px solid var(--line-soft)}
     .rows li:last-child{border-bottom:0}
   }
+  @media (max-width:1180px){
+    .site-head .wrap{gap:16px}
+    .nav{gap:14px}
+    .nav a{font-size:13.5px}
+    .head-cta{height:34px;padding:0 12px;font-size:13.5px}
+  }
+  @media (max-width:1020px){
+    .nav a[data-nav-optional]{display:none}
+  }
   @media (max-width:900px){
     .hero .wrap{grid-template-columns:1fr;gap:44px}
     .features{grid-template-columns:1fr;gap:32px}
@@ -321,11 +330,11 @@
       <a href="index-en.html" lang="en" hreflang="en" title="English">EN</a>
       <a href="#features">功能</a>
       <a href="#start">开始使用</a>
-      <a href="#limits">隐私与边界</a>
+      <a href="#limits" data-nav-optional>隐私与边界</a>
       <a href="#download">下载</a>
-      <a href="#faq">常见问题</a>
+      <a href="#faq" data-nav-optional>常见问题</a>
       <a href="compatibility.html">兼容性</a>
-      <a href="rebuild-preview.html">重构预览</a>
+      <a href="rebuild-preview.html" data-nav-optional>重构预览</a>
     </nav>
     <a class="head-cta" href="#download">下载测试版</a>
   </div>
@@ -335,7 +344,7 @@
   <section class="hero" id="top">
     <div class="wrap">
       <div>
-        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.4.39 测试版已发布</p>
+        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.4.40 测试版已发布</p>
         <h1>把手机放到<br><span class="dim">这台电脑的桌面上。</span></h1>
         <p class="lede">
           MirrorDock 用一根数据线或同一个 Wi-Fi，把 Android 手机的屏幕、声音和键鼠控制接到电脑上。
@@ -531,6 +540,10 @@
             <p>发送的文件进入手机「下载 / MirrorDock」，取回的文件存到电脑的下载目录，只经过数据线或局域网。手机发送后电脑端实时提示；把文件直接拖进 MirrorDock 窗口也一样能发。</p>
           </li>
           <li>
+            <h4>相册媒体库：缩略图与快速查看</h4>
+            <p>读取手机系统媒体索引里的全部照片和视频，按类型筛选、按文件名或目录搜索；图片显示缩略图并可放大查看，视频用封面占位、点击调系统播放器。缩略图只在本机缓存，取回文件保存在下载目录；手机媒体只读，不修改、不删除、不上传。</p>
+          </li>
+          <li>
             <h4>手机通知出现在电脑上，还能直接回复</h4>
             <p>在手机伴侣 App 打开「通知镜像」（默认关，需你显式授权），新通知会实时显示在电脑「工具」页；自带回复栏的通知可以直接在电脑上打字回复，文本经加密通道送回手机。只发给已配对的电脑、不落盘不进日志，随时可关。</p>
           </li>
@@ -642,7 +655,7 @@
 
   <section class="band" id="download">
     <div class="wrap">
-      <h2>下载 v0.4.39 测试版</h2>
+      <h2>下载 v0.4.40 测试版</h2>
       <p class="sec-lede">
         安装包和校验值都发布在 GitHub Releases 上。不确定该下哪个，按你的系统对照下面的表。
       </p>
@@ -656,46 +669,46 @@
           <tr>
             <td>Windows</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64-setup.exe">安装程序（exe）</a>
-              <span class="fname">MirrorDock_0.4.39_x64-setup.exe</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64_en-US.msi" style="display:block;margin-top:8px">MSI 安装包</a>
-              <span class="fname">MirrorDock_0.4.39_x64_en-US.msi</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_x64-setup.exe">安装程序（exe）</a>
+              <span class="fname">MirrorDock_0.4.40_x64-setup.exe</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_x64_en-US.msi" style="display:block;margin-top:8px">MSI 安装包</a>
+              <span class="fname">MirrorDock_0.4.40_x64_en-US.msi</span>
             </td>
             <td>64 位。首次运行可能被 SmartScreen 提示，选择「仍要运行」。</td>
           </tr>
           <tr>
             <td>macOS<br>Apple 芯片</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_aarch64.dmg">磁盘映像</a>
-              <span class="fname">MirrorDock_0.4.39_aarch64.dmg</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_aarch64.dmg">磁盘映像</a>
+              <span class="fname">MirrorDock_0.4.40_aarch64.dmg</span>
             </td>
             <td>适用于 M1 及之后的所有芯片。</td>
           </tr>
           <tr>
             <td>macOS<br>Intel</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64.dmg">磁盘映像</a>
-              <span class="fname">MirrorDock_0.4.39_x64.dmg</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_x64.dmg">磁盘映像</a>
+              <span class="fname">MirrorDock_0.4.40_x64.dmg</span>
             </td>
             <td>未签名版本，首次打开需在「系统设置 → 隐私与安全性」中允许。</td>
           </tr>
           <tr>
             <td>Linux</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_amd64.AppImage">AppImage（免安装）</a>
-              <span class="fname">MirrorDock_0.4.39_amd64.AppImage</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
-              <span class="fname">MirrorDock_0.4.39_amd64.deb</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock-0.4.39-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
-              <span class="fname">MirrorDock-0.4.39-1.x86_64.rpm</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_amd64.AppImage">AppImage（免安装）</a>
+              <span class="fname">MirrorDock_0.4.40_amd64.AppImage</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
+              <span class="fname">MirrorDock_0.4.40_amd64.deb</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock-0.4.40-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
+              <span class="fname">MirrorDock-0.4.40-1.x86_64.rpm</span>
             </td>
             <td>AppImage 下载后加执行权限即可运行：<span style="font-family:var(--font-mono);font-size:12.5px">chmod +x 文件名</span></td>
           </tr>
           <tr>
             <td>Android 伴侣 App</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock-companion-0.4.39.apk">APK</a>
-              <span class="fname">MirrorDock-companion-0.4.39.apk</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock-companion-0.4.40.apk">APK</a>
+              <span class="fname">MirrorDock-companion-0.4.40.apk</span>
             </td>
             <td>需要 Android 8.0 及以上。安装后在手机与电脑同一 Wi-Fi 下扫码配对。</td>
           </tr>
@@ -703,8 +716,8 @@
       </table>
 
       <div class="dl-actions">
-        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.39-beta">打开发布页</a>
-        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/SHA256SUMS-macos-x64.txt">校验值（SHA256SUMS）</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.40-beta">打开发布页</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/SHA256SUMS-macos-x64.txt">校验值（SHA256SUMS）</a>
         <a class="btn-line" href="https://github.com/g-star1024/MirrorDock">查看源代码</a>
       </div>
       <p class="dl-hint">
@@ -750,7 +763,7 @@
 
 <footer>
   <div class="wrap">
-    <span>MirrorDock v0.4.39 测试版</span>
+    <span>MirrorDock v0.4.40 测试版</span>
     <a href="https://github.com/g-star1024/MirrorDock">源代码</a>
     <a href="index-en.html" lang="en" hreflang="en">English</a>
     <a href="rebuild-preview.html">重构预览</a>
@@ -762,4 +775,4 @@
 </footer>
 </body>
 </html>
-<!-- v0.4.39-beta -->
+<!-- v0.4.40-beta -->

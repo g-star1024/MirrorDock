@@ -57,14 +57,14 @@
     border-bottom:1px solid rgba(255,255,255,.08);
   }
   .site-head .wrap{display:flex;align-items:center;gap:28px;height:64px}
-  .brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em}
+  .brand{display:flex;flex:none;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em;white-space:nowrap}
   .brand:hover{text-decoration:none}
   .brand svg{display:block}
-  .nav{display:flex;gap:22px;margin-left:auto}
-  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500}
+  .nav{display:flex;flex:none;gap:22px;margin-left:auto}
+  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500;white-space:nowrap}
   .nav a:hover{color:#fff;text-decoration:none}
   .head-cta{
-    display:inline-flex;align-items:center;height:36px;padding:0 16px;border-radius:8px;
+    display:inline-flex;flex:none;align-items:center;height:36px;padding:0 16px;border-radius:8px;white-space:nowrap;
     background:var(--blue-600);color:#fff;font-size:14.5px;font-weight:600
   }
   .head-cta:hover{background:var(--blue-700);text-decoration:none}
@@ -131,6 +131,15 @@
   footer .spacer{margin-left:auto}
   footer .lic{color:#6E7E97}
 
+  @media (max-width:1180px){
+    .site-head .wrap{gap:16px}
+    .nav{gap:14px}
+    .nav a{font-size:13.5px}
+    .head-cta{height:34px;padding:0 12px;font-size:13.5px}
+  }
+  @media (max-width:1020px){
+    .nav a[data-nav-optional]{display:none}
+  }
   @media (max-width:720px){
     section{padding:48px 0}
     .nav{display:none}
@@ -160,10 +169,10 @@
       <a href="compatibility.html" lang="zh-CN" hreflang="zh-CN" title="Chinese">中文</a>
       <a href="index-en.html#features">Features</a>
       <a href="index-en.html#start">Get started</a>
-      <a href="index-en.html#limits">Privacy & limits</a>
+      <a href="index-en.html#limits" data-nav-optional>Privacy & limits</a>
       <a href="index-en.html#download">Download</a>
-      <a href="index-en.html#faq">FAQ</a>
-      <a href="rebuild-preview.html">Redesign preview</a>
+      <a href="index-en.html#faq" data-nav-optional>FAQ</a>
+      <a href="rebuild-preview.html" data-nav-optional>Redesign preview</a>
     </nav>
     <a class="head-cta" href="index-en.html#download">Download beta</a>
   </div>

@@ -889,7 +889,7 @@ impl SystemAdbRuntime {
 /// 「实体键盘设置」的 adb argv（X10-161）：显式指定物理屏 0。
 /// 抽成顶层函数便于单测锁定这个参数——桌面模式下漏掉它会让设置页落到
 /// scrcpy 虚拟屏，白屏且虚拟屏没有导航栏可退出。
-fn keyboard_settings_args<'a>(serial: &'a str) -> [&'a str; 9] {
+fn keyboard_settings_args(serial: &str) -> [&str; 9] {
     [
         "-s",
         serial,
@@ -5066,6 +5066,16 @@ struct GalleryMedia {
     size: i64,
 }
 
+/// X10-162：相册预览回执。只返回本机缓存路径，不返回文件内容。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GalleryPreview {
+    /// 本机应用缓存里的预览文件绝对路径（供 asset protocol 读取）。
+    path: String,
+    /// "image" / "video"
+    kind: String,
+}
+
 /// 解析 `content query` 的一行。按字段名定位而不是按 ", " 盲切：
 /// 文件名本身可以包含逗号，盲切会把 `_display_name` 截断。
 fn parse_media_row(line: &str) -> Option<GalleryMedia> {
@@ -5236,6 +5246,97 @@ fn fetch_gallery_media_with(
             .unwrap_or(name),
         path: local.to_string_lossy().into_owned(),
         bytes,
+    })
+}
+
+/// X10-162：预览缓存固定留在应用缓存目录，不混进用户主动取回的「下载 / MirrorDock / 相册」。
+fn gallery_preview_cache_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let cache = app
+        .path()
+        .app_cache_dir()
+        .map_err(|_| transfer_dir_unavailable_error())?;
+    Ok(cache.join("MirrorDock").join("gallery-thumbs"))
+}
+
+/// 只按数量做上限淘汰（200 个），避免预览缓存无限增长；不删除用户主动取回的文件。
+fn prune_gallery_preview_cache(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    if files.len() <= 200 {
+        return;
+    }
+    files.sort_by_key(|path| fs::metadata(path).and_then(|meta| meta.modified()).ok());
+    let remove_count = files.len() - 200;
+    for path in files.into_iter().take(remove_count) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// X10-162：把一张媒体取到应用缓存，供前端生成 asset:// 缩略图与灯箱。
+/// 只支持图片：Android 没有稳定的 adb 只读视频缩略图接口，视频用占位封面 + 系统播放器。
+fn fetch_gallery_preview_with(
+    app: &AppHandle,
+    runtimes: &AppRuntimes,
+    serial: String,
+    remote_path: String,
+    name: String,
+    media_id: String,
+    kind: String,
+) -> Result<GalleryPreview, AppError> {
+    let serial = validate_serial(&serial)?;
+    let remote = validate_media_path(&remote_path)?;
+    let name = validate_transfer_name(&name)?;
+    if kind != "image" {
+        return Err(AppError::new(
+            "gallery_preview_kind_invalid",
+            "无法预览这个媒体类型。",
+            "视频请点播放，用系统播放器打开。",
+        ));
+    }
+    if media_id.is_empty() || media_id.len() > 32 || !media_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(AppError::new(
+            "gallery_preview_id_invalid",
+            "媒体编号无效。",
+            "请刷新相册媒体库后重试。",
+        ));
+    }
+    let extension = Path::new(&name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("jpg");
+    if extension.len() > 8 || !extension.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(AppError::new(
+            "gallery_preview_name_invalid",
+            "文件名无法用于预览。",
+            "请刷新相册媒体库后重试。",
+        ));
+    }
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let directory = gallery_preview_cache_dir(app)?;
+    fs::create_dir_all(&directory).map_err(|_| transfer_dir_unavailable_error())?;
+    prune_gallery_preview_cache(&directory);
+    let local = directory.join(format!("image-{media_id}.{extension}"));
+    if !local.exists() {
+        runtimes
+            .adb
+            .pull_file(&serial, &remote, &local)
+            .map_err(|_| {
+                AppError::new(
+                    "gallery_preview_failed",
+                    "缩略图没有从手机取回来。",
+                    "请确认文件仍在手机上，然后点缩略图重试。",
+                )
+            })?;
+    }
+    Ok(GalleryPreview {
+        path: local.to_string_lossy().into_owned(),
+        kind,
     })
 }
 
@@ -8472,6 +8573,33 @@ fn fetch_gallery_media(
     result
 }
 
+/// X10-162：预览用媒体取回（仅图片，写入应用缓存，不作为用户取回文件）。
+#[allow(non_snake_case)] // Tauri 命令参数与前端 mediaId 对齐。
+#[allow(clippy::too_many_arguments)] // Tauri 命令参数面，语义上属于一次预览请求。
+#[tauri::command]
+fn fetch_gallery_preview(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    path: String,
+    name: String,
+    mediaId: String,
+    kind: String,
+) -> Result<GalleryPreview, AppError> {
+    let result = fetch_gallery_preview_with(
+        &app,
+        &runtimes,
+        serial.clone(),
+        path.clone(),
+        name.clone(),
+        mediaId,
+        kind,
+    );
+    log.record_outcome("gallery_preview_fetch", result.as_ref().err(), &[&serial, &path, &name]);
+    result
+}
+
 /// 桌面模式虚拟屏被系统设置页覆盖后的恢复入口（X10-161）。
 #[tauri::command]
 fn restore_desktop_display(
@@ -9498,6 +9626,7 @@ pub fn run() {
             fetch_device_gallery_file,
             list_gallery_media,
             fetch_gallery_media,
+            fetch_gallery_preview,
             restore_desktop_display,
             inject_device_key,
             inject_device_tap,

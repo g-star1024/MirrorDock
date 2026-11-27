@@ -7,11 +7,11 @@ import {
   type AssistantSection,
   type AssistantViewKey,
 } from "./assistantViews";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getVersion } from "@tauri-apps/api/app";
-import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 // 系统文件选择器由官方 dialog 插件提供；MirrorDock 自身不枚举、不猜测用户文件。
 import { open as openFilePicker, save as saveFilePicker } from "@tauri-apps/plugin-dialog";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
@@ -405,6 +405,8 @@ type GalleryMedia = {
   size: number;
 };
 type GalleryFilter = "all" | "image" | "video";
+// X10-162 预览回执：本机应用缓存路径，只供 asset:// 显示，不作为用户取回文件。
+type GalleryPreview = { path: string; kind: string };
 
 const defaultOptions: SessionOptions = { quality: "balanced", fullscreen: false, always_on_top: false, rotation: 0, keep_awake: true, record: false, clipboard_autosync: true, audio: true, shortcut_mod: null, show_touches: false, keyboard_uhid: true, read_only: false, max_fps: null, desktop_mode: false, desktop_app: null, camera_source: false };
 export function readOptions(): SessionOptions {
@@ -703,6 +705,26 @@ export function capabilitySummary(capabilities: DeviceCapabilities) {
   return `${capabilities.label}（${system}）：${mirror}，${audio}。`;
 }
 
+/** X10-162：把设备名（用户数据）与可翻译短语拆开渲染，避免整段漏翻或篡改设备名。 */
+export function capabilitySummaryParts(capabilities: DeviceCapabilities) {
+  const system = capabilities.android_release
+    ? `Android ${capabilities.android_release}`
+    : "系统版本未知";
+  const mirror = supportText(
+    capabilities.mirroring_supported,
+    "画面可以镜像到电脑",
+    "系统较旧，画面镜像可能不稳定",
+    "画面能否镜像还无法确认",
+  );
+  const audio = supportText(
+    capabilities.audio_forwarding_supported,
+    "手机声音会一起传到电脑",
+    "手机声音无法传到电脑",
+    "手机声音能否转发还无法确认",
+  );
+  return [capabilities.label, system, mirror, audio] as const;
+}
+
 export function sessionStatus(session: MirrorSession): string | null {
   switch (session.phase) {
     case "idle":
@@ -996,6 +1018,11 @@ function App() {
   const [galleryFetched, setGalleryFetched] = useState<Record<string, TransferReceipt>>({});
   const [galleryErrors, setGalleryErrors] = useState<Record<string, string>>({});
   const [fetchingGalleryPath, setFetchingGalleryPath] = useState<string | null>(null);
+  // X10-162 相册预览：缩略图只写应用缓存；视频用占位封面 + 系统播放器。
+  const [galleryPreviewPaths, setGalleryPreviewPaths] = useState<Record<string, string>>({});
+  const [galleryPreviewLoading, setGalleryPreviewLoading] = useState<Record<string, boolean>>({});
+  const [galleryPreviewFailed, setGalleryPreviewFailed] = useState<Record<string, boolean>>({});
+  const [galleryLightbox, setGalleryLightbox] = useState<{ src: string; name: string } | null>(null);
   // X10-130 按键映射：方案与绑定只保存在本机 localStorage。
   const [keymaps, setKeymaps] = useState<{ profiles: KeymapProfile[]; activeId: string | null }>(() => readKeymaps());
   const [capturingKey, setCapturingKey] = useState(false);
@@ -2571,6 +2598,10 @@ function App() {
     setGalleryBusy(true);
     setGalleryError(null);
     setGalleryMessage(null);
+    setGalleryPreviewPaths({});
+    setGalleryPreviewLoading({});
+    setGalleryPreviewFailed({});
+    setGalleryLightbox(null);
     try {
       const items = await invoke<GalleryMedia[]>("list_gallery_media", { serial: transferDeviceSerial });
       setGalleryItems(items);
@@ -2633,6 +2664,86 @@ function App() {
   });
   const galleryImageCount = (galleryItems ?? []).filter((item) => item.kind === "image").length;
   const galleryVideoCount = (galleryItems ?? []).filter((item) => item.kind === "video").length;
+
+  // X10-162：缩略图只懒加载进入视口的图片，写应用缓存；失败保留占位，不反复重试。
+  async function loadGalleryPreview(path: string) {
+    const item = galleryItems?.find((candidate) => candidate.path === path);
+    if (!item || item.kind !== "image" || !transferDeviceSerial) return;
+    if (galleryPreviewPaths[path] || galleryPreviewLoading[path] || galleryPreviewFailed[path]) return;
+    setGalleryPreviewLoading((previous) => ({ ...previous, [path]: true }));
+    try {
+      const preview = await invoke<GalleryPreview>("fetch_gallery_preview", {
+        serial: transferDeviceSerial,
+        path: item.path,
+        name: item.name,
+        mediaId: item.id,
+        kind: item.kind,
+      });
+      setGalleryPreviewPaths((previous) => ({ ...previous, [path]: preview.path }));
+    } catch {
+      setGalleryPreviewFailed((previous) => ({ ...previous, [path]: true }));
+    } finally {
+      setGalleryPreviewLoading((previous) => {
+        const next = { ...previous };
+        delete next[path];
+        return next;
+      });
+    }
+  }
+
+  // X10-162：图片在应用内灯箱查看；视频先取回到本机再用系统播放器打开。
+  async function openGalleryMedia(item: GalleryMedia) {
+    if (!transferDeviceSerial) return;
+    if (item.kind === "image") {
+      let local = galleryPreviewPaths[item.path];
+      if (!local) {
+        try {
+          const preview = await invoke<GalleryPreview>("fetch_gallery_preview", {
+            serial: transferDeviceSerial,
+            path: item.path,
+            name: item.name,
+            mediaId: item.id,
+            kind: item.kind,
+          });
+          local = preview.path;
+          setGalleryPreviewPaths((previous) => ({ ...previous, [item.path]: preview.path }));
+        } catch (error) {
+          setGalleryError(errorMessage(error, "无法载入这张图片。"));
+          return;
+        }
+      }
+      setGalleryLightbox({ src: convertFileSrc(local), name: item.name });
+      return;
+    }
+    try {
+      const receipt = await invoke<TransferReceipt>("fetch_gallery_media", {
+        serial: transferDeviceSerial,
+        path: item.path,
+        name: item.name,
+      });
+      setGalleryFetched((previous) => ({ ...previous, [item.path]: receipt }));
+      await openPath(receipt.path);
+      setGalleryMessage(`已用系统播放器打开「${item.name}」，文件在本机「下载 / MirrorDock / 相册」。`);
+    } catch (error) {
+      setGalleryError(errorMessage(error, "无法用系统播放器打开这个视频。"));
+    }
+  }
+
+  useEffect(() => {
+    if (view !== "album" || galleryItems === null) return;
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-gallery-preview-path]"));
+    if (nodes.length === 0) return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const path = (entry.target as HTMLElement).dataset.galleryPreviewPath;
+        if (path) void loadGalleryPreview(path);
+        observer.unobserve(entry.target);
+      }
+    }, { rootMargin: "160px" });
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [view, galleryItems, visibleGalleryItems, galleryPreviewPaths, galleryPreviewLoading, galleryPreviewFailed]);
 
   // -- X10-130 按键映射 --
 
@@ -3818,7 +3929,7 @@ function App() {
             items: [
               ["当前设备", currentDeviceLabel ?? topbarStatus],
               ["系统", capabilities?.android_release ? `Android ${capabilities.android_release}` : "未知"],
-              ["镜像能力", capabilities ? capabilitySummary(capabilities) : "尚未探测"],
+              ["镜像能力", capabilities ? (() => { const [label, system, mirror, audio] = capabilitySummaryParts(capabilities); return <>{label}（{system}）：{mirror}，{audio}。</>; })() : "尚未探测"],
               ["锁屏 / 屏幕", readyDevice && lockReports[readyDevice.serial] ? lockSummary(lockReports[readyDevice.serial]) : "尚未探测"],
               ["电池", batteryText],
               ["存储", storageText],
@@ -4255,7 +4366,7 @@ function App() {
                     <>
                       {replays.length > 0 && (
                         <div className="alert alert-info" style={{ marginTop: 12 }}>
-                          <div className="alert-text">本机已恢复 {replays.length} 个脚本；点脚本名选中后编排或回放。</div>
+                          <div className="alert-text"><span>本机已恢复</span> {replays.length} <span>个脚本；点脚本名选中后编排或回放。</span></div>
                         </div>
                       )}
                       <div className="assistant-action-row" style={{ marginTop: 8 }}>
@@ -4443,33 +4554,59 @@ function App() {
           {
             kind: "custom",
             children: (
-              <section className="card">
-                <div className="card-head">
+              <section className="card gallery-card">
+                <div className="card-head gallery-head">
                   <h3 className="card-title">相册媒体库</h3>
-                  <span className="badge neutral">{galleryItems === null ? "读取中" : `${galleryImageCount} 张图片 · ${galleryVideoCount} 段视频`}</span>
+                  <span className="badge neutral">{galleryItems === null ? "读取中" : <>{galleryImageCount} <span>张图片</span> · {galleryVideoCount} <span>段视频</span></>}</span>
                   <span className="spacer" />
-                </div>
-                <div className="card-body tight">
-                  <div className="assistant-chip-row" role="group" aria-label="媒体类型">
-                    {([["all", "全部"], ["image", "图片"], ["video", "视频"]] as const).map(([kind, label]) => (
-                      <button
-                        key={kind}
-                        type="button"
-                        className={`assistant-chip${galleryFilter === kind ? " active" : ""}`}
-                        onClick={() => setGalleryFilter(kind)}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                  <div className="gallery-tools">
+                    <div className="assistant-chip-row" role="group" aria-label="媒体类型">
+                      {([["all", "全部"], ["image", "图片"], ["video", "视频"]] as const).map(([kind, label]) => (
+                        <button
+                          key={kind}
+                          type="button"
+                          className={`assistant-chip${galleryFilter === kind ? " active" : ""}`}
+                          onClick={() => setGalleryFilter(kind)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      className="input gallery-search"
+                      aria-label="搜索相册文件"
+                      placeholder="搜索文件名或目录"
+                      value={galleryQuery}
+                      onChange={(event) => setGalleryQuery(event.target.value)}
+                    />
                   </div>
-                  <input
-                    className="input"
-                    aria-label="搜索相册文件"
-                    placeholder="搜索文件名或目录"
-                    value={galleryQuery}
-                    onChange={(event) => setGalleryQuery(event.target.value)}
-                  />
                 </div>
+                {galleryItems !== null && visibleGalleryItems.length > 0 && (
+                  <div className="card-body tight">
+                    <p className="hint gallery-preview-hint">点击缩略图查看大图或用系统播放器打开视频；缩略图只在本机缓存。</p>
+                    <div className="gallery-preview-grid" aria-label="媒体缩略图">
+                      {visibleGalleryItems.map((item) => (
+                        <button
+                          key={item.path}
+                          type="button"
+                          className="gallery-thumb"
+                          data-gallery-preview-path={item.path}
+                          onClick={() => void openGalleryMedia(item)}
+                          title={item.name}
+                        >
+                          {item.kind === "image" ? (
+                            galleryPreviewPaths[item.path]
+                              ? <img src={convertFileSrc(galleryPreviewPaths[item.path])} alt={item.name} />
+                              : <span className="gallery-thumb-photo" aria-hidden="true">{galleryPreviewLoading[item.path] ? "…" : galleryPreviewFailed[item.path] ? "?" : "▣"}</span>
+                          ) : (
+                            <span className="gallery-thumb-video" aria-hidden="true">▶<small>视频</small></span>
+                          )}
+                          <span className="gallery-thumb-name">{item.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {galleryItems === null || visibleGalleryItems.length === 0 ? (
                   <div className="empty hint">
                     <p>{galleryItems === null
@@ -4490,11 +4627,14 @@ function App() {
                             <td title={item.path}>{item.path.replace(/^\/storage\/emulated\/0\//, "/sdcard/").split("/").slice(0, -1).join("/")}</td>
                             <td>{galleryFetched[item.path] ? <span className="badge ok">已取回</span> : galleryErrors[item.path] ?? <span className="badge neutral">可取回</span>}</td>
                             <td data-col="ops">
-                              {fetchingGalleryPath === item.path ? "正在取回…" : galleryFetched[item.path] ? "完成" : (
-                                <button type="button" className="btn-ghost" disabled={fetchingGalleryPath !== null || !transferDeviceSerial} onClick={() => void fetchGalleryFile(item)}>
-                                  {galleryErrors[item.path] ? "重试" : "取回到电脑"}
-                                </button>
-                              )}
+                              <span className="detail-ops">
+                                <button type="button" className="btn-ghost" disabled={!transferDeviceSerial} onClick={() => void openGalleryMedia(item)}>{item.kind === "image" ? "查看" : "播放"}</button>
+                                {fetchingGalleryPath === item.path ? "正在取回…" : galleryFetched[item.path] ? "完成" : (
+                                  <button type="button" className="btn-ghost" disabled={fetchingGalleryPath !== null || !transferDeviceSerial} onClick={() => void fetchGalleryFile(item)}>
+                                    {galleryErrors[item.path] ? "重试" : "取回到电脑"}
+                                  </button>
+                                )}
+                              </span>
                             </td>
                           </tr>
                         ))}
@@ -4656,7 +4796,7 @@ function App() {
                 </div>
                 {phoneNotifications.length === 0 ? (
                   <div className="empty hint">
-                    <p>伴侣 App 打开通知镜像并授权后，新通知会实时出现在这里。</p>
+                    <p>这一步必须你在手机上授权：Android 只允许应用通过「通知使用权」读取其他应用的通知，电脑端无法代替。请在伴侣 App 打开「通知镜像」并授予读取通知权限，同时保持手机与电脑的常驻连接在线。通知只在本窗口临时展示，不保存、不上传。</p>
                   </div>
                 ) : phoneNotifications.map((item) => {
                   const code = verificationCode(`${item.title} ${item.text}`);
@@ -5042,7 +5182,7 @@ function App() {
                     </div>
                     <span>{heroSub}</span>
                     <div className="hero-chips">
-                      <span className="badge ok"><span className="dot ok" aria-hidden="true" />{heroChannel ? `${heroChannel} · 已授权` : "已授权"}</span>
+                      <span className="badge ok"><span className="dot ok" aria-hidden="true" />{heroChannel ? <>{heroChannel} · <span>已授权</span></> : "已授权"}</span>
                       {prefBadge && (
                         <span className="badge neutral" title="本次点「开始镜像」实际会走的通道（USB 更稳）">{prefBadge}</span>
                       )}
@@ -5619,7 +5759,7 @@ function App() {
               </span>
               {phoneNotifications.length === 0 ? (
                 <p className="capability-pending">
-                  在手机伴侣 App 打开「通知镜像」并授予读取通知权限后，新通知会实时出现在这里（需要手机与电脑的常驻连接在线）。通知只在本窗口临时展示，不保存、不经过任何云端。
+                  Android 规定：读取通知必须由用户在系统设置里显式授权，电脑端无法静默实现。请在伴侣 App 打开「通知镜像」→ 系统设置授予「通知使用权」，并保持常驻连接在线；通知只在本窗口临时展示，不落盘、不经过云端。
                 </p>
               ) : (
                 <ul className="transfer-file-list">
@@ -5785,7 +5925,7 @@ function App() {
                   </p>
                   {pairingQr
                     ? <img src={pairingQr} alt="伴侣 App 配对二维码" width={220} height={220} />
-                    : <p className="capability-pending">二维码渲染不可用时，可在伴侣 App 中手动输入上方 16 位配对码与本机地址（{pairingOffer.hosts[0]}:{pairingOffer.port}）。</p>}
+                    : <p className="capability-pending"><span>二维码渲染不可用时，可在伴侣 App 中手动输入上方 16 位配对码与本机地址（</span>{pairingOffer.hosts[0]}:{pairingOffer.port}<span>）。</span></p>}
                   {pairingStatus && pairingStatus.events.length > 0 && (
                     <ul className="transfer-file-list">
                       {pairingStatus.events.slice(-8).reverse().map((event) => (
@@ -5819,7 +5959,7 @@ function App() {
                     关闭常驻通道
                   </button>
                 </div>
-                {residentActive && <p className="capability-summary">常驻监听中{residentPort ? `（端口 ${residentPort}）` : ""} · 等待伴侣设备连接。</p>}
+                {residentActive && <p className="capability-summary"><span>常驻监听中</span>{residentPort && <><span>（端口 </span>{residentPort}<span>）</span></>}<span> · 等待伴侣设备连接。</span></p>}
                 {residentNotice && <p className="capability-summary">{residentNotice}</p>}
                 {residentMessage && <p className="capability-pending" role="alert">{residentMessage}</p>}
                 {residentActive && pairingStatus && pairingStatus.events.length > 0 && (
@@ -6556,6 +6696,18 @@ function App() {
           <span className="statusbar-sep" aria-hidden="true">|</span>
           <span>版本 {appVersion || "—"}</span>
         </footer>
+        {galleryLightbox && (
+          <div className="gallery-lightbox" role="dialog" aria-modal="true" aria-label={galleryLightbox.name} onClick={() => setGalleryLightbox(null)}>
+            <div className="gallery-lightbox-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="card-head">
+                <h3 className="card-title">{galleryLightbox.name}</h3>
+                <span className="spacer" />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setGalleryLightbox(null)}>关闭</button>
+              </div>
+              <img src={galleryLightbox.src} alt={galleryLightbox.name} />
+            </div>
+          </div>
+        )}
     </div>
   );
 }

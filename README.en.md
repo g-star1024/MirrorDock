@@ -10,7 +10,7 @@ MirrorDock is a **local-first** Android desktop mirroring and control tool for n
 
 Video, audio, and input travel point-to-point only between your computer and your authorized phone. **No cloud relay, no uploads by default, no telemetry.**
 
-Current version: `0.4.39` (desktop) · `0.3.2` (companion app). Latest release: <https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.39-beta>
+Current version: `0.4.40` (desktop) · `0.3.2` (companion app). Latest release: <https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.40-beta>
 
 ## Features
 
@@ -41,6 +41,7 @@ Current version: `0.4.39` (desktop) · `0.3.2` (companion app). Latest release: 
 - **Screenshot**: One-click capture of the current screen, PNG integrity checked, name collisions auto-suffixed.
 - **Recording**: MP4 capture from inside the session; active recordings are protected from deletion.
 - **File transfer**: Two-way transfer with the phone's `Download / MirrorDock` folder — browse, retrieve, and delete individual files (only that one file in that directory). The companion app can send files to the computer, with a live desktop notification and automatic list refresh.
+- **Media library**: Reads all photos and videos from the phone's MediaStore, with type filters and filename/folder search. Photos show thumbnails and open in an in-app lightbox; videos use a cover placeholder and open in your system player. Thumbnails are cached only on this computer (200-item cap), while retrieved files still land in Downloads / MirrorDock / Album. Phone media is read-only — never modified, deleted or uploaded.
 - **Drag and drop**: Drop a file onto the main window — `.apk` installs to the ready phone (first one if several), anything else goes to the phone's send folder. Results are reported honestly in the corner, with reasons for failures.
 - **APK install**: Pick an installer on your computer, or drag one in. Reinstall keeps app data; confirmation on the phone is always required.
 - **Phone notification mirroring**: After enabling "Notification mirroring" in the companion app and granting notification access, new notifications appear live under Tools → Phone Notifications (up to 50, clearable; in-memory only, never written to disk or logs, no cloud; offline notifications are not backfilled).

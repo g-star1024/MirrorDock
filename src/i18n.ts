@@ -886,6 +886,109 @@ const EN_EXTRA_5: Record<string, string> = {
 };
 Object.assign(EN, EN_EXTRA_5);
 
+/** 第六批：X10-162（英文漏翻补齐 / 相册缩略图 / 通知授权引导）。 */
+const EN_EXTRA_6: Record<string, string> = {
+  // 设备中心：会话状态、快捷工具、锁屏/屏幕组合（lockTag / lockSummary）
+  "镜像会话未开始": "Mirror session not started",
+  "镜像会话进行中": "Mirror session running",
+  "画面 · 键鼠直输": "Video · direct keyboard and mouse",
+  "双向传输 · 本机目录": "Two-way transfer · local folder",
+  "列表 / 卸载 / 导出": "List / uninstall / export",
+  "实时镜像 · 按应用筛选": "Live mirroring · filter by app",
+  "无线": "Wi-Fi",
+  "尚未探测": "Not checked yet",
+  "安全锁屏 · 亮屏": "Secure lock · screen on",
+  "安全锁屏 · 熄屏": "Secure lock · screen off",
+  "安全锁屏 · 屏幕未知": "Secure lock · screen unknown",
+  "已锁屏 · 亮屏": "Locked · screen on",
+  "已锁屏 · 熄屏": "Locked · screen off",
+  "已锁屏 · 屏幕未知": "Locked · screen unknown",
+  "已解锁 · 亮屏": "Unlocked · screen on",
+  "已解锁 · 熄屏": "Unlocked · screen off",
+  "已解锁 · 屏幕未知": "Unlocked · screen unknown",
+  "锁屏未知 · 亮屏": "Lock state unknown · screen on",
+  "锁屏未知 · 熄屏": "Lock state unknown · screen off",
+  "锁屏未知 · 屏幕未知": "Lock state unknown · screen unknown",
+  "已锁屏（需要解锁凭据） · 屏幕已点亮": "Locked (unlock credential required) · screen on",
+  "已锁屏（需要解锁凭据） · 屏幕已关闭": "Locked (unlock credential required) · screen off",
+  "已锁屏（需要解锁凭据） · 屏幕状态未知": "Locked (unlock credential required) · screen unknown",
+  "锁屏中 · 屏幕已点亮": "Locking · screen on",
+  "锁屏中 · 屏幕已关闭": "Locking · screen off",
+  "锁屏中 · 屏幕状态未知": "Locking · screen unknown",
+  "已解锁 · 屏幕已点亮": "Unlocked · screen on",
+  "已解锁 · 屏幕已关闭": "Unlocked · screen off",
+  "已解锁 · 屏幕状态未知": "Unlocked · screen unknown",
+  "锁屏状态未知 · 屏幕已点亮": "Lock state unknown · screen on",
+  "锁屏状态未知 · 屏幕已关闭": "Lock state unknown · screen off",
+  "锁屏状态未知 · 屏幕状态未知": "Lock state unknown · screen unknown",
+  "本次运行还没有操作记录。截图、安装、录制完成后会显示在这里，只保留最近 8 条。": "No actions in this run yet. Screenshots, installs and recordings appear here once complete; only the latest 8 are kept.",
+  // 连接与授权
+  "生成配对二维码": "Generate pairing QR",
+  "正在生成…": "Generating…",
+  "用伴侣 App 扫码，与电脑建立加密助手通道并互相记住身份（桌面端与手机端都保存互信凭据，之后重连无需再扫码）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。": "Scan with the companion app to establish an encrypted helper channel and remember each other's identity (both sides save trust credentials, so reconnecting needs no new scan). This channel is separate from mirroring: for the phone to appear in the device list, use a USB cable or pair in the Wireless section above. Previously paired phones try to reconnect automatically after a successful scan.",
+  "二维码渲染不可用时，可在伴侣 App 中手动输入上方 16 位配对码与本机地址（": "If QR rendering is unavailable, enter the 16-digit pairing code and this computer's address manually in the companion app (",
+  "）。": ").",
+  "开启后，已配对的伴侣设备打开 App 里的「连接上次配对的电脑」，即可直接建立互信会话并尝试自动回连镜像通道，无需重新扫码。要注意先后顺序：通道端口是在扫码配对的那一刻交给手机的，电脑只会把端口变化告诉当前连着的手机——所以请先开启常驻通道、再在手机上扫码；如果手机是在关闭状态下配过对，需要在手机上重新扫一次码（电脑这边不用改）。关闭常驻通道后，已配对的手机会如实显示「没有可直连的电脑」。": "Once enabled, a paired companion device can tap Connect to last paired computer in the app to establish a trusted session and automatically reconnect the mirror channel — no new scan needed. Order matters: the port is handed to the phone during QR pairing, so turn on the resident channel first, then scan on the phone. If pairing happened while the channel was off, scan once more on the phone (nothing changes on this computer). Turning the channel off makes paired phones honestly report that no computer is directly reachable.",
+  "常驻监听中": "Listening continuously",
+  "（端口 ": " (port ",
+  "）": ")",
+  " · 等待伴侣设备连接。": " · waiting for the companion device to connect.",
+  // 设备信息（可翻译短语拆节点，设备名保持用户数据原样）
+  "系统版本未知": "System version unknown",
+  "画面可以镜像到电脑": "The screen can be mirrored to this computer",
+  "系统较旧，画面镜像可能不稳定": "Older Android version; mirroring may be unstable",
+  "画面能否镜像还无法确认": "Mirroring support is unknown",
+  "手机声音会一起传到电脑": "Phone audio is forwarded to the computer",
+  "手机声音无法传到电脑": "Phone audio cannot be forwarded",
+  "手机声音能否转发还无法确认": "Audio forwarding support is unknown",
+  // 投屏演示 / 定时录制 / 操作回放
+  "镜像引擎可用": "Mirror engine ready",
+  "录制状态": "Recording status",
+  "计划停止": "Scheduled stop",
+  "录制经既有会话，不绕过授权": "Recording uses the existing session; authorization is never bypassed",
+  "还没有录制计划；填写下方表单添加。": "No recording plans yet. Add one with the form below.",
+  "本机已恢复": "Restored",
+  "个脚本；点脚本名选中后编排或回放。": " scripts; select a script to edit or replay.",
+  // 文件传输 / 截图 / 录像 / 批量安装 / Pro
+  "推送后需在手机上确认接收": "Confirm receipt on the phone after pushing",
+  "本机还没有新截图；点「立即截图」获取第一张。": "No new screenshots yet. Tap Take screenshot to capture the first one.",
+  "手动启停，不重启镜像": "Start/stop manually; the mirror is not restarted",
+  "还没有选择安装包；点上方拖放区一次挑多个。": "No installers selected. Drop several APKs in the area above to add them at once.",
+  "当前版本": "Current edition",
+  "本机校验": "Verified locally",
+  "不需要账号": "No account needed",
+  "镜像与文件传输保持免费": "Mirroring and file transfer stay free",
+  // 相册缩略图 / 灯箱 / 系统播放器
+  "点击缩略图查看大图或用系统播放器打开视频；缩略图只在本机缓存。": "Tap a thumbnail to view the full image or open a video in your system player. Thumbnails are cached only on this computer.",
+  "查看": "View",
+  "播放": "Play",
+  "关闭": "Close",
+  "无法载入这张图片。": "Could not load this image.",
+  "无法用系统播放器打开这个视频。": "Could not open this video in the system player.",
+  // 通知中心：官方授权路径说明
+  "这一步必须你在手机上授权：Android 只允许应用通过「通知使用权」读取其他应用的通知，电脑端无法代替。请在伴侣 App 打开「通知镜像」并授予读取通知权限，同时保持手机与电脑的常驻连接在线。通知只在本窗口临时展示，不保存、不上传。": "You must authorize this on the phone: Android only lets apps read other apps' notifications through Notification access, and the computer cannot do it for you. Open Notification mirror in the companion app, grant notification access, and keep the resident connection online. Notifications are shown in this window only — never saved or uploaded.",
+  "Android 规定：读取通知必须由用户在系统设置里显式授权，电脑端无法静默实现。请在伴侣 App 打开「通知镜像」→ 系统设置授予「通知使用权」，并保持常驻连接在线；通知只在本窗口临时展示，不落盘、不经过云端。": "Android requires the user to grant notification access explicitly in system settings; the computer cannot do this silently. In the companion app, open Notification mirror, grant Notification access in system settings, and keep the resident connection online. Notifications appear only in this window — nothing is stored or sent to the cloud.",
+  // 帮助中心知识库正文
+  "「打开」用系统默认入口启动应用；「卸载」会先弹确认、卸载后无法恢复，系统预装应用无法卸载。应用数据不读取、不上传。": "Open uses the system's default launcher. Uninstall asks for confirmation first and cannot be undone; preinstalled system apps cannot be removed. App data is never read or uploaded.",
+  "通知保存与清除": "Notification retention and clearing",
+  "通知正文默认只在本窗口临时展示，不落盘、不上传；开启「保留通知」后，已保存的通知保存在本机（最多 50 条），重启应用后恢复，关闭开关即清除已存记录。「复制验证码」只写入本机剪贴板；「清除」会同步移除手机通知，需手机常驻连接在线。": "Notification text is shown in this window only by default — never written to disk or uploaded. With Keep notifications enabled, saved notifications stay on this computer (up to 50) and are restored after a restart; turning the switch off clears them. Copy verification code writes only to this computer's clipboard. Clear removes the phone notification too and needs the resident connection online.",
+  // WKWebView 英文审计第二轮：仍残留的 15 处中文片段
+  "无法读取连接状态。请关闭后重新打开 MirrorDock。": "Could not read connection state. Close and reopen MirrorDock.",
+  "无法更新会话状态，请重新打开应用后检查。": "Could not update session state. Reopen the app and check again.",
+  "第一步：连接手机": "Step 1: Connect the phone",
+  "选择手机品牌，查看开启步骤。": "Select a phone brand to see its setup steps.",
+  "锁屏 / 屏幕": "Lock / screen",
+  "未连接手机": "No phone connected",
+  "尚未读取手机文件，点「刷新文件」查看。": "Phone files have not been read yet. Tap Refresh files to load them.",
+  "刷新文件": "Refresh files",
+  "授权": "Authorization",
+  "未选择设备": "No device selected",
+  "尚未读取应用清单；连接设备后点「刷新清单」。": "App list has not been loaded. Connect a device, then tap Refresh list.",
+  "刷新清单": "Refresh list",
+  "无法读取授权状态，功能按免费版呈现。": "Could not read license status; features are shown in Free mode.",
+};
+Object.assign(EN, EN_EXTRA_6);
+
 /**
  * 只在前缀位置替换的复合 UI 模板（含动态值，整段无法精确匹配）。
  * 刻意不做全文子串替换——设备名、文件名等用户数据可能恰好含常用中文词，
@@ -916,11 +1019,22 @@ const PHRASES: Record<string, string> = {
   "当前：": "Current: ",
   "（测试版）": " (beta)",
   "专业版已激活": "Pro is active",
+  "镜像会话进行中 · ": "Mirror session running · ",
+  "脚本 ": "Script ",
+  "配对状态：": "Pairing status: ",
+  "已用系统播放器打开「": "Opened in system player: ",
+  "目标设备：": "Target device: ",
 };
 const PHRASE_KEYS = Object.keys(PHRASES).sort((a, b) => b.length - a.length);
 /** 只做整段/片段精确替换的安全词（不会出现在用户数据里）。 */
 const INLINE: Record<string, string> = {
   "（测试版）": " (beta)",
+  " · 进度：": " · Progress: ",
+  "空闲": "Idle",
+  "正在逐个安装…": "Installing one by one…",
+  "未连接手机": "No phone connected",
+  "未选择设备": "No device selected",
+  "」，文件在本机「下载 / MirrorDock / 相册」。": " — saved to Downloads / MirrorDock / Album on this computer.",
 };
 
 export function translateText(text: string): string {

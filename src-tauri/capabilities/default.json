@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "opener:allow-open-path",
     "dialog:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",

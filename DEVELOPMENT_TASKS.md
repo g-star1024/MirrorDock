@@ -1658,4 +1658,29 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **③ 投屏演示「怎么用 / 还缺什么」**：演示页新增「查看演示指南」按钮，直达帮助中心 kb-demo（展开对应条目）。知识库写明五步真实用法和能力边界（不是 PPT 播放器；激光笔/白板标注/演示文稿/多屏排版未实现；受保护页面黑屏；麦克风不采集；MIUI 启动器需指定普通应用）。
 - **④ 相册升级为媒体库**：旧实现只列固定 4 个白名单目录第一层，微信/子目录照片看不到。新实现用 `content query --uri content://media/external/{images,video}/media --projection _id:_display_name:_data:date_added:_size`（adb argv 形式，真机与模拟器实测可用），解析 MediaStore 行（按字段名定位，兼容文件名含逗号），按时间倒序最多 2000 条；前端新增类型筛选/搜索/来源目录列/单条取回/一键取回当前筛选。路径校验只接受 `/storage/emulated/0/` 或 `/sdcard/` 下媒体扩展名，无自由路径输入，只读不改不删不上传。
 - **验证**：cargo test 237/237（新增 6 用例：真实 MediaStore 行、路径白名单、虚拟屏定位、键盘 argv、合并排序、恢复落点）；tsc 0 error、vite build、vitest 130/130；真实 WKWebView 中英两态走查相册/按键映射/演示指南全部正常，英文文案齐全。
-- **✅ v0.4.39-beta 发版完成（2026-11-27 16:40）**：commit `0404508`（20 文件 +6919/-137）推 main，tag `v0.4.39-beta`。首次 CI run `45963384136` 在「伴侣 App APK」步骤 45s 失败（verify/四平台打包全绿；无 token 无法读日志或下载失败 artifact，本地两道伴侣闸门均通过、且本轮未改伴侣代码 → 判定为 runner 瞬时故障），删除并重推同一 tag 后 CI run `45965562173` 全绿（约 13 分钟）。Release id `460340423`，34 资产全齐（四平台安装包+sig、APK、latest.json、SHA256SUMS×4、SBOM×8、version-check×4）；Release 正文「## 本版更新内容 + ## 修复/增强/验证」注入正常。latest.json 实测下载：version=0.4.39、四平台 signature/url 齐全、pub_date 2026-11-27T08:38:40Z。官网线上核验 0.4.39 + 重构预览入口已在位。X10-160（README/官网双语 + 客户端语言切换）同批发布。
+- **✅ v0.4.39-beta 发版完成（2026-11-27 16:40）**：commit `0404508`（20 文件 +6919/-137）推 main，tag `v0.4.39-beta`。首次 CI run `45963384136` 在「伴侣 App APK」步骤 45s 失败（verify/四平台打包全绿；无 token 无法读日志或下载失败 artifact，本地两道伴侣闸门均通过、且本轮未改伴侣代码 → 判定为 runner 瞬时故障），删除并重推同一 tag 后 CI run `45965562173` 全绿（约 13 分钟）。Release id `460340423`，34 资产全齐（四平台安装包+sig、APK、latest.json、SHA256SUMS×4、SBOM×8、version-check×4）；Release 正文「## 本版更新内容 + ## 修复/增强/验证」注入正常。latest.json 实测下载：version=0.4.39、四平台 signature/url 齐全、pub_date 2026-11-27T08:38:40Z。官网线上核验 0.4.39 + 重构预览入口已在位。
+
+## X10-162 官网英文导航折行错位（用户截图，仅静态站，未 commit）
+- **现象**：用户截图 `官网英文状态下错位`，`site/index-en.html` 顶部导航在窗口 ~1004px 时多项逐词折行（中文、Get started、Privacy & limits、Redesign preview、Download beta 均断成两行），红框覆盖整条导航。
+- **根因**：`.nav` 作为 header flex 子项默认可收缩，英文标签比中文长，空间不足时各 `<a>` 被压窄后按空格换行；`.head-cta` 同样会折行。不是内容缺失或断点隐藏。
+- **修复（site/ 四个静态页 index.html / index-en.html / compatibility.html / compatibility-en.html 同步）**：
+  - `.brand` / `.nav` / `.head-cta` 加 `flex:none`，`.nav a` 与 `.head-cta` 加 `white-space:nowrap`，从源头禁止压缩折行。
+  - 新增 `@media (max-width:1180px)`：header gap 28→16、nav gap 22→14、导航字号 14.5→13.5、CTA 36/16→34/12，保留全部入口。
+  - 新增 `@media (max-width:1020px)`：仅隐藏低优先级项 `data-nav-optional`（Privacy & limits / FAQ / Redesign preview），保留语言、Features、Get started、Download、Compatibility 与 CTA；预览入口在页脚仍在，功能入口不丢失。`≤900px`（主页）/`≤720px`（兼容页）仍整体隐藏导航，沿用原断点。
+- **验证（Playwright，本地静态服务 127.0.0.1:8765）**：1004px 英文态截屏 `site-nav-en-1004.png` 目视全部单行、无重叠；实测 docScrollW=viewport、header scrollWidth=clientWidth、所有可见链接高度一致 23.2px（单行）。1280px 全 8 项可见且高度 24.9px、无溢出；960px 中英主页均仅 5 项可见且无溢出；兼容页 960/800px 导航无溢出。
+- **未关闭风险**：兼容页 800px 整页仍有 873px 横向滚动，来源为兼容性 `<table>` 自身最小宽（早于本任务存在），非导航；本轮未越界修改。
+- **状态**：修复已落地工作区，**未 commit、未发版**（用户本轮只要求修错位；官网需 push main 触发 pages.yml 才上线）。
+- **✅ X10-162 已并入 v0.4.40-beta 发版（用户 16:58 明确要求 commit/push/tag 发版，官网 nav 修复同批上线）。**
+
+## X10-163 用户 18 图复检（英文残留 / 相册缩略图 / 通知授权 / 布局错位）
+- **用户确认的功能范围**（拍板前先给建议+理由）：相册选「缩略图+看图+系统播放」；通知选「保留伴侣授权+强化引导」。两项均按推荐方案落地。
+- **① 英文残留（15 视图）**：根因分三类——词典整段缺项（生成配对二维码、录制空态、截图空态、批量安装空态、帮助中心两条知识库正文等）；动态拼装漏翻（USB · 已授权、镜像会话进行中 · N 台、目标设备 · 进度、脚本 N、本机已恢复 N 个脚本、常驻监听中（端口 N）、二维码渲染不可用提示）；标点/措辞不一致（手动启停**逗号**版词典只有间隔号版）。修法：补 EN_EXTRA_6、PHRASES 前缀、INLINE 安全片段；数字/设备名串拆文本节点（相册计数、capabilitySummary 适配新 helper `capabilitySummaryParts`），不改写用户数据。新增词典注意：原已有「按品牌查看开启步骤」→「Enable steps by brand」，重复新增会被覆盖导致 i18n.test 失败，已删除重复项。
+- **WKWebView 两轮审计**：第一轮 15 视图残留 6+2+1+3+1+1+4+2 个中文片段，补词后第二轮仅剩 3 处（「未连接手机」「未选择设备」在带尾随空格/模板串里），加 INLINE 后**第三轮 15 视图 CJK 全部为 0**（探针 `/tmp/wk-x162.swift`）。
+- **② 相册增强**：筛选 chips + 搜索从表格左上移到 `.card-head` 右侧（`.gallery-tools`，搜索框 224px，英文 placeholder 完整）；新增 `.gallery-preview-grid` 缩略图网格，图片进入视口后由 `IntersectionObserver` 懒加载（仅图片；Android 无稳定 adb 只读视频缩略图接口，视频用 ▶ 封面占位），点击图片进应用内灯箱 `<img src=convertFileSrc(cachePath)>`，点击视频先复用 `fetch_gallery_media` 取回到本机再 `openPath()` 调系统播放器；表格新增「查看/播放」按钮。
+  - 后端新增 `fetch_gallery_preview(app, runtimes, log, serial, path, name, mediaId, kind)`：复用 `validate_media_path` / `validate_transfer_name` / `validate_serial` 与 adb argv 直调，仅图片；缓存写 `$APPCACHE/MirrorDock/gallery-thumbs/{kind}-{MediaStore id}.{ext}`，数量上限 200，不混入用户主动取回的下载目录；`record_outcome` 把 serial/path/name 列为 secrets。
+  - 权限最小化：`tauri` 加 `protocol-asset` feature（首次 `cargo fetch` 拉 http-range 0.1.6），`tauri.conf.json` assetProtocol scope 只放行 `$APPCACHE/MirrorDock/gallery-thumbs/**`，capabilities 加 `opener:allow-open-path`（`opener:default` 不含 it）。不动 $HOME 全盘，不给前端 fs/shell 能力。
+- **③ 通知授权事实结论**：Android 官方读取其他应用通知正文的唯一路径是 `NotificationListenerService`，必须由用户在系统设置授予「通知使用权」；ADB `dumpsys notification` 默认 redact，`--noredact` 不稳定且绕过可见可撤销授权模型，`uiautomator` 要下拉通知栏且只读当前屏，`logcat` 不是通知总线。结论：**不能静默实现**，保留伴侣授权并强化空态文案（明确这一步电脑端无法代劳 + 去哪里授权），补齐英文。
+- **④ 布局错位**：App manager Open/Uninstall 由竖排改同行（`.table td[data-col=ops] .detail-ops{flex-wrap:nowrap;gap:6px}` + min-width 148px）；定时录制表单提交按钮、Pro 激活按钮窄栏不再被挤走；相册搜索框加宽；帮助中心 `.kb-list` 补 `margin-bottom:14px`（WKWebView 实测 kbBottom→diagTop gap=14）。
+- **验证**：pnpm build（tsc 0 error）、vitest **130/130**、cargo test **237/237**、cargo clippy `--all-targets -D warnings` **0 warning**（顺手修掉旧 `keyboard_settings_args` 冗余生命周期 + 新命令 `#[allow(clippy::too_many_arguments)]`）；WKWebView 15 视图英文 0 中文，相册控件右上、搜索框 224px，帮助中心 14px；中文态未回归（只增量词典/CSS）。
+- **诚实边界**：图片灯箱与系统播放器的真实交互、缩略图懒加载在 2000 条媒体下的性能、HEVC/3GP 格式兼容性需用户真机确认；沙箱无设备，仅验证了空态与布局。
+- **状态**：待 commit + tag `v0.4.40-beta` 发版；官网与中英 README 已同步 0.4.40。X10-160（README/官网双语 + 客户端语言切换）同批发布。

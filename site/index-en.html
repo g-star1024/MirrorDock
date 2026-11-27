@@ -65,14 +65,14 @@
   .site-head .wrap{
     display:flex;align-items:center;gap:28px;height:64px
   }
-  .brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em}
+  .brand{display:flex;flex:none;align-items:center;gap:10px;color:#fff;font-weight:600;font-size:16px;letter-spacing:.01em;white-space:nowrap}
   .brand:hover{text-decoration:none}
   .brand svg{display:block}
-  .nav{display:flex;gap:22px;margin-left:auto}
-  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500}
+  .nav{display:flex;flex:none;gap:22px;margin-left:auto}
+  .nav a{color:#C4D0E4;font-size:14.5px;font-weight:500;white-space:nowrap}
   .nav a:hover{color:#fff;text-decoration:none}
   .head-cta{
-    display:inline-flex;align-items:center;height:36px;padding:0 16px;border-radius:8px;
+    display:inline-flex;flex:none;align-items:center;height:36px;padding:0 16px;border-radius:8px;white-space:nowrap;
     background:var(--blue-600);color:#fff;font-size:14.5px;font-weight:600
   }
   .head-cta:hover{background:var(--blue-700);text-decoration:none}
@@ -281,6 +281,15 @@
     .rows li:nth-last-child(-n+2){border-bottom:1px solid var(--line-soft)}
     .rows li:last-child{border-bottom:0}
   }
+  @media (max-width:1180px){
+    .site-head .wrap{gap:16px}
+    .nav{gap:14px}
+    .nav a{font-size:13.5px}
+    .head-cta{height:34px;padding:0 12px;font-size:13.5px}
+  }
+  @media (max-width:1020px){
+    .nav a[data-nav-optional]{display:none}
+  }
   @media (max-width:900px){
     .hero .wrap{grid-template-columns:1fr;gap:44px}
     .features{grid-template-columns:1fr;gap:32px}
@@ -321,11 +330,11 @@
       <a href="index.html" lang="zh-CN" hreflang="zh-CN" title="Chinese">中文</a>
       <a href="#features">Features</a>
       <a href="#start">Get started</a>
-      <a href="#limits">Privacy & limits</a>
+      <a href="#limits" data-nav-optional>Privacy & limits</a>
       <a href="#download">Download</a>
-      <a href="#faq">FAQ</a>
+      <a href="#faq" data-nav-optional>FAQ</a>
       <a href="compatibility-en.html">Compatibility</a>
-      <a href="rebuild-preview.html">Redesign preview</a>
+      <a href="rebuild-preview.html" data-nav-optional>Redesign preview</a>
     </nav>
     <a class="head-cta" href="#download">Download beta</a>
   </div>
@@ -335,7 +344,7 @@
   <section class="hero" id="top">
     <div class="wrap">
       <div>
-        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.4.39 beta released</p>
+        <p class="kicker"><span class="dot" aria-hidden="true"></span>v0.4.40 beta released</p>
         <h1>Put your phone<br><span class="dim">on this computer's desktop.</span></h1>
         <p class="lede">
           MirrorDock connects your Android phone's screen, sound, keyboard and mouse to your computer with one USB cable or the same Wi-Fi. Your picture only flows between your own devices — never through a server.
@@ -529,6 +538,10 @@
             <p>Sent files land in Download / MirrorDock on the phone; retrieved files go to your computer's Downloads folder. Only USB or LAN is used. The desktop notifies you instantly when the phone sends something, and you can also drag a file into the MirrorDock window.</p>
           </li>
           <li>
+            <h4>Media library with thumbnails and quick view</h4>
+            <p>Reads all photos and videos from the phone's system media index, with type filters and filename/folder search. Photos show thumbnails and open full-size; videos use a cover placeholder and open in your system player. Thumbnails are cached only on this computer, retrieved files go to your Downloads folder, and phone media is read-only — never modified, deleted or uploaded.</p>
+          </li>
+          <li>
             <h4>Phone notifications on your computer — and reply from there</h4>
             <p>Enable Notification mirroring in the companion app (off by default, needs your explicit consent). New notifications appear live under Tools on the desktop; notifications with a reply field can be answered right there, with text sent back to the phone over an encrypted channel. Only paired computers receive them; nothing is written to disk or logs, and you can turn it off anytime.</p>
           </li>
@@ -639,7 +652,7 @@
 
   <section class="band" id="download">
     <div class="wrap">
-      <h2>Download v0.4.39 beta</h2>
+      <h2>Download v0.4.40 beta</h2>
       <p class="sec-lede">
         Installers and checksums are on GitHub Releases. If you're unsure which to pick, use the table below.
       </p>
@@ -653,46 +666,46 @@
           <tr>
             <td>Windows</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64-setup.exe">Installer (exe)</a>
-              <span class="fname">MirrorDock_0.4.39_x64-setup.exe</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64_en-US.msi" style="display:block;margin-top:8px">MSI installer</a>
-              <span class="fname">MirrorDock_0.4.39_x64_en-US.msi</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_x64-setup.exe">Installer (exe)</a>
+              <span class="fname">MirrorDock_0.4.40_x64-setup.exe</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_x64_en-US.msi" style="display:block;margin-top:8px">MSI installer</a>
+              <span class="fname">MirrorDock_0.4.40_x64_en-US.msi</span>
             </td>
             <td>64-bit. SmartScreen may warn on first run; choose Run anyway.</td>
           </tr>
           <tr>
             <td>macOS<br>Apple silicon</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_aarch64.dmg">Disk image</a>
-              <span class="fname">MirrorDock_0.4.39_aarch64.dmg</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_aarch64.dmg">Disk image</a>
+              <span class="fname">MirrorDock_0.4.40_aarch64.dmg</span>
             </td>
             <td>For M1 and later chips.</td>
           </tr>
           <tr>
             <td>macOS<br>Intel</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64.dmg">Disk image</a>
-              <span class="fname">MirrorDock_0.4.39_x64.dmg</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_x64.dmg">Disk image</a>
+              <span class="fname">MirrorDock_0.4.40_x64.dmg</span>
             </td>
             <td>Unsigned build: allow it in System Settings → Privacy & Security on first launch.</td>
           </tr>
           <tr>
             <td>Linux</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_amd64.AppImage">AppImage (no install)</a>
-              <span class="fname">MirrorDock_0.4.39_amd64.AppImage</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
-              <span class="fname">MirrorDock_0.4.39_amd64.deb</span>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock-0.4.39-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
-              <span class="fname">MirrorDock-0.4.39-1.x86_64.rpm</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_amd64.AppImage">AppImage (no install)</a>
+              <span class="fname">MirrorDock_0.4.40_amd64.AppImage</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock_0.4.40_amd64.deb" style="display:block;margin-top:8px">Debian / Ubuntu（deb）</a>
+              <span class="fname">MirrorDock_0.4.40_amd64.deb</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock-0.4.40-1.x86_64.rpm" style="display:block;margin-top:8px">Fedora / RHEL（rpm）</a>
+              <span class="fname">MirrorDock-0.4.40-1.x86_64.rpm</span>
             </td>
             <td>Make the downloaded AppImage executable and run it:<span style="font-family:var(--font-mono);font-size:12.5px">chmod +x filename</span></td>
           </tr>
           <tr>
             <td>Android companion app</td>
             <td>
-              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock-companion-0.4.39.apk">APK</a>
-              <span class="fname">MirrorDock-companion-0.4.39.apk</span>
+              <a href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/MirrorDock-companion-0.4.40.apk">APK</a>
+              <span class="fname">MirrorDock-companion-0.4.40.apk</span>
             </td>
             <td>Requires Android 8.0+. After installing, scan the pairing QR while the phone and computer share a Wi-Fi.</td>
           </tr>
@@ -700,8 +713,8 @@
       </table>
 
       <div class="dl-actions">
-        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.39-beta">Open the release page</a>
-        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/SHA256SUMS-macos-x64.txt">Checksums (SHA256SUMS)</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.40-beta">Open the release page</a>
+        <a class="btn-line" href="https://github.com/g-star1024/MirrorDock/releases/download/v0.4.40-beta/SHA256SUMS-macos-x64.txt">Checksums (SHA256SUMS)</a>
         <a class="btn-line" href="https://github.com/g-star1024/MirrorDock">View source</a>
       </div>
       <p class="dl-hint">
@@ -745,7 +758,7 @@
 
 <footer>
   <div class="wrap">
-    <span>MirrorDock v0.4.39 beta</span>
+    <span>MirrorDock v0.4.40 beta</span>
     <a href="https://github.com/g-star1024/MirrorDock">Source code</a>
     <a href="index.html" lang="zh-CN" hreflang="zh-CN">中文</a>
     <a href="compatibility.html">Compatibility matrix</a>
@@ -756,4 +769,4 @@
 </footer>
 </body>
 </html>
-<!-- v0.4.39-beta · English -->
+<!-- v0.4.40-beta · English -->

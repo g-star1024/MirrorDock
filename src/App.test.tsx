@@ -7,10 +7,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args),
+  convertFileSrc: (path: string) => `asset://localhost/${path}`,
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(),
   openUrl: vi.fn(),
+  openPath: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn().mockResolvedValue("0.0.0-test"),
