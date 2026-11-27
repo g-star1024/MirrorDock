@@ -1625,3 +1625,18 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **状态**：**未 commit 未发版**，等用户验收。
 - **X10-158-B 二次修复（用户复检「那个点还是错行」）**：根因=App.css 存在**两个同优先级 steps 覆盖块**——X10-158-B 修复块插在 1620 行（中途），而 X10-156 时代追加在文件尾部的旧块（原 1746-1750，li `display:block` + ::before `display:block`）**更晚生效**，把 flex 修复整个盖掉 → ::before 恢复块级独占一行（正是用户截图的「圆点在标题上方独立一行」）。修复：删除中途重复块，文件尾最终块改为正确 flex 版（li flex + ::before 流内 flex item + margin-top:7px）。实测 computed：li=flex、::before=static/block/margin-top 7px、strong top=0 同行；截图 x158c-steps-fixed.png 确认三步骤圆点均与标题同行。**元教训：改样式时若存在多个同名覆盖块，必须修「cascade 最后生效」的那个块，插入新块只会被旧块覆盖（同类教训第二次，X10-158-G 同源）。**
 - **X10-158-K 追加（用户复检「文案贴边没有边距」，要求同类问题一块修）**：品牌引导卡卡尾说明「菜单名称因机型而异…」贴住 chips 按钮（实测仅 ~3px）。根因=`.card-body > .hint { margin: 0 0 14px }` 上边距为 0，紧跟按钮行时贴死；预览此行是内联 `margin-top:10px`。修复：①`.brand-guide-card .card-body > .hint:last-child { margin-top:10px }`（对齐预览）②通用兜底 `.card-body > .action-row { margin:10px 0 }`（顺带修复诊断包卡同款贴边）。**同类问题全视图程序化扫描**（相邻兄弟：文字块 vs 含按钮容器，垂直间距 <6px 判定）：19 视图 + 设置 7 分组全部 CLEAN（此前 16 视图首轮即干净，键位映射/多端/设备与桌面模式补扫干净）。实测品牌卡 chips→卡尾 hint 间距 3px→10px。验证：vite build 过、vitest 125/125。
+- **✅ X10-158/158-K 已发版 v0.4.37-beta（2026-11-27 13:45）**：commit `d706cbb`（7 文件 +87/-30，版本号 0.4.36→0.4.37 四处精确编辑 + cargo metadata --locked 验证），tag 推送触发 CI run `45945679534` 全绿（verify + APK + 四平台打包 + 发布），Release id `460208831` **34 资产全齐**（四平台安装包+sig+APK+latest.json+SHA256SUMS+SBOM+version-check）。latest.json version=0.4.37、签名/正文（## 修复注入正常）核验通过。官网 29 处同步 0.4.37（commit `3e85767`）。插曲：pages.yml 首次 deploy-pages 瞬时失败（线上滞留 0.4.36），推 `6a12355` 空注释重触发后 success，线上已核验 30 处 0.4.37。用户重启客户端即可收到 0.4.37 更新推送。
+
+## X10-159 用户 26 图复检修复（v0.4.38-beta）
+- **背景**：用户装 0.4.37 后复检（原 3284×1234 retina 截图，窗口 ~1642 CSS px），指出 8 类问题。
+- **① 主题色块不显示（真根因=WebKit 引擎差异，历次 Chrome 走查无法复现）**：色块 JSX/CSS 自 X10-157 起就在 0.4.36/37 里，Chromium dev/preview 渲染全部正常，但用户客户端（WKWebView）永远看不到。用 Swift+WKWebView 探针（swiftc /tmp/wk.swift）实测拿到真实证据：**WebKit 下 `.theme-swatch` 宽度为 0**——flex 列容器内的 span 不会像 Chromium 那样自动拉伸整行，`flex:1` 的空 `<i>` 全部塌缩 → 色块条 0×24 完全不可见。修复：`.theme-swatch` 加 `width:100%`。复测 WebKit：swatchW=149/swatchH=24，五个色块条全部可见（截图 x159-webkit-theme-fixed.png）。**元教训：本地走查只跑 Chrome 不够，必须用 WKWebView 探针（已建 /tmp/wkprobe 能力）复验 WebView 真机渲染。**
+- **② 主题说明文案换行**：用户窗口 1642px 宽，一行说明横贯整页。修复：`.theme-settings .setting-note { max-width:640px }`，实测 noteH=40（两行）。
+- **③ 关于页按钮贴文案（上轮修复没生效的真因）**：上轮写的 `.settings-card > .settings-actions` 不匹配真实 DOM——settings-actions 的父级是 `.settings-rows`。修复：补 `.settings-rows > .settings-actions { margin-top:10px }`。实测 marginTop=10px。
+- **④ 重新检查按钮独占一行**：根因=`.hero-actions { flex-direction: column }`。修复：改 row + wrap + 右对齐（实测 flexDir=row）。
+- **⑤ 收藏星标放设备名后**：hero 的星标从 deviceActions 中拆出（deviceActions 加 showFavorite 参数），移到 `.hero-id` 内新增 `.hero-name-row`（设备名后，accent 色 18px）。设备列表卡星标保持原位。
+- **⑥ 空状态模块贴死+无边距**：根因=常用工具/最近任务/安全边界 `<section className="card">` 嵌在 connection-card 内部（嵌套卡无 margin）。修复：整体移出连接卡成为独立兄弟模块，包 `<div className="home-extra">`（grid gap 18px + margin-bottom 18px）。
+- **⑦ 按品牌查看开启步骤丢失**：原条件 `!isChecking && !readyDevice`——有就绪设备时整块消失。修复：改 `!isChecking`（始终显示）。
+- **⑧ 底部说明统一整理进帮助中心知识库（用户指定）**：新建 `src/knowledgeBase.ts`（16 条：安全边界/诊断/多端/黑屏/演示/映射/计划/回放/截图/录像/录像专业版/相册/应用打开卸载/通知/激活/隐私承诺）。帮助中心新增「功能说明知识库」区块（与帮助文章同款折叠交互 + 所属视图 badge）。各视图底部静态说明条移除，**动态状态保留**：诊断/计划/录像/回放错误、相册状态、应用管理「目标设备·进度」、操作结果 ✓/⚠、批量安装进度（功能性反馈非说明）。帮助中心底部「隐私承诺」aside 移除（入 kb-privacy）；About 页版本信息区文案保留（属"关于"事实信息非散落说明）。
+- **测试**：App.test.tsx 应用管理断言更新（静态文案改查知识库行为：页面显示「目标设备：」、不再显示静态说明）。tsc 0 error、vite build 过、vitest 125/125。
+- **X10-159-8 回退（用户裁定）**：「按品牌查看开启步骤」改回原条件 `!isChecking && !readyDevice`（仅无就绪设备时显示）。vitest 125/125 复跑全绿（原测试场景即无设备场景，不受影响）。
+- **✅ X10-159 已发版 v0.4.38-beta（2026-11-27 14:50）**：版本号 0.4.37→0.4.38 四处精确编辑（cargo metadata --locked 验证），官网 site/index.html 30 处同步 0.4.38，发版文档 docs/releases/v0.4.38-beta.md（纯 ## 小节）。

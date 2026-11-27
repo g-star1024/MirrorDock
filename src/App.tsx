@@ -20,6 +20,7 @@ import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { brandGuides, detectBrand, type BrandGuide } from "./brandGuides";
 import { helpArticles } from "./helpContent";
+import { knowledgeEntries } from "./knowledgeBase";
 import {
   UI_THEMES,
   applyUiTheme,
@@ -1239,6 +1240,8 @@ function App() {
   const [dropInstallNotice, setDropInstallNotice] = useState<{ kind: "info" | "error"; text: string } | null>(null);
   // 帮助中心折叠（X10-125）：默认全部只显示标题，点标题独立展开/收起。
   const [expandedHelpIds, setExpandedHelpIds] = useState<ReadonlySet<string>>(new Set());
+  // X10-159：功能说明知识库折叠状态（与帮助文章同款交互）。
+  const [expandedKbIds, setExpandedKbIds] = useState<ReadonlySet<string>>(new Set());
   // X10-27 并发多设备：后端按设备维护会话表；这里保留「主会话」视图供既有
   // 单会话 UI（顶栏、状态提示、设置应用）使用，各设备自己的状态按 serial 查询。
   const session = sessions.find((item) => item.phase === "streaming" || item.phase === "connecting") ?? sessions[0] ?? null;
@@ -3673,19 +3676,22 @@ function App() {
 
   // X10-150：设备卡动作簇抽取——连接卡设备列表与设备中心 Hero 卡共用同一份真实动作，
   // 保证「每个动作全页只出现一次」；文案、禁用条件与事件一字未改。
-  function deviceActions(device: Device, owned: boolean, favorite: boolean, usbAlt: string | null) {
+  function deviceActions(device: Device, owned: boolean, favorite: boolean, usbAlt: string | null, showFavorite = true) {
     return (
       <>
-        {/* X10-68：收藏置顶开关（只影响最近设备列表排序）。 */}
-        <button
-          className="text-button fav-toggle"
-          type="button"
-          aria-label={favorite ? `取消收藏 ${displayLabels[device.serial] ?? device.label}` : `收藏 ${displayLabels[device.serial] ?? device.label}`}
-          title={favorite ? "取消收藏" : "收藏（最近列表置顶）"}
-          onClick={() => toggleFavoriteDevice(device.serial)}
-        >
-          {favorite ? "★" : "☆"}
-        </button>
+        {/* X10-68：收藏置顶开关（只影响最近设备列表排序）。
+            X10-159：Hero 卡的星标移到设备名后面，此处用 showFavorite=false 隐藏。 */}
+        {showFavorite && (
+          <button
+            className="text-button fav-toggle"
+            type="button"
+            aria-label={favorite ? `取消收藏 ${displayLabels[device.serial] ?? device.label}` : `收藏 ${displayLabels[device.serial] ?? device.label}`}
+            title={favorite ? "取消收藏" : "收藏（最近列表置顶）"}
+            onClick={() => toggleFavoriteDevice(device.serial)}
+          >
+            {favorite ? "★" : "☆"}
+          </button>
+        )}
         {device.state === "ready" && (
           <>
             <button
@@ -3792,7 +3798,8 @@ function App() {
             ],
           },
           ...(diagnostics ? [{ kind: "kv" as const, title: "诊断预览", tone: 6, items: [["版本", diagnostics.app_version], ["系统", diagnostics.system], ["镜像引擎", diagnostics.scrcpy_available ? "可用" : "不可用"], ["最近事件", `${diagnostics.events.length} 条`]] as [string, string][] }] : []),
-          { kind: "note", text: diagnosticsError ?? "诊断内容只在本机生成与导出，不上传；不包含剪贴板、口令或画面帧。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-diagnostics），此处只保留动态错误。
+          ...(diagnosticsError ? [{ kind: "note" as const, text: diagnosticsError, kind_of_alert: "warn" as const }] : []),
         ];
       }
       case "multi":
@@ -3854,7 +3861,7 @@ function App() {
               { label: "结束全部", onClick: () => void stopMirroring(), disabled: isStopping || activeSessionCount === 0, danger: true },
             ],
           },
-          { kind: "note", text: "多端视图只读本机设备与会话；设备之间不互传文件，也不需要账号或云端。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-multi）。
         ];
       case "mirror":
         return [
@@ -3910,7 +3917,7 @@ function App() {
               { label: "设备信息", onClick: () => openView("info") },
             ],
           },
-          { kind: "note", text: "受保护的支付、密码等页面会由系统限制为黑屏，这不是镜像故障。会话可随时结束。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-mirror-protected）。
         ];
       case "present":
         return [
@@ -3935,7 +3942,7 @@ function App() {
               { label: options.desktop_mode ? "关闭桌面模式" : "开启桌面模式", onClick: () => void applyOptionsUpdate({ ...options, desktop_mode: !options.desktop_mode }), disabled: applyingOptions },
             ],
           },
-          { kind: "note", text: "演示 = 按当前画质与桌面模式设置发起真实镜像会话；会话画面在独立镜像窗口呈现，可全屏投到外部显示器。激光笔 / 白板标注、演示文稿管理尚未实现，这里不伪装。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-demo）。
         ];
       case "keymap": {
         const profile = activeKeymapProfile;
@@ -4062,7 +4069,7 @@ function App() {
             ),
           },
           { kind: "actions", actions: [{ label: "打开键盘设置", onClick: () => readySerial ? void openKeyboardSettings() : openView("connect") }] },
-          { kind: "note", text: "映射方案只保存在本机；焦点在镜像窗口时键盘输入由 scrcpy 直输处理，映射注入在这个测试面板聚焦时生效。触控注入走 adb，待真机验证。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-keymap）。
         ];
       }
       case "schedule":
@@ -4118,7 +4125,8 @@ function App() {
             ),
           },
           { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active, danger: true }] },
-          { kind: "note", text: recordingError ?? "计划只在本应用运行时触发：不做开机后台拉起、不绕过设备授权；到点时设备需已有镜像会话（录制依赖显示会话），失败原因会写进运行日志。点击计划可启停，× 可删除。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-plans），此处只保留动态错误。
+          ...(recordingError ? [{ kind: "note" as const, text: recordingError, kind_of_alert: "warn" as const }] : []),
         ];
       case "replay": {
         const script = activeReplay;
@@ -4232,7 +4240,8 @@ function App() {
               </details>
             ),
           },
-          { kind: "note", text: [replayNotice, "坐标以当前设备的分辨率与屏幕方向为准；脚本只保存在本机。录制镜像窗口里的真实触控需要控制通道，尚未实现——这里是编排式回放，不会伪装成录屏式回放。待真机验证。"].filter(Boolean).join(" ") },
+          // X10-159：静态说明移入帮助中心知识库（kb-replay），此处只保留动态回放通知。
+          ...(replayNotice ? [{ kind: "note" as const, text: replayNotice }] : []),
         ];
       }
       case "files":
@@ -4363,11 +4372,11 @@ function App() {
               </section>
             ),
           },
-          { kind: "note", text: "截图默认保存到本机 MirrorDock 目录；受保护页面会截成黑屏。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-shot）。
         ];
       case "record":
         return [
-          ...(!proEdition ? [{ kind: "note" as const, kind_of_alert: "info" as const, text: "录像是专业版功能；未激活时核心镜像与传输保持免费可用。" }] : []),
+          // X10-159：静态说明移入帮助中心知识库（kb-record-pro）。
           ...(recording?.active ? [{
             kind: "custom" as const,
             children: (
@@ -4382,7 +4391,8 @@ function App() {
           }] : []),
           { kind: "kv", title: "录像参数", tone: 5, items: [["状态", recording?.active ? `正在录制：${recording.file_name}` : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["保存位置", appSettings.recording_dir ?? "本机视频 / MirrorDock"], ["授权", "手动启停，不重启镜像"]] },
           { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active }, { label: "在文件夹中显示", onClick: () => void revealRecording(), disabled: !recording }] },
-          { kind: "note", text: recordingError ?? "录像只保存在本机，不默认云录制；「结束录制」无确认，误停止可重新开始。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-record），此处只保留动态错误。
+          ...(recordingError ? [{ kind: "note" as const, text: recordingError, kind_of_alert: "warn" as const }] : []),
         ];
       case "album":
         return [
@@ -4447,7 +4457,10 @@ function App() {
               </section>
             ),
           },
-          { kind: "note", text: [galleryError, galleryMessage, "相册为只读浏览，只提供这几个公开媒体目录；其他位置请用文件传输。读取失败会明确报错，不上传任何内容。"].filter(Boolean).join(" ") },
+          // X10-159：静态说明移入帮助中心知识库（kb-gallery），此处只保留动态状态。
+          ...([galleryError, galleryMessage].filter(Boolean).length
+            ? [{ kind: "note" as const, text: [galleryError, galleryMessage].filter(Boolean).join(" ") }]
+            : []),
         ];
       case "install":
         return [
@@ -4569,7 +4582,8 @@ function App() {
               </section>
             ),
           },
-          { kind: "note", text: appActionNotice ? `${appActionNotice.error ? "⚠" : "✓"} ${appActionNotice.text}` : "「打开」用系统默认入口启动应用；「卸载」会先弹确认、卸载后无法恢复，系统预装应用无法卸载。应用数据不读取、不上传。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-apps），此处只保留动态操作结果（设备/进度状态保留）。
+          { kind: "note", text: appActionNotice ? `${appActionNotice.error ? "⚠" : "✓"} ${appActionNotice.text}` : `目标设备：${currentDeviceLabel ?? "未选择设备"} · 进度：${batchBusy ? "正在逐个安装…" : "空闲"}` },
         ];
       }
       case "notify":
@@ -4670,7 +4684,7 @@ function App() {
               </section>
             ),
           },
-          { kind: "note", text: notifyKeep ? "通知已保留在本机（最多 50 条），重启应用后恢复；关闭开关即清除已存记录。内容不出本机。「复制验证码」只写入本机剪贴板；「清除」会同步移除手机通知，需手机常驻连接在线。" : "通知正文只在本窗口临时展示，默认不落盘、不上传；「复制验证码」只写入本机剪贴板；「清除」会同步移除手机通知，需手机常驻连接在线，离线时不会清本地。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-notify）。
         ];
       case "pro":
         return [
@@ -4696,7 +4710,7 @@ function App() {
               </section>
             ),
           },
-          { kind: "note", text: "激活仅在本机校验；不收集设备信息，也不需要联网账号。" },
+          // X10-159：静态说明移入帮助中心知识库（kb-license）。
         ];
       default:
         return [];
@@ -4959,7 +4973,19 @@ function App() {
                     {heroBattery !== null && <small>{heroBattery}</small>}
                   </div>
                   <div className="hero-id">
-                    <b>{primaryLabel}</b>
+                    {/* X10-159：收藏星标放设备名后面（用户指定）。 */}
+                    <div className="hero-name-row">
+                      <b>{primaryLabel}</b>
+                      <button
+                        className="text-button fav-toggle"
+                        type="button"
+                        aria-label={primaryFavorite ? `取消收藏 ${primaryLabel}` : `收藏 ${primaryLabel}`}
+                        title={primaryFavorite ? "取消收藏" : "收藏（最近列表置顶）"}
+                        onClick={() => toggleFavoriteDevice(primary.serial)}
+                      >
+                        {primaryFavorite ? "★" : "☆"}
+                      </button>
+                    </div>
                     <span>{heroSub}</span>
                     <div className="hero-chips">
                       <span className="badge ok"><span className="dot ok" aria-hidden="true" />{heroChannel ? `${heroChannel} · 已授权` : "已授权"}</span>
@@ -4983,7 +5009,7 @@ function App() {
                     <button className="btn btn-secondary btn-sm" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
                       {isChecking ? "检查中…" : "重新检查"}
                     </button>
-                    <span className="device-card-actions">{deviceActions(primary, primaryOwned, primaryFavorite, primaryUsbAlt)}</span>
+                    <span className="device-card-actions">{deviceActions(primary, primaryOwned, primaryFavorite, primaryUsbAlt, false)}</span>
                   </div>
                 </div>
               );
@@ -5246,8 +5272,12 @@ function App() {
 
               {/* X10-150：按预览模板补齐设备中心下半区——常用工具六宫格（全部是真实
                   视图入口）、最近任务（仅本会话真实操作，不持久化）、安全边界说明。 */}
-              {readyDevice && (
-                <>
+            </section>
+
+            {/* X10-159：常用工具/最近任务移出连接卡成为独立模块（用户：这几块应是单独模块且有边距）；
+                安全边界说明移入帮助中心知识库，不再散落在页面底部。 */}
+            {readyDevice && (
+              <div className="home-extra">
                   <section className="card" aria-label="常用工具">
                     <div className="card-head"><h3 className="card-title">常用工具</h3></div>
                     <div className="card-body">
@@ -5292,12 +5322,11 @@ function App() {
                       </div>
                     )}
                   </section>
-                  <p className="assistant-note" role="note">安全边界：无需账号、数据不出本机；镜像、传输、卸载都需要设备显式授权。</p>
-                </>
-              )}
-            </section>
+              </div>
+            )}
 
-            {/* X10-157：品牌引导按预览改为独立卡片（card-head + card-body），置于连接卡之后。 */}
+            {/* X10-157：品牌引导按预览改为独立卡片（card-head + card-body），置于连接卡之后。
+                X10-159-8：按用户裁定改回原条件——仅无就绪设备时显示。 */}
             {!isChecking && !readyDevice && (
               <section className="card brand-guide-card" aria-live="polite">
                 <div className="card-head">按品牌查看开启步骤</div>
@@ -6261,6 +6290,34 @@ function App() {
               })}
             </div>
 
+            {/* X10-159：功能说明知识库——原散落在各工具页底部的静态说明条统一收纳在这里。
+                与帮助文章同款折叠交互；动态状态（错误/进度/结果）仍留在对应页面。 */}
+            <div className="kb-section-title">功能说明知识库</div>
+            <div className="kb-list">
+              {knowledgeEntries.map((entry) => {
+                const expanded = expandedKbIds.has(entry.id);
+                return (
+                  <div className={`card capability-panel help-article kb-entry ${expanded ? "help-article-open" : ""}`} key={entry.id}>
+                    <button
+                      type="button"
+                      className="card-head help-article-head"
+                      aria-expanded={expanded}
+                      onClick={() => setExpandedKbIds((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(entry.id)) { next.delete(entry.id); } else { next.add(entry.id); }
+                        return next;
+                      })}
+                    >
+                      <span className="help-article-chevron" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+                      <span className="help-article-title">{entry.title}</span>
+                      <span className="badge neutral">{entry.view}</span>
+                    </button>
+                    {expanded && <p className="capability-pending">{entry.text}</p>}
+                  </div>
+                );
+              })}
+            </div>
+
             <section className="card connection-card" aria-live="polite">
               <div className="card-head"><h3 className="card-title">诊断包</h3><span className="badge neutral">仅本机 · 不上传</span></div>
               <div className="card-body">
@@ -6291,10 +6348,7 @@ function App() {
               {diagnosticsError && <p className="capability-pending" role="alert">{diagnosticsError}</p>}
               </div>
             </section>
-            <aside className="privacy-note">
-              <strong>隐私承诺</strong>
-              <p>本地优先：数据只经过你的数据线或局域网，不经过任何服务器。</p>
-            </aside>
+            {/* X10-159：原底部「隐私承诺」提示条移入上方功能说明知识库（kb-privacy）。 */}
           </section>
           </>
           ) : (

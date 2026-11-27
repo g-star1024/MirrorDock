@@ -682,13 +682,17 @@ button, input, select { font-family: inherit; }
 .theme-option.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); color: var(--accent); font-weight: 600; }
 .theme-option strong { font-size: var(--fs-12); font-weight: inherit; color: inherit; }
 .theme-option small { color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); font-weight: 400; }
-.theme-swatch { display: flex; height: 24px; overflow: hidden; border-radius: var(--r-control); }
+/* X10-159：加 width:100% —— WebKit（WKWebView）下 flex 列容器内的 span 不会像
+   Chromium 那样自动拉伸到整行宽，色块条会塌缩成 0 宽完全不可见（真机实测）。 */
+.theme-swatch { display: flex; width: 100%; height: 24px; overflow: hidden; border-radius: var(--r-control); }
 .theme-swatch i { flex: 1; }
 .swatch-a i:nth-child(1) { background: #F7F8F9; } .swatch-a i:nth-child(2) { background: #2563EB; } .swatch-a i:nth-child(3) { background: #FFFFFF; }
 .swatch-b i:nth-child(1) { background: #14161B; } .swatch-b i:nth-child(2) { background: #4D8DFF; } .swatch-b i:nth-child(3) { background: #1B1E24; }
 .swatch-c i:nth-child(1) { background: #FBFAF9; } .swatch-c i:nth-child(2) { background: #2E6BD6; } .swatch-c i:nth-child(3) { background: #FFFFFF; }
 .swatch-d i:nth-child(1) { background: #FAF6F3; } .swatch-d i:nth-child(2) { background: #C1500A; } .swatch-d i:nth-child(3) { background: #FFFFFF; }
 .swatch-e i:nth-child(1) { background: #E9EEF5; } .swatch-e i:nth-child(2) { background: #3E63DD; } .swatch-e i:nth-child(3) { background: #FFFFFF; }
+/* X10-159：主题说明限宽换行——宽窗口下不再拉成一行横贯整页。 */
+.theme-settings .setting-note { max-width: 640px; }
 
 /* X10-128：爱思原型对齐的导航、工作区与右栏细节 */
 .title-brand small { display: block; margin-top: 1px; font-size: 8px; letter-spacing: .14em; opacity: .72; }
@@ -1030,6 +1034,9 @@ button, input, select { font-family: inherit; }
 .hero-phone svg { width: 26px; height: 26px; }
 .hero-phone small { font-size: 11px; font-weight: 600; white-space: nowrap; }
 .hero-id { min-width: 0; }
+/* X10-159：收藏星标放设备名后面（用户指定）。 */
+.hero-name-row { display: flex; align-items: center; gap: 6px; }
+.hero-name-row .fav-toggle { font-size: 18px; color: var(--accent); }
 .hero-id b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .hero-id > span { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
 .hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
@@ -1038,7 +1045,8 @@ button, input, select { font-family: inherit; }
 .hero-media { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .hero-media b { display: block; font-size: 13px; }
 .hero-media small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-.hero-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+/* X10-159：改横向单行——重新检查与屏幕唤醒/开始镜像/取消授权在同一行（放不下时才换行）。 */
+.hero-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .hero-actions .device-card-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; white-space: nowrap; flex-wrap: wrap; justify-content: flex-end; }
 .hero-actions .primary-button, .hero-actions .secondary-button { margin: 0; }
 @media (max-width: 1199px) {
@@ -1665,6 +1673,14 @@ h2 { font-size: var(--fs-16); }
 .connection-card > .connection-heading { margin: calc(-1 * var(--sp-5)) calc(-1 * var(--sp-5)) var(--sp-5); padding: var(--sp-3) var(--sp-5); }
 /* 帮助页「诊断包」是标准 .card（card-head + card-body 结构），不做负 margin */
 .card.connection-card { padding: 0; }
+
+/* X10-159：设备中心下半区（常用工具/最近任务）移出连接卡成为独立模块，统一 18px 间距。 */
+.home-extra { display: grid; gap: 18px; margin-bottom: 18px; }
+
+/* X10-159：帮助中心「功能说明知识库」——各工具页底部说明统一收纳。 */
+.kb-list { display: grid; gap: 10px; }
+.kb-section-title { margin: 4px 0 2px; font-size: 14px; font-weight: 700; color: var(--text); }
+.kb-entry .badge { flex: none; }
 .card.connection-card > .card-head { margin: 0; }
 .connection-card > .device-cards { margin-top: var(--sp-2); }
 
@@ -1775,7 +1791,8 @@ ol.setup-steps.steps li.step-line::before { top: auto; }
 
 /* X10-158-C：按钮组与上下文字留出间距（预览间距体系；此前 action-row 无 margin 时贴死） */
 .connection-card .action-row { margin: 10px 0; }
-.settings-card > .settings-actions { margin-top: 10px; }
+/* X10-159：settings-actions 真实父级是 .settings-rows（此前 .settings-card > 选择器不匹配，导致关于页按钮贴文案）。 */
+.settings-card > .settings-actions, .settings-rows > .settings-actions { margin-top: 10px; }
 
 /* X10-158-G：帮助文章正文不再贴卡边（card.capability-panel padding:0 供卡头拉满，正文补回） */
 .help-article > .capability-pending { padding: 0 var(--sp-5) var(--sp-5); margin: 0; }

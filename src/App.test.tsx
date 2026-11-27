@@ -641,8 +641,10 @@ describe("App rendering", () => {
     expect(screen.getByText(/尚未读取相册目录/)).toBeInTheDocument();
 
     // X10-134：应用管理升级为启动/卸载；卸载需要显式确认，旧「只读」文案已下线。
+    // X10-159：静态说明移入帮助中心知识库，页面底部只显示动态状态（目标设备/进度）。
     fireEvent.click(within(sidebar).getByRole("button", { name: "应用管理" }));
-    expect(await screen.findByText(/「打开」用系统默认入口启动应用/)).toBeInTheDocument();
+    expect(await screen.findByText(/目标设备：/)).toBeInTheDocument();
+    expect(screen.queryByText(/「打开」用系统默认入口启动应用/)).not.toBeInTheDocument();
     expect(screen.queryByText(/应用清单只读/)).not.toBeInTheDocument();
   });
 
