@@ -51,3 +51,4 @@ companion/local.properties
 
 # scrcpy 运行时随包资源（本地由 scripts/prepare-runtime.sh 复制，CI 由打包作业下载）
 src-tauri/resources/scrcpy/
+public/preview.html

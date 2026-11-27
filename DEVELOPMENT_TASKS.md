@@ -1580,3 +1580,30 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **修复**：去掉 `!readyDevice` 门禁，连接卡头（第一步：连接手机 / 手机已准备就绪 / 重新检查）无条件显示；状态提示（statusStack）与其余设备卡列表保持原样。无设备态不受影响（仍显示「等待连接手机」）。
 - **验证**：pnpm build 0 error；vitest 125/125；cargo check 过；Playwright 设备中心真实空态「第一步：连接手机 / 等待连接手机 / 重新检查」正常、0 横向溢出、0 控制台错误。
 - **诚实边界**：用户截图2 里的诊断横幅（输入法/无线断开/崩溃）、备用机卡、最近任务表格行均为预览**演示态假数据**；客户端按「真实状态原则」不伪造——真实态无这些问题时不显示是**正确**的，不是差距。真实有诊断时 statusStack 会如实显示。
+
+## X10-156 客户端样式与预览全组件像素级对齐（计算样式 diff 驱动，未发版等用户验收）
+- **背景**：用户裁定「客户端样式跟预览百分百同步，不到百分百不发版」。此前 X10-152/153/154/155 是逐点目测修复，本轮改为**程序化比对**：Playwright 在预览页与客户端各跑一遍采集脚本（19 视图 × 27 类组件 × 16 项计算样式），按「预览设计系统类 ↔ 客户端类」映射程序化 diff，首轮 55 条差异逐项修复后复测。
+- **按钮家族全量对齐预览规格（39 处 JSX 类名替换，零 state/事件/文案改动）**：客户端 `primary-button/secondary-button`（40px/14px/700）全部换成预览 `btn btn-primary/btn-secondary/btn-danger` + 视图对应的 `btn-sm`（32px/0 14px/13px/600；btn-sm 26px/0 10px/12px）。类名映射以预览各视图 data-act → class 清单为准（如 截图=btn-primary、通知回复/常驻通道/设置行=btn-secondary btn-sm、取消授权确认=btn-danger btn-sm、安装到手机/激活专业版=btn-primary btn-sm）。
+- **卡头结构对齐预览 head-row**：home 连接卡头与 connect 三卡头改为 `head-row`（badge + head-title）+ `spacer` + 卡头内小按钮；移除预览不存在的 `eyebrow`（唯一用例）；connect 卡头说明文字移入正文（预览结构）。新增 `.head-row/.head-title/.card-head .spacer` CSS。
+- **组件级修复**：①设备卡 `.device-card` 对齐预览 `.device-tile`（12/16 内边距、6px 圆角、13/12 字号；active 态硬编码绿色→accent token）；②引导面板 `.capability-panel` 灰底→白卡+发丝线+20px 内边距；③`.text-button` 对齐预览 `.btn-ghost`（4/8 内边距、accent 600、hover 底色替代下划线）；④警示条 `.diagnostic` 对齐预览 `.alert`（左 3px 色条、12/16、6px 圆角、fs-13/lh-body）；⑤步骤符号数字圆圈→预览 6px 圆点、说明字号 13.5px/1.6→12px/lh-body（步骤区 185→136px 与预览一致）；⑥kv dt/dd 微调（margin-bottom 2px / weight 500）；⑦帮助文章卡头 12/20+min-height 46；⑧Hero 20px 内边距+16px 间距；⑨`.connection-card` 内边距统一 sp-5（=预览 card-body 20px）+ 帮助页 `.card.connection-card` 复合类豁免负 margin。
+- **验证**：pnpm build 0 error；vitest 125/125；cargo check 过；复测 diff 55→28 条且剩余均为假阳性（btn-sm 变体首元素采样、预览禁用态按钮、fixed 定位 titlebar 采样漏检——逐条人工核实）；19 视图 ×1792px + 7 视图 ×1000px 全 0 横向溢出、0 JS 错误（仅 favicon 404）；设备中心/连接与授权与预览并排截图逐区核对一致。
+- **诚实边界（非样式差异）**：①预览的「演示数据/模拟加载」开关不搬入客户端（真实状态原则）；②客户端视图头右上「连接设备」按钮为真实功能入口，预览无——保留不丢功能；③卡片高度差来自内容条数不同（如 Pro 许可管理、设备信息行数）；④浏览器无 Tauri 后端的琥珀「无法读取…」横幅为真实空态。
+- **状态**：**未发版**（用户裁定不到 100% 不发版，等用户在 dev server 逐页验收后再定 v0.4.35 重打或 v0.4.36）。已推送的 v0.4.35-beta Release（id 460062645）系本轮之前的 commit 6dee208（仅含连接卡恢复+Cargo.lock 修复），**不含本轮全量对齐**——建议用户确认后删除该 Release 与 tag 重打。
+
+## X10-157 设置中心 + 设备中心未连接态 二轮对齐（用户复检仍指出差距，未发版等验收）
+- **背景**：用户附 4 图复检（设置中心预览 vs 客户端、设备中心未连接预览 vs 客户端），指出「还有差距，不能交付」。本轮不再目测，直接读预览 HTML 源码逐条对照修复。
+- **用户截图差异的真实原因（先查清再动手）**：客户端设置页截图（~1080px 宽）导航被 `@media(max-width:1100px)` 网格磁贴化，而预览断点是 **1199px + flex 横排**——同视口下客户端会磁贴化而预览（更宽窗口截图）保持竖列，是「断点+磁贴」双重不一致造成的观感雪崩。
+- **设置中心修复**：
+  - 分组导航：加图标（对齐预览 i-sun/i-set/i-mirror/i-phone/i-keyboard/i-shield/i-info，NavIcon 单 path 多子路径实现）、文字 600 粗体→400 常规 text-2、active=accent-soft+accent（含图标同色）、item 内边距 8/10、组间 gap 2px、small 11px；断点 1100 网格→1199 flex 横排（与预览逐字一致）。
+  - 页头：h1 15px→**20px/700/lh-tight**、副标题 11.5→13px；页头改**吸顶通栏**（sticky+bg+min-height 64+padding 12/24，对齐预览 .vh）；删除页头下多余 intro 说明行（预览无）；页头动作按钮「偏好设置」(primary sm)→「**恢复默认**」(btn-secondary 32px，真实调用 resetAllOptions)。
+  - 主题卡：卡头单行 14px/600 + 负 margin 拉满卡边 + min-height 46 分隔线；主题卡 surface-2 灰底/inset 描边→预览白底+hover line-strong+选中 accent 边+`0 0 0 2px accent-soft` 外圈+accent 文字；色条 22px/6px/带边框→24px/r-control/无边框；网格 160px→150px/gap 12；说明合并为卡底单条 hint（预览结构）；strong/small 字号 12.5/10.5→12/12。
+  - 设置行：name 14px/650 text→13px/500 text-2、desc 12.5→12px/lh-body、行距 13→12px；6 张设置卡卡头去掉装饰性 p 说明（通用/快捷键/关于），镜像窗口与桌面模式改预览同款 badge，版本与授权的动态状态（版本/许可证/到期）完整保留进 badge（不丢真实信息）。
+- **设备中心（未连接）修复**：
+  - 「按品牌查看开启步骤」从连接卡内嵌 capability-panel → **独立 .card**（card-head+card-body，置于连接卡之后，预览同构）；引导语/收尾语 capability-pending→hint；chips 容器 device-picker→action-row(margin-top 10)；brand-notes→12px muted（预览 ul.hint）。
+  - 三步说明 p 加 hint（12px/lh-body）；conn-empty-lead b 600→700（预览 b 默认粗体）。
+- **页头动作按钮全视图对齐预览 headerActions**：新增 viewActionConfig()（替换旧 runViewAction）——connect=重新检查(secondary)/settings=恢复默认(secondary)/info=复制诊断摘要(primary)/mirror·present·keymap·schedule·replay=primary 32px；home·multi·files·shot·record·album·install·apps·notify·help·pro 不再渲染页头按钮（预览非 demo 态本就无按钮；功能全数保留在卡头/卡脚/卡内——逐一核实：files 刷新、shot 立即截图、album 刷新相册、apps 刷新清单、notify 清空、install 选择 APK、record/album 卡内 primary 均在）。multi 的刷新依赖视图切换时 useEffect 自动 refreshDevices。
+- **测试**：entitlement 3 条断言随授权 badge 新文案同步更新（badge 函数匹配，版本/许可证/到期信息仍全量断言）。
+- **验证**：tsc 0 error；vite build 过；vitest **125/125**；Playwright 19 视图 1080px 全 0 横向溢出、0 console.error；设置页 1440/1080 两档与预览截图逐区核对一致（1440 竖导航+图标、1080 横排 chips 均与预览同断点行为）；设备中心未连接与预览并排核对一致。
+- **诚实边界**：浏览器态的 3 条琥珀「无法读取连接状态/会话状态/桌面模式配置」横幅与「无法读取本机最近使用的设备记录」是**真实后端不可达报错**（无 Tauri 的 5173 环境特有），打包客户端不出现，不是样式差距；预览「演示数据/模拟加载」开关仍不搬入。
+- **状态**：**未发版未 commit**（与 X10-156 改动同在工作区，等用户逐页验收后一起 commit+发版；旧 v0.4.35-beta Release 460062645 仍待处置）。
+- **X10-157b 追加（用户复检指出「两个按钮靠在一起了」）**：伴侣扫码配对/常驻通道/批量安装/无线配对/无线发现/诊断 6 处按钮组的裸 `<span>` 容器无 flex/gap（旧规则 `.capability-panel > span` 只覆盖能力面板，connection-card 等处的 span 不在覆盖范围；X10-156 批量换 `.btn` 家族后旧按钮类自带 margin 丢失 → 相邻贴死）。修复：新增预览同款基础类 `.action-row { display:flex; gap:var(--sp-2); flex-wrap:wrap; align-items:center }`（App.css，.btn 定义后），6 处裸 span 全部替换为 `action-row`。验证：实测「开始配对/结束配对」「开启/关闭常驻通道」间距均 8px；tsc 0 error；vitest 125/125。教训：预览 `.btn` 自身无 margin，间距全靠容器 gap——迁移按钮类时必须同步迁移容器语义（span→action-row），否则间距丢失。

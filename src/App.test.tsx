@@ -890,7 +890,7 @@ describe("entitlement", () => {
 
   it("free_edition_shows_activation_ui_and_locks_recording_switch", async () => {
     render(<App />);
-    expect(await screen.findByText("当前版本：免费版")).toBeInTheDocument();
+    expect(await screen.findByText((_, el) => el?.classList.contains("badge") === true && el.textContent === "免费版")).toBeInTheDocument();
     const recordBox = screen.getByRole("checkbox", { name: /启用视频录制/ });
     expect(recordBox).toBeDisabled();
     expect(screen.getByText(/专业版功能，在下方「版本与授权」激活后可用/)).toBeInTheDocument();
@@ -913,7 +913,7 @@ describe("entitlement", () => {
     expect(activateCall).toBeTruthy();
     expect(activateCall![1]).toEqual({ licenseKey: "MD1-TESTLICENSE" });
     // 激活后呈现专业版状态与撤销入口，录制开关恢复可用。
-    expect(await screen.findByText("当前版本：专业版（许可证 2026-001，永久有效）")).toBeInTheDocument();
+    expect(await screen.findByText((_, el) => el?.classList.contains("badge") === true && el.textContent === "专业版 · 2026-001 · 永久有效")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "撤销本机授权" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: /启用视频录制/ })).toBeEnabled();
   });
@@ -930,7 +930,7 @@ describe("entitlement", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "激活专业版" }));
     expect(await screen.findByText(/许可证签名无效。 请确认许可证来自官方渠道。/)).toBeInTheDocument();
-    expect(screen.getByText("当前版本：免费版")).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.classList.contains("badge") === true && el.textContent === "免费版")).toBeInTheDocument();
   });
 });
 

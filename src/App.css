@@ -144,7 +144,7 @@ h2 { margin-bottom: 0; font-size: 19px; letter-spacing: -.01em; }
 /* X10-154：设备中心空态——「在电脑上安心使用手机」由页头大标题改为卡片内引导
    （对齐预览 card-body 内 <b style=fs-14> + .hint，置于状态栈后、三步前）。 */
 .conn-empty-lead { margin-top: 4px; }
-.conn-empty-lead b { font-size: var(--fs-14); font-weight: 600; color: var(--text); }
+.conn-empty-lead b { font-size: var(--fs-14); font-weight: 700; color: var(--text); }
 .conn-empty-lead .hint { margin: 4px 0 0; }
 
 .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); grid-auto-rows: 1fr; gap: 14px; margin-top: 14px; }
@@ -190,18 +190,24 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 /* -- 设置页：每张卡一个主题，行式布局（名称+说明居左，控件居右） ---------- */
 
-.settings-card { padding: 22px 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 10px 30px rgba(28, 45, 80, .06); margin-bottom: 16px; }
-.settings-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
-.settings-card-head h2 { margin: 0; font-size: 15.5px; color: var(--text); }
-.settings-card-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+/* X10-157：设置卡对齐预览 .card（发丝线 + 6px 圆角 + 无投影，body 内边距 20px，
+   卡头负 margin 拉满卡边 + 12/20 内边距 + min-height 46） */
+.settings-card { padding: var(--sp-5); border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); box-shadow: none; margin-bottom: 16px; }
+.settings-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin: calc(-1 * var(--sp-5)) calc(-1 * var(--sp-5)) var(--sp-5);
+  padding: var(--sp-3) var(--sp-5); min-height: 46px; border-bottom: 1px solid var(--line);
+}
+.settings-card-head h2 { margin: 0; font-size: var(--fs-14); font-weight: 600; color: var(--text); display: inline-flex; align-items: center; gap: 8px; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 10px; flex: 0 0 auto; }
 
 .settings-rows { display: grid; }
-.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .setting-row:last-of-type { border-bottom: 0; }
-.setting-info { display: grid; gap: 3px; min-width: 0; }
-.setting-name { color: var(--text); font-size: 14px; font-weight: 650; }
-.setting-desc { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.setting-info { display: grid; gap: 2px; min-width: 0; }
+/* X10-157：对齐预览 .settings-row（b 13px/500 · small 12px/lh-body · 行距 12px） */
+.setting-name { color: var(--text-2); font-size: var(--fs-13); font-weight: 500; }
+.setting-desc { color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); }
 .setting-toggle { flex: 0 0 auto; display: flex; align-items: center; }
 .setting-toggle input, .setting-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); }
 .setting-row select.setting-control { flex: 0 0 auto; max-width: 62%; font: inherit; font-size: 13.5px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
@@ -653,16 +659,18 @@ button, input, select { font-family: inherit; }
 .statusbar-sep { opacity: .5; }
 
 /* 设置页主题选择器 */
-.theme-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+/* X10-157：主题卡对齐预览 .theme-grid/.theme-swatch（150px 网格、白底、ring 选中态） */
+.theme-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .theme-option {
-  display: grid; gap: 6px; padding: 11px; border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--surface-2); color: var(--text); text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line);
+  border-radius: var(--r-card); background: var(--surface); cursor: pointer; text-align: left;
+  font-size: var(--fs-12); color: var(--text-2);
 }
-.theme-option:hover { border-color: var(--accent); }
-.theme-option.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
-.theme-option strong { font-size: 12.5px; }
-.theme-option small { color: var(--muted); font-size: 10.5px; line-height: 1.45; }
-.theme-swatch { display: flex; height: 22px; overflow: hidden; border-radius: 6px; border: 1px solid rgba(0,0,0,.08); }
+.theme-option:hover { border-color: var(--line-strong); }
+.theme-option.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); color: var(--accent); font-weight: 600; }
+.theme-option strong { font-size: var(--fs-12); font-weight: inherit; color: inherit; }
+.theme-option small { color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); font-weight: 400; }
+.theme-swatch { display: flex; height: 24px; overflow: hidden; border-radius: var(--r-control); }
 .theme-swatch i { flex: 1; }
 .swatch-a i:nth-child(1) { background: #2581f0; } .swatch-a i:nth-child(2) { background: #e8effc; } .swatch-a i:nth-child(3) { background: #fff; }
 .swatch-b i:nth-child(1) { background: #1d4378; } .swatch-b i:nth-child(2) { background: #181f2c; } .swatch-b i:nth-child(3) { background: #5b9dff; }
@@ -693,15 +701,16 @@ button, input, select { font-family: inherit; }
 .assistant-nav-items .nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-strong); font-weight: 650; }
 .sidebar-foot p { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 
-/* X10-148：页头不再通栏负边距吸顶——标题带与内容列同宽居中（按钮不再贴窗口右缘，
-   标题不再顶着顶栏）。滚动时页头随页面滚走，与预览模板的静态页头一致。 */
+/* X10-157：页头对齐预览 .vh——吸顶、通栏、bg 底、20px 标题 + 13px 副标题。
+   （X10-148 曾改为静态窄宽页头，与本轮 1:1 复刻裁定冲突，以预览为准。） */
 .assistant-work-head {
-  display: flex; align-items: center; gap: 12px;
-  width: min(1600px, 100% - 48px); margin: 0 auto; padding: 14px 0 12px;
-  border-bottom: 1px solid var(--line); background: transparent; color: var(--text);
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 16px; flex-wrap: nowrap;
+  min-height: 64px; width: 100%; margin: 0; padding: 12px 24px;
+  border-bottom: 1px solid var(--line); background: var(--bg); color: var(--text);
 }
-.assistant-work-head h1 { margin: 0; font-size: 15px; }
-.assistant-work-head > span { color: var(--muted); font-size: 11.5px; }
+.assistant-work-head h1 { margin: 0; font-size: var(--fs-20); font-weight: 700; line-height: var(--lh-tight); letter-spacing: -.01em; }
+.assistant-work-head > span { color: var(--muted); font-size: var(--fs-13); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-work-spacer { margin-inline-start: auto; }
 .assistant-work-search {
   display: flex; align-items: center; gap: 5px; width: 150px; height: 27px; padding: 0 8px;
@@ -1152,13 +1161,14 @@ button, input, select { font-family: inherit; }
 }
 .secondary-button:hover:not(:disabled) { background: var(--surface-2); }
 
-/* 旧页面容器收敛为卡语言：16px 圆角 → 12px、硬描边 → 柔影 */
-.connection-card, .settings-card {
+/* 旧页面容器收敛为卡语言：X10-157 起 settings-card 在 193 行已对齐预览 .card，
+   这里只保留 connection-card（X10-156 已在 1646 行覆盖为预览规格）。 */
+.connection-card {
   border: 0; border-radius: var(--radius); box-shadow: var(--shadow);
   background: var(--surface);
 }
-:root[data-theme="b"] .connection-card, :root[data-theme="b"] .settings-card { border: 1px solid var(--line); }
-:root[data-theme="d"] .connection-card, :root[data-theme="d"] .settings-card { border: 1px solid var(--line); box-shadow: none; }
+:root[data-theme="b"] .connection-card { border: 1px solid var(--line); }
+:root[data-theme="d"] .connection-card { border: 1px solid var(--line); box-shadow: none; }
 .capability-panel { border: 0; border-radius: var(--radius); background: var(--surface-2); }
 .device-card { border: 0; border-radius: var(--radius); background: var(--surface-2); }
 .device-card:hover { background: var(--accent-soft); }
@@ -1168,26 +1178,27 @@ button, input, select { font-family: inherit; }
 
 /* X10-144 设置中心二级分组：左侧导航 + 右侧原设置卡（7 组一一对应，零丢项）。
    卡片 DOM 与事件绑定不改，仅用 panel-hidden 控制显隐。 */
-.settings-split { display: grid; grid-template-columns: 196px minmax(0, 1fr); gap: 16px; align-items: start; }
-.settings-nav { display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: var(--radius); background: var(--surface-2); }
+.settings-split { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: var(--r-card); background: var(--surface); border: 1px solid var(--line); }
 .settings-nav-item {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
-  min-height: 46px; padding: 8px 12px; border: 0; border-radius: var(--radius);
-  background: transparent; color: var(--muted); text-align: left; cursor: pointer;
+  display: flex; flex-direction: row; align-items: center; gap: 8px; width: 100%;
+  min-height: 40px; padding: 8px 10px; border: 0; border-radius: var(--r-control);
+  background: transparent; color: var(--text-2); text-align: left; cursor: pointer;
 }
-.settings-nav-item span { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.settings-nav-item small { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
-.settings-nav-item:hover { background: var(--surface); }
-.settings-nav-item.active { background: var(--surface); box-shadow: var(--shadow); }
-.settings-nav-item.active span { color: var(--accent-strong); }
+.settings-nav-item .ic { display: inline-flex; color: var(--muted); }
+.settings-nav-item .settings-nav-text { display: flex; flex-direction: column; font-size: var(--fs-13); font-weight: 400; color: var(--text-2); }
+.settings-nav-item small { font-size: var(--fs-11); color: var(--muted); line-height: 1.35; }
+.settings-nav-item:hover { background: var(--surface-2); }
+.settings-nav-item.active { background: var(--accent-soft); box-shadow: none; }
+.settings-nav-item.active .settings-nav-text { color: var(--accent); }
+.settings-nav-item.active .ic { color: var(--accent); }
 .settings-content { min-width: 0; }
 .settings-content .settings-card { margin-bottom: 0; }
-@media (max-width: 1100px) {
+@media (max-width: 1199px) {
   .settings-split { grid-template-columns: 1fr; }
-  /* X10-148：窄窗口下分组导航改网格铺排——flex 挤压会让「按设备 · 桌面模式」等
-     文字在按钮内换行错行。auto-fill 保证每列不小于 160px，整行整齐换行。 */
-  .settings-nav { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
-  .settings-nav-item { width: auto; min-height: 38px; }
+  /* X10-157：窄窗口对齐预览 @media 1199——导航横排 flex wrap（不再用网格磁贴）。 */
+  .settings-nav { flex-direction: row; flex-wrap: wrap; }
+  .settings-nav-item { flex: 0 1 auto; width: auto; min-height: 38px; }
 }
 
 /* X10-145 三个 legacy 面板的组件语言对齐（保真：只换视觉类，不动文案/事件）：
@@ -1314,6 +1325,9 @@ ol.wireless-steps.steps > li.step-line { font-size: 13px; }
   font-size: 13px; font-weight: 600; border: 1px solid transparent; cursor: pointer;
   transition: background .12s ease, border-color .12s ease, box-shadow .12s ease;
 }
+/* X10-157b：按钮组容器对齐预览 .action-row（预览 .btn 自身无 margin，全靠容器 gap 撑开）。 */
+.action-row { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: center; }
+
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn-primary {
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent));
@@ -1638,30 +1652,29 @@ ol.setup-steps.steps li.step-line::before { top: 0; }
 .settings-nav-item:hover { background: var(--surface-2); }
 .settings-nav-item.active { background: var(--accent-soft); box-shadow: none; }
 
-/* X10-155：设备中心/连接页主容器对齐预览 .card——发丝线边框 + 6px 圆角 + 无投影 + 标准内边距
-   （旧视觉 1156 行 border:0 + var(--radius) + var(--shadow) 重影 + 24/26 过宽内边距，观感与预览差距大）。
-   容器统一水平内边距；card-head 负 margin 拉满到卡边（保留发丝线分隔），其余子元素自然继承。 */
-.connection-card { border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: none; background: var(--surface); padding: var(--sp-4) var(--sp-5); }
+/* X10-155/156：设备中心/连接页主容器对齐预览 .card——发丝线边框 + 6px 圆角 + 无投影。
+   容器内边距 20px（对齐预览 .card-body）；card-head 负 margin 拉满到卡边
+   （保留发丝线分隔），头后留 20px（= 预览 body padding-top）。 */
+.connection-card { border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: none; background: var(--surface); padding: var(--sp-5); }
 .connection-card > .card-head,
-.connection-card > .connection-heading { margin: calc(-1 * var(--sp-4)) calc(-1 * var(--sp-5)) var(--sp-3); padding: var(--sp-3) var(--sp-5); }
-.connection-card > .device-cards { margin-top: var(--sp-3); }
+.connection-card > .connection-heading { margin: calc(-1 * var(--sp-5)) calc(-1 * var(--sp-5)) var(--sp-5); padding: var(--sp-3) var(--sp-5); }
+/* 帮助页「诊断包」是标准 .card（card-head + card-body 结构），不做负 margin */
+.card.connection-card { padding: 0; }
+.card.connection-card > .card-head { margin: 0; }
+.connection-card > .device-cards { margin-top: var(--sp-2); }
 
-/* 品牌引导对齐预览独立 .card（白底 + 发丝线 + card-head 分隔线），替代旧灰底 surface-2 */
-.capability-panel.brand-guide { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); margin-top: var(--sp-3); }
-.brand-guide > strong { display: block; padding: var(--sp-3) var(--sp-5); font-size: var(--fs-14); border-bottom: 1px solid var(--line); }
-.brand-guide > .capability-pending { padding: 0 var(--sp-5); }
-.brand-guide .device-picker { padding: 0 var(--sp-5); }
-.brand-guide .brand-steps,
-.brand-guide .brand-notes { padding: 0 var(--sp-5); }
-.brand-guide > .capability-pending:last-child { padding-bottom: var(--sp-4); }
-.settings-nav-item.active span { color: var(--accent); }
+/* X10-157：品牌引导改独立标准 .card（card-head + card-body），仅补内部间距：
+   引导语 → chips 行距 10px、chips → 步骤 12px（预览内联 margin 同值）。 */
+.brand-guide-card .action-row { margin-top: 10px; }
+.brand-guide-card .setup-steps { margin-top: 12px; }
+.brand-notes { margin: 10px 0 0; padding-inline-start: 20px; display: grid; gap: 6px; color: var(--muted); font-size: var(--fs-12); line-height: var(--lh-body); }
+.settings-nav-item.active .settings-nav-text { color: var(--accent); }
 .settings-row { padding: var(--sp-3) 0; }
 .settings-row .set-text b { font-weight: 500; }
-.theme-swatch { border-radius: var(--r-card); }
 
 /* 镜像状态 / mono / 提示 */
 .mono { font-family: var(--font-mono); font-size: var(--fs-13); }
-.hint { font-size: var(--fs-12); color: var(--muted); }
+.hint { font-size: var(--fs-12); color: var(--muted); line-height: var(--lh-body); }
 .assistant-card { border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: none; }
 .assistant-card > h4 { padding: var(--sp-3) var(--sp-5); min-height: 44px; font-size: var(--fs-14); }
 .assistant-note { border-radius: var(--r-card); font-size: var(--fs-13); }
@@ -1681,3 +1694,66 @@ ol.setup-steps.steps li.step-line::before { top: 0; }
   /* X10-153：情境右栏 <1200px 隐藏（对齐预览 @media max-width:1199px .ctx） */
   .right-rail { display: none; }
 }
+
+/* ===== X10-156：全组件与预览像素级对齐（head-row 卡头/设备卡/引导面板/文本钮/警示条/步骤/kv/hero） ===== */
+
+/* 卡头行：badge + 标题（预览 .head-row/.head-title）；spacer 推右 */
+.head-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
+.head-row .head-title { font-size: var(--fs-14); font-weight: 600; color: var(--text); }
+.card-head .spacer { margin-inline-start: auto; }
+.card-head p { margin: 4px 0 0; font-size: var(--fs-12); font-weight: 400; color: var(--muted); }
+
+/* 设备卡对齐预览 .device-tile：12/16 内边距 + 6px 圆角 + 13/12 字号 */
+.device-card { padding: var(--sp-3) var(--sp-4); border-radius: var(--r-card); }
+.device-card strong { font-size: var(--fs-13); }
+.device-card p { margin-top: 1px; font-size: var(--fs-12); }
+.device-card-active { border-color: var(--accent); background: var(--accent-soft); }
+
+/* 引导面板对齐预览 .card：白底 + 发丝线 + 20px 内边距（替代旧灰底面板） */
+.capability-panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: var(--sp-5); }
+.card.capability-panel { padding: 0; }
+.help-list .capability-panel { margin-top: 0; }
+.drop-toast .capability-panel { padding: var(--sp-3) var(--sp-4); }
+
+/* 文本按钮对齐预览 .btn-ghost（无边框强调链接钮，hover 底色而非下划线） */
+.text-button { height: auto; min-height: 24px; padding: 4px 8px; border: 0; border-radius: var(--r-control); background: none; color: var(--accent); font-weight: 600; font-size: var(--fs-13); cursor: pointer; }
+.text-button:hover:not(:disabled) { text-decoration: none; background: var(--accent-soft); }
+.text-button.danger { color: var(--danger); }
+.text-button.danger:hover:not(:disabled) { background: var(--danger-soft); }
+
+/* 幽灵按钮补全预览 .btn-ghost 规格 */
+.btn-ghost { height: auto; min-height: 24px; padding: 4px 8px; background: none; border: 0; color: var(--accent); font-weight: 600; }
+.btn-ghost:hover:not(:disabled) { background: var(--accent-soft); }
+
+/* 警示条对齐预览 .alert：左 3px 色条 + 12/16 内边距 + 6px 圆角 */
+.diagnostic { margin: var(--sp-2) 0 0; padding: var(--sp-3) var(--sp-4); border-radius: var(--r-card); border-left: 3px solid var(--warn); background: var(--warn-soft); color: var(--warn); font-size: var(--fs-13); line-height: var(--lh-body); }
+.status-stack { gap: var(--sp-2); }
+.status-stack .diagnostic { margin: 0; }
+
+/* 步骤对齐预览：6px 圆点（替代数字圆圈）+ 无纵向 padding（网格 gap 8px） */
+.steps { display: grid; gap: var(--sp-2); }
+.steps .step-line { display: block; padding: 0 0 0 14px; color: var(--text-2); font-size: var(--fs-13); line-height: var(--lh-body); }
+.steps .step-line::before { counter-increment: none; content: ""; left: 0; top: 7px; width: 6px; height: 6px; background: var(--accent); color: transparent; font-size: 0; display: block; }
+ol.setup-steps.steps li.step-line { padding: 0 0 0 14px; }
+ol.setup-steps.steps li.step-line::before { top: 7px; }
+.setup-steps { display: grid; gap: var(--sp-2); margin: 12px 0 0; }
+.setup-steps strong, .setup-steps p { margin: 0; }
+.setup-steps p { margin-top: 2px; }
+.setup-steps li > span { display: none; }
+
+/* kv 微调（预览 dt margin-bottom 2px / dd 500） */
+.kv dt { margin-bottom: 2px; }
+.kv dd { font-weight: 500; }
+
+/* 帮助文章卡头：12/20 + min-height 46（对齐预览 card-head） */
+.help-article .card-head.help-article-head { padding: var(--sp-3) var(--sp-5); min-height: 46px; }
+
+/* Hero：20px 内边距 + 16px 间距（对齐预览 .device-hero） */
+.device-hero { padding: var(--sp-5); gap: var(--sp-4); }
+
+/* 提示行对齐预览 .hint（无默认 margin，由容器控制间距） */
+.conn-empty-lead .hint { margin: 4px 0 0; }
+.wireless-content > .hint { margin: 0 0 var(--sp-3); }
+
+/* 步骤说明行字号对齐预览 hint（12px / lh-body）——旧 .setup-steps p 为 13.5px/1.6 导致步骤区偏高 */
+.setup-steps li p.hint, .device-row p.hint, .ready-panel p.hint { font-size: var(--fs-12); line-height: var(--lh-body); }

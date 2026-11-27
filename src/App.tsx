@@ -758,14 +758,15 @@ const LEGACY_VIEWS = new Set<AssistantViewKey>(["home", "connect", "settings", "
 // 绑定保持原样，只由 CSS 控制显隐——切换分组不丢输入内容、不卸载任何控件。
 // 铁律：新版本必须保留设置中心的全部真实设置项，不允许用演示开关替换。
 type SettingsGroupKey = "appearance" | "general" | "mirror" | "desktop" | "shortcuts" | "license" | "about";
-const SETTINGS_GROUPS: { key: SettingsGroupKey; label: string; note: string }[] = [
-  { key: "appearance", label: "外观主题", note: "5 套本机主题" },
-  { key: "general", label: "通用", note: "启动 / 重连 / 停靠" },
-  { key: "mirror", label: "镜像窗口", note: "画质 / 帧率 / 输入 / 录制" },
-  { key: "desktop", label: "按设备 · 桌面模式", note: "每设备独立配置" },
-  { key: "shortcuts", label: "全局快捷键", note: "截图 / 录制 / 旋转" },
-  { key: "license", label: "版本与授权", note: "专业版离线激活" },
-  { key: "about", label: "关于 MirrorDock", note: "版本 / 许可 / 更新" },
+// X10-157：图标对齐预览 settings-nav（i-sun/i-set/i-mirror/i-phone/i-keyboard/i-shield/i-info）。
+const SETTINGS_GROUPS: { key: SettingsGroupKey; label: string; note: string; icon: string }[] = [
+  { key: "appearance", label: "外观主题", note: "5 套本机主题", icon: "M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8ZM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19" },
+  { key: "general", label: "通用", note: "启动 / 重连 / 停靠", icon: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h13M16 4a2 2 0 1 0 0 4 2 2 0 1 0 0-4ZM10 10a2 2 0 1 0 0 4 2 2 0 1 0 0-4ZM19 16a2 2 0 1 0 0 4 2 2 0 1 0 0-4Z" },
+  { key: "mirror", label: "镜像窗口", note: "画质 / 帧率 / 输入 / 录制", icon: "M4 5h16v13H4ZM8 21h8M12 18v3M10 9l4 2.5-4 2.5Z" },
+  { key: "desktop", label: "设备与桌面模式", note: "每设备独立配置", icon: "M7 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2ZM11 18h2" },
+  { key: "shortcuts", label: "全局快捷键", note: "截图 / 录制 / 旋转", icon: "M3 7h18v10H3ZM6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6" },
+  { key: "license", label: "版本与授权", note: "专业版离线激活", icon: "M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6ZM9 12l2 2 4-4" },
+  { key: "about", label: "关于 MirrorDock", note: "版本 / 许可 / 更新", icon: "M12 11v5M12 8h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" },
 ];
 
 // 顶栏主题菜单的小色点：取各主题的签名色（重设计 v2.5）。
@@ -3630,72 +3631,43 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, readySerial]);
 
-  function runViewAction() {
+
+  // X10-157：页头动作对齐预览 headerActions——按视图给出「样式 + 行为」，无动作的视图
+  // 不渲染按钮（预览非 demo 态这些页头本来就没有按钮；对应功能都在卡头/卡脚/卡内保留）。
+  function viewActionConfig(): { label: string; className: string; onClick: () => void } | null {
     switch (view) {
-      case "home":
       case "connect":
-        openView("connect");
-        break;
-      case "info":
-        void previewDiagnostics();
-        break;
-      case "multi":
-        void refreshDevices();
-        break;
-      case "mirror":
-        if (readyDevice) void startMirroring(readyDevice.serial);
-        else openView("connect");
-        break;
-      case "keymap":
-        if (readySerial) void openKeyboardSettings();
-        else openView("connect");
-        break;
-      case "files":
-        if (transferDeviceSerial) void refreshDeviceFiles(transferDeviceSerial);
-        break;
-      case "shot":
-        if (readyDevice) void captureScreen(readyDevice.serial);
-        else openView("connect");
-        break;
-      case "record":
-        void toggleRecording();
-        break;
-      case "install":
-        void pickApk();
-        break;
-      case "present":
-        if (readyDevice) void startMirroring(readyDevice.serial);
-        else openView("connect");
-        break;
-      case "schedule":
-        addRecordPlan();
-        break;
-      // X10-129/130：页头快捷按钮与视图内主操作保持同一行为。
-      case "album":
-        void refreshGallery();
-        break;
-      case "replay":
-        if (!readyDevice) openView("connect");
-        else if (activeReplay) void runReplayScript(activeReplay);
-        break;
-      case "apps":
-        if (appsTargetSerial) void ensureDeviceApps(appsTargetSerial);
-        break;
-      case "notify":
-        // P0-2：页头「清空通知」走同步命令，手机不在线时不清本地、明确提示。
-        void clearNotifications();
-        break;
+        return { label: "重新检查", className: "btn btn-secondary", onClick: () => void refreshDevices() };
       case "settings":
-        openView("settings");
-        break;
-      case "help":
-        openView("help");
-        break;
-      case "pro":
-        openView("settings");
-        break;
+        return { label: "恢复默认", className: "btn btn-secondary", onClick: resetAllOptions };
+      case "info":
+        return { label: "复制诊断摘要", className: "btn btn-primary", onClick: () => void previewDiagnostics() };
+      case "mirror":
+        return {
+          label: "开始镜像", className: "btn btn-primary",
+          onClick: () => { if (readyDevice) void startMirroring(readyDevice.serial); else openView("connect"); },
+        };
+      case "present":
+        return {
+          label: "开始演示", className: "btn btn-primary",
+          onClick: () => { if (readyDevice) void startMirroring(readyDevice.serial); else openView("connect"); },
+        };
+      case "keymap":
+        return {
+          label: "打开键盘设置", className: "btn btn-primary",
+          onClick: () => { if (readySerial) void openKeyboardSettings(); else openView("connect"); },
+        };
+      case "schedule":
+        return { label: "添加计划", className: "btn btn-primary", onClick: () => addRecordPlan() };
+      case "replay":
+        return {
+          label: "开始回放", className: "btn btn-primary",
+          onClick: () => { if (!readyDevice) openView("connect"); else if (activeReplay) void runReplayScript(activeReplay); },
+        };
       default:
-        break;
+        // home / multi / files / shot / record / album / install / apps / notify / help / pro：
+        // 预览页头无按钮，动作全部保留在卡头 / 卡脚 / 卡内原位。
+        return null;
     }
   }
 
@@ -3717,7 +3689,7 @@ function App() {
         {device.state === "ready" && (
           <>
             <button
-              className="secondary-button"
+              className="btn btn-secondary btn-sm"
               type="button"
               disabled={lockBusy}
               onClick={() => { setSelectedSerial(device.serial); void wakeDevice(device.serial); }}
@@ -3725,18 +3697,18 @@ function App() {
               {lockBusy && selectedSerial === device.serial ? "正在唤醒…" : "屏幕唤醒"}
             </button>
             {owned ? (
-              <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
+              <button className="btn btn-danger btn-sm" type="button" disabled={isStopping} onClick={() => void stopMirroring(device.serial)}>
                 {stoppingSerial === device.serial ? "正在结束…" : "结束镜像"}
               </button>
             ) : (
               <>
-                <button className="primary-button" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
+                <button className="btn btn-primary btn-sm" type="button" disabled={!scrcpyReady || isLaunching || isStopping} onClick={() => void startMirroring(device.serial)}>
                   {launchingSerial === device.serial ? "正在启动…" : scrcpyReady ? "开始镜像" : "镜像引擎准备中"}
                 </button>
                 {/* X10-111（B）：首选是无线但有 ready USB 时，给一键改用有线的入口。 */}
                 {usbAlt && (
                   <button
-                    className="secondary-button"
+                    className="btn btn-secondary btn-sm"
                     type="button"
                     disabled={!scrcpyReady || isLaunching || isStopping}
                     title="检测到你插着数据线——有线更稳、不易断连，点击改走 USB 启动镜像"
@@ -3750,23 +3722,23 @@ function App() {
           </>
         )}
         {!owned && device.state !== "ready" && looksLikeWirelessEndpoint(device.serial) && device.state === "offline" && (
-          <button className="secondary-button" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
+          <button className="btn btn-secondary btn-sm" type="button" disabled={wirelessBusy} onClick={() => void reconnectRecentDevice(device.serial)}>重新连接</button>
         )}
         {!owned && device.state !== "ready" && (
           <span className="status-label">{stateCopy[device.state].label}</span>
         )}
         {!owned && (revokeArmedSerial === device.serial ? (
           <>
-            <button className="secondary-button danger-stop" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
+            <button className="btn btn-danger btn-sm" type="button" disabled={revoking} onClick={() => void revokeDeviceAccess(device.serial)}>
               {revoking ? "正在执行…" : "确认取消"}
             </button>
-            <button className="secondary-button" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
+            <button className="btn btn-secondary btn-sm" type="button" disabled={revoking} onClick={() => setRevokeArmedSerial(null)}>
               算了
             </button>
           </>
         ) : (
           <button
-            className="secondary-button revoke-button"
+            className="btn btn-secondary btn-sm"
             type="button"
             title="关闭手机调试开关、断开本机连接并清理记录；最后一步需在手机上点「撤销 USB 调试授权」"
             onClick={() => setRevokeArmedSerial(device.serial)}
@@ -4649,7 +4621,7 @@ function App() {
                                 }}
                               />
                               <button
-                                className="secondary-button"
+                                className="btn btn-secondary btn-sm"
                                 type="button"
                                 disabled={notifReplyBusy === item.key || !(notifReplyDrafts[item.key] ?? "").trim()}
                                 onClick={() => void sendNotificationReply({ ...item, key: item.key as string })}
@@ -4949,7 +4921,12 @@ function App() {
               />
             </label>
           )}
-          <button className="btn btn-primary btn-sm" type="button" aria-label={`页面操作：${ASSISTANT_VIEWS[view].action}`} onClick={runViewAction}>{ASSISTANT_VIEWS[view].action}</button>
+          {(() => {
+            const action = viewActionConfig();
+            return action ? (
+              <button className={action.className} type="button" aria-label={`页面操作：${action.label}`} onClick={action.onClick}>{action.label}</button>
+            ) : null;
+          })()}
         </div>
 
         <div className="content">
@@ -5003,7 +4980,7 @@ function App() {
                     </div>
                   </div>
                   <div className="hero-actions">
-                    <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
+                    <button className="btn btn-secondary btn-sm" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
                       {isChecking ? "检查中…" : "重新检查"}
                     </button>
                     <span className="device-card-actions">{deviceActions(primary, primaryOwned, primaryFavorite, primaryUsbAlt)}</span>
@@ -5019,8 +4996,8 @@ function App() {
                   Hero 卡下方仍显示「第一步：连接手机 / 手机已准备就绪」+ 重新检查）。
                   状态提示与设备卡列表（其余设备）保持原样。 */}
               <div className="card-head connection-heading">
-                <div>
-                  <span className="eyebrow badge neutral">
+                <div className="head-row">
+                  <span className="badge neutral">
                     {sessionActive
                       ? activeSessionCount > 1
                         ? `镜像运行中：${activeSessionCount} 台设备`
@@ -5029,7 +5006,7 @@ function App() {
                           : "镜像运行中"
                       : "第一步：连接手机"}
                   </span>
-                  <h2 className="card-title">
+                  <span className="head-title">
                     {isChecking
                       ? "正在检查 USB 连接…"
                       : sessionActive
@@ -5039,9 +5016,10 @@ function App() {
                         : readyDevice
                           ? "手机已准备就绪"
                           : "等待连接手机"}
-                  </h2>
+                  </span>
                 </div>
-                <button className="secondary-button" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
+                <span className="spacer" aria-hidden="true" />
+                <button className="btn btn-secondary btn-sm" type="button" onClick={() => void refreshDevices()} disabled={isChecking}>
                   {isChecking ? "检查中…" : "重新检查"}
                 </button>
               </div>
@@ -5230,7 +5208,7 @@ function App() {
                           <p>镜像会话仍在进行，设备暂时未出现在连接列表。</p>
                         </div>
                         <span className="device-card-actions">
-                          <button className="secondary-button danger-stop" type="button" disabled={isStopping} onClick={() => void stopMirroring(item.serial)}>
+                          <button className="btn btn-danger btn-sm" type="button" disabled={isStopping} onClick={() => void stopMirroring(item.serial)}>
                             {stoppingSerial === item.serial ? "正在结束…" : "结束镜像"}
                           </button>
                         </span>
@@ -5250,49 +5228,13 @@ function App() {
 
               {(!isChecking && !readyDevice) && (
                 <ol className="setup-steps steps">
-                  <li className="step-line"><div><strong>使用可传输数据的数据线连接手机</strong><p>如果手机弹出 USB 用途选择，请选择“文件传输”。</p></div></li>
-                  <li className="step-line"><div><strong>在手机上开启“USB 调试”</strong><p>这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
-                  <li className="step-line"><div><strong>解锁手机并允许这台电脑</strong><p>在“允许 USB 调试吗？”中选择允许。你可以随时在手机设置中撤销。</p></div></li>
+                  <li className="step-line"><div><strong>使用可传输数据的数据线连接手机</strong><p className="hint">如果手机弹出 USB 用途选择，请选择“文件传输”。</p></div></li>
+                  <li className="step-line"><div><strong>在手机上开启“USB 调试”</strong><p className="hint">这是 Android 提供的安全授权，用于将画面显示到这台电脑。</p></div></li>
+                  <li className="step-line"><div><strong>解锁手机并允许这台电脑</strong><p className="hint">在“允许 USB 调试吗？”中选择允许。你可以随时在手机设置中撤销。</p></div></li>
                 </ol>
               )}
 
-              {(!isChecking && !readyDevice) && (
-                <div className="capability-panel brand-guide" aria-live="polite">
-                  <strong>按品牌查看开启步骤</strong>
-                  <p className="capability-pending">
-                    {detectedGuide
-                      ? `检测到「${detectedGuide.name}」，已选中；不符可手动切换。`
-                      : "选择手机品牌，查看开启步骤。"}
-                  </p>
-                  <div className="device-picker" aria-label="选择手机品牌">
-                    {brandGuides.map((guide) => (
-                      <button
-                        className={`chip${shownGuide?.key === guide.key ? " active" : ""}`}
-                        type="button"
-                        key={guide.key}
-                        onClick={() => setGuideKey(guide.key)}
-                      >
-                        {guide.name}
-                      </button>
-                    ))}
-                  </div>
-                  {shownGuide && (
-                    <>
-                      <ol className="setup-steps brand-steps steps">
-                        <li className="step-line"><div><strong>打开开发者选项</strong><p>{shownGuide.openDeveloperOptions}</p></div></li>
-                        <li className="step-line"><div><strong>开启 USB 调试</strong><p>{shownGuide.usbDebugging}</p></div></li>
-                        <li className="step-line"><div><strong>（可选）无线调试</strong><p>{shownGuide.wireless}</p></div></li>
-                      </ol>
-                      {shownGuide.notes.length > 0 && (
-                        <ul className="brand-notes">
-                          {shownGuide.notes.map((note) => <li key={note}>{note}</li>)}
-                        </ul>
-                      )}
-                    </>
-                  )}
-                  <p className="capability-pending">菜单名称因机型而异，以手机实际设置为准。开启后点「重新检查」。</p>
-                </div>
-              )}
+              {/* X10-157：品牌引导移出连接卡（独立卡片 brand-guide-card 见 connection-card 闭合后）。 */}
 
               {/* X10-85：首页不再展示「最近使用过的设备」列表（用户拍板）。最近设备
                   数据仍在后端记录（供无线重连等内部逻辑），仅移除 UI 展示。 */}
@@ -5355,6 +5297,46 @@ function App() {
               )}
             </section>
 
+            {/* X10-157：品牌引导按预览改为独立卡片（card-head + card-body），置于连接卡之后。 */}
+            {!isChecking && !readyDevice && (
+              <section className="card brand-guide-card" aria-live="polite">
+                <div className="card-head">按品牌查看开启步骤</div>
+                <div className="card-body">
+                  <p className="hint">
+                    {detectedGuide
+                      ? `检测到「${detectedGuide.name}」，已选中；不符可手动切换。`
+                      : "选择手机品牌，查看开启步骤。"}
+                  </p>
+                  <div className="action-row" role="group" aria-label="选择手机品牌">
+                    {brandGuides.map((guide) => (
+                      <button
+                        className={`chip${shownGuide?.key === guide.key ? " active" : ""}`}
+                        type="button"
+                        key={guide.key}
+                        onClick={() => setGuideKey(guide.key)}
+                      >
+                        {guide.name}
+                      </button>
+                    ))}
+                  </div>
+                  {shownGuide && (
+                    <>
+                      <ol className="setup-steps brand-steps steps">
+                        <li className="step-line"><div><strong>打开开发者选项</strong><p className="hint">{shownGuide.openDeveloperOptions}</p></div></li>
+                        <li className="step-line"><div><strong>开启 USB 调试</strong><p className="hint">{shownGuide.usbDebugging}</p></div></li>
+                        <li className="step-line"><div><strong>（可选）无线调试</strong><p className="hint">{shownGuide.wireless}</p></div></li>
+                      </ol>
+                      {shownGuide.notes.length > 0 && (
+                        <ul className="brand-notes">
+                          {shownGuide.notes.map((note) => <li key={note}>{note}</li>)}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                  <p className="hint">菜单名称因机型而异，以手机实际设置为准。开启后点「重新检查」。</p>
+                </div>
+              </section>
+            )}
           </section>
 
           {/* -- 工具 -------------------------------------------------------- */}
@@ -5368,7 +5350,7 @@ function App() {
                 <div className="capability-panel screenshot-panel" aria-live="polite">
                   <strong>截图</strong>
                   <p className="capability-pending">保存到本机「图片 / MirrorDock」。受保护页面（支付、密码）会截成黑屏，是系统限制，不是故障。</p>
-                  <button className="secondary-button" type="button" disabled={screenshotBusy} onClick={() => void captureScreen(readyDevice.serial)}>
+                  <button className="btn btn-primary" type="button" disabled={screenshotBusy} onClick={() => void captureScreen(readyDevice.serial)}>
                     {screenshotBusy ? "正在处理…" : "截取当前画面"}
                   </button>
                   {screenshot && (
@@ -5388,7 +5370,7 @@ function App() {
                   {/* X10-92：手动启停，不重启镜像窗口。 */}
                   <p>
                     <button
-                      className="primary-button"
+                      className="btn btn-primary"
                       type="button"
                       disabled={recordingBusy || !proEdition}
                       onClick={() => void toggleRecording()}
@@ -5437,7 +5419,7 @@ function App() {
                   </p>
                 </div>
                 <div className="transfer-actions">
-                  <button className="secondary-button" type="button" disabled={transferBusy} onClick={() => void sendFileTo(transferDeviceSerial ?? "")}>
+                  <button className="btn btn-secondary" type="button" disabled={transferBusy} onClick={() => void sendFileTo(transferDeviceSerial ?? "")}>
                     {transferBusy ? "正在处理…" : "发送到手机"}
                   </button>
                   <button className="ghost-button" type="button" disabled={transferBusy || fetchingName !== null} onClick={() => transferDeviceSerial && void refreshDeviceFiles(transferDeviceSerial)}>
@@ -5521,14 +5503,14 @@ function App() {
               <div className="capability-panel apk-panel" aria-live="polite" style={{ marginTop: 16 }}>
                   <strong>安装 APK</strong>
                   <p className="capability-pending">选择本机的 .apk 安装包，一键装到手机（覆盖安装、保留应用数据）。</p>
-                  <span>
-                    <button className="secondary-button" type="button" disabled={apkBusy} onClick={() => void pickApk()}>
+                  <div className="action-row">
+                    <button className="btn btn-secondary" type="button" disabled={apkBusy} onClick={() => void pickApk()}>
                       {apkPath ? "重新选择安装包" : "选择 APK 安装包"}
                     </button>
-                    <button className="primary-button" type="button" disabled={apkBusy || !apkPath} onClick={() => void installApk(readyDevice.serial)}>
+                    <button className="btn btn-primary btn-sm" type="button" disabled={apkBusy || !apkPath} onClick={() => void installApk(readyDevice.serial)}>
                       {apkBusy ? "正在安装…" : "安装到手机"}
                     </button>
-                  </span>
+                  </div>
                   {apkPath && <p className="screenshot-path">{apkPath}</p>}
                   {apkReceipt && (
                     <div className="screenshot-result">
@@ -5582,7 +5564,7 @@ function App() {
                             }}
                           />
                           <button
-                            className="secondary-button"
+                            className="btn btn-secondary btn-sm"
                             type="button"
                             disabled={notifReplyBusy === item.key || !(notifReplyDrafts[item.key] ?? "").trim()}
                             onClick={() => void sendNotificationReply({ ...item, key: item.key as string })}
@@ -5611,18 +5593,17 @@ function App() {
             </div>
             <section className="connection-card" aria-live="polite">
               <div className="card-head wireless-heading">
-                <div>
+                <div className="head-row">
                   <span className="badge ok">推荐</span>
-                  <h2 className="card-title">扫码配对</h2>
-                  <p>手机在「无线调试」里点「使用二维码配对设备」，扫下面的二维码即可，配对与连接自动完成。</p>
+                  <span className="head-title">扫码配对</span>
                 </div>
               </div>
               {!qrOffer ? (
-                <span>
-                  <button className="primary-button" type="button" disabled={qrBusy} onClick={() => void beginQrPairing()}>
+                <div className="action-row">
+                  <button className="btn btn-primary" type="button" disabled={qrBusy} onClick={() => void beginQrPairing()}>
                     {qrBusy ? "正在生成…" : "生成配对二维码"}
                   </button>
-                </span>
+                </div>
               ) : (
                 <div className="screenshot-result">
                   {qrImage && <img src={qrImage} alt="无线调试配对二维码" width={220} height={220} />}
@@ -5631,40 +5612,42 @@ function App() {
                     {qrProgress?.detail ? ` · ${qrProgress.detail}` : ""}
                   </p>
                   <p className="capability-pending">手机路径：设置 → 开发者选项 → 无线调试 → 使用二维码配对设备。二维码一次有效，可随时取消。</p>
-                  <button className="secondary-button" type="button" onClick={() => void stopQrPairing()}>取消</button>
+                  <button className="btn btn-secondary" type="button" onClick={() => void stopQrPairing()}>取消</button>
                 </div>
               )}
+              {!qrOffer && <p className="hint" style={{ marginTop: 10 }}>手机在「无线调试」里点「使用二维码配对设备」，扫下面的二维码即可，配对与连接自动完成。</p>}
               {qrError && <p className="capability-pending" role="alert">{qrError}</p>}
             </section>
             <section className="connection-card" aria-labelledby="wireless-title">
               <div className="card-head wireless-heading">
-                <div>
+                <div className="head-row">
                   <span className="badge neutral">手动方式</span>
-                  <h2 id="wireless-title" className="card-title">配对码配对</h2>
-                  <p>扫码不便时，填手机屏幕上的地址和 6 位配对码。配对码不会保存。</p>
+                  <span className="head-title">配对码配对</span>
                 </div>
-                <button className="secondary-button" type="button" onClick={() => setWirelessExpanded((value) => !value)}>
+                <span className="spacer" aria-hidden="true" />
+                <button className="btn btn-secondary btn-sm" type="button" onClick={() => setWirelessExpanded((value) => !value)}>
                   {wirelessExpanded ? "收起" : "手动配对"}
                 </button>
               </div>
 
               {wirelessExpanded && <div className="wireless-content">
+                <p className="hint">扫码不便时，填手机屏幕上的地址和 6 位配对码。配对码不会保存。</p>
                 <ol className="wireless-steps steps">
                   <li className="step-line">在手机的“开发者选项”中打开“无线调试”，并确认手机和电脑在同一 Wi-Fi。</li>
                   <li className="step-line">选择“使用配对码配对设备”，填写手机显示的配对地址和 6 位配对码。</li>
                   <li className="step-line">回到无线调试主页面，填写“IP 地址和端口”中的连接地址；它可能与配对地址不同。</li>
                 </ol>
-                <span>
-                  <button className="secondary-button" type="button" disabled={discovering} onClick={() => void discoverWirelessEndpoints()}>
+                <div className="action-row">
+                  <button className="btn btn-secondary" type="button" disabled={discovering} onClick={() => void discoverWirelessEndpoints()}>
                     {discovering ? "正在搜索…" : "自动发现地址（mDNS）"}
                   </button>
-                </span>
+                </div>
                 {discoverMessage && <p className="apply-notice" role="status">{discoverMessage}</p>}
                 <div className="wireless-form">
                   <label>配对地址<input value={pairEndpoint} onChange={(event) => setPairEndpoint(event.target.value)} placeholder="例如 192.168.1.20:37123" autoComplete="off" /></label>
                   <label>6 位配对码<input value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="不会保存" autoComplete="one-time-code" /></label>
                   <label>连接地址<input value={connectEndpoint} onChange={(event) => setConnectEndpoint(event.target.value)} placeholder="例如 192.168.1.20:41839" autoComplete="off" /></label>
-                  <button className="primary-button" type="button" onClick={() => void pairAndConnect()} disabled={wirelessBusy}>{wirelessBusy ? "正在连接…" : "配对并连接"}</button>
+                  <button className="btn btn-primary" type="button" onClick={() => void pairAndConnect()} disabled={wirelessBusy}>{wirelessBusy ? "正在连接…" : "配对并连接"}</button>
                 </div>
                 <p className="capability-pending">也可以停在「使用配对码配对设备」页面点「自动发现地址」，地址会自动填入，6 位配对码仍需人工读取。</p>
               </div>}
@@ -5688,20 +5671,20 @@ function App() {
 
             <section className="connection-card" aria-live="polite">
               <div className="card-head wireless-heading">
-                <div>
+                <div className="head-row">
                   <span className="badge warn">伴侣 App（实验）</span>
-                  <h2 className="card-title">扫码配对</h2>
-                  <p>用伴侣 App 扫码，与电脑建立加密助手通道并互相记住身份（桌面端与手机端都保存互信凭据，之后重连无需再扫码）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。</p>
+                  <span className="head-title">扫码配对</span>
                 </div>
               </div>
-              <span>
-                <button className="secondary-button" type="button" disabled={pairingBusy} onClick={() => void beginPairing()}>
+              <p className="hint">用伴侣 App 扫码，与电脑建立加密助手通道并互相记住身份（桌面端与手机端都保存互信凭据，之后重连无需再扫码）。注意：这条通道与镜像连接相互独立——手机要出现在连接列表里，请用数据线连接，或在上方「无线」区完成配对；已配对过的手机在扫码成功后会自动尝试回连。</p>
+              <div className="action-row">
+                <button className="btn btn-primary" type="button" disabled={pairingBusy} onClick={() => void beginPairing()}>
                   {pairingBusy && !pairingOffer ? "正在准备…" : pairingOffer ? "重新生成配对" : "开始配对"}
                 </button>
-                <button className="secondary-button" type="button" disabled={pairingBusy || !pairingOffer} onClick={() => void stopPairing()}>
+                <button className="btn btn-secondary" type="button" disabled={pairingBusy || !pairingOffer} onClick={() => void stopPairing()}>
                   结束配对
                 </button>
-              </span>
+              </div>
               {/* X10-64：常驻端口只在扫码那一刻交给手机，顺序反了就会走进
                   「没有可直连的电脑」的死胡同——在扫码入口旁边先说清顺序。 */}
               {!residentActive && (
@@ -5745,14 +5728,14 @@ function App() {
               <div className="trusted-devices" aria-label="常驻通道">
                 <strong>常驻通道（免扫码重连）</strong>
                 <p className="capability-pending">开启后，已配对的伴侣设备打开 App 里的「连接上次配对的电脑」，即可直接建立互信会话并尝试自动回连镜像通道，无需重新扫码。要注意先后顺序：通道端口是在扫码配对的那一刻交给手机的，电脑只会把端口变化告诉当前连着的手机——所以请先开启常驻通道、再在手机上扫码；如果手机是在关闭状态下配过对，需要在手机上重新扫一次码（电脑这边不用改）。关闭常驻通道后，已配对的手机会如实显示「没有可直连的电脑」。</p>
-                <span>
-                  <button className="secondary-button" type="button" disabled={residentBusy || residentActive} onClick={() => void startResident()}>
+                <div className="action-row">
+                  <button className="btn btn-secondary btn-sm" type="button" disabled={residentBusy || residentActive} onClick={() => void startResident()}>
                     开启常驻通道
                   </button>
-                  <button className="secondary-button" type="button" disabled={residentBusy || !residentActive} onClick={() => void stopResident()}>
+                  <button className="btn btn-secondary btn-sm" type="button" disabled={residentBusy || !residentActive} onClick={() => void stopResident()}>
                     关闭常驻通道
                   </button>
-                </span>
+                </div>
                 {residentActive && <p className="capability-summary">常驻监听中{residentPort ? `（端口 ${residentPort}）` : ""} · 等待伴侣设备连接。</p>}
                 {residentNotice && <p className="capability-summary">{residentNotice}</p>}
                 {residentMessage && <p className="capability-pending" role="alert">{residentMessage}</p>}
@@ -5770,17 +5753,14 @@ function App() {
             <section className="connection-card">
               <p className="capability-pending">USB 连接与授权在「设备中心」完成：插上数据线、在手机上允许 USB 调试后，设备卡会出现在设备中心。</p>
               <div className="action-row" style={{ marginTop: 8 }}>
-                <button className="secondary-button" type="button" onClick={() => openView("home")}>打开设备中心</button>
+                <button className="btn btn-secondary btn-sm" type="button" onClick={() => openView("home")}>打开设备中心</button>
               </div>
             </section>
           </section>
 
           {/* -- 设置 -------------------------------------------------------- */}
           <section className={`tab-panel ${tab === "settings" ? "" : "panel-hidden"}`} aria-label="设置">
-            {/* X10-148：页标题已在上方页头（设置），这里只保留说明行，去掉重复大标题。 */}
-            <div className="page-head">
-              <p className="intro">外观主题、镜像窗口、快捷键与授权。全部设置项按分组保留，切换分组不会清除任何配置。</p>
-            </div>
+            {/* X10-157：页头说明行按预览移除（预览页头只有标题+副标题），说明由各组卡身承载。 */}
 
             {/* X10-144：左侧二级分组导航 + 右侧原设置卡。7 组对应原 7 块内容，
                 卡片 DOM / 事件绑定一字未改，只由 CSS 控制显隐，零丢项。 */}
@@ -5794,15 +5774,16 @@ function App() {
                     aria-current={settingsGroup === group.key ? "true" : undefined}
                     onClick={() => setSettingsGroup(group.key)}
                   >
-                    <span>{group.label}</span>
-                    <small>{group.note}</small>
+                    <span className="ic" aria-hidden="true"><NavIcon d={group.icon} /></span>
+                    <span className="settings-nav-text">{group.label}<small>{group.note}</small></span>
                   </button>
                 ))}
               </nav>
               <div className="settings-content">
             <section className={`settings-card theme-settings${settingsGroup === "appearance" ? "" : " panel-hidden"}`} aria-labelledby="theme-settings-title">
+              {/* X10-157：卡头对齐预览——只一行标题；说明合并为卡底单条 hint。 */}
               <header className="settings-card-head">
-                <div><h2 id="theme-settings-title">外观主题</h2><p>只改变这台电脑上的 MirrorDock 界面；连接、镜像、文件与授权完全不受影响。</p></div>
+                <h2 id="theme-settings-title">外观主题</h2>
               </header>
               <div className="theme-options" role="group" aria-label="外观主题">
                 {UI_THEMES.map((theme) => (
@@ -5819,12 +5800,13 @@ function App() {
                   </button>
                 ))}
               </div>
-              <p className="setting-note">主题偏好只保存在本机浏览器存储中，不上传、不需要账号。当前：{themeMeta(uiTheme).label}。</p>
+              <p className="setting-note">只改变这台电脑上的 MirrorDock 界面；连接、镜像、文件与授权完全不受影响。主题偏好只保存在本机浏览器存储中，不上传、不需要账号。当前：{themeMeta(uiTheme).label}。</p>
             </section>
 
             <section className={`settings-card${settingsGroup === "general" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
-                <div><h2>通用</h2><p>窗口关闭行为、断线自动重连、菜单栏/托盘与开机启动。</p></div>
+                {/* X10-157：卡头对齐预览（通用 = 单行标题）。 */}
+                <h2>通用</h2>
               </header>
               <div className="settings-rows">
                 <div className="setting-row">
@@ -5858,14 +5840,15 @@ function App() {
 
             <section className={`settings-card${settingsGroup === "mirror" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
-                <div><h2>镜像窗口</h2><p>{sessionActive ? "会话中修改需重启镜像窗口" : "开始镜像时生效"}</p></div>
+                {/* X10-157：卡头对齐预览——标题 + badge，会话提示由按钮语义承载。 */}
+                <h2>镜像窗口 <span className="badge neutral">{sessionActive ? "会话中修改需重启镜像窗口" : "开始镜像时生效"}</span></h2>
                 <div className="settings-actions">
                   {sessionActive && (
-                    <button type="button" className="secondary-button" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={applyingOptions} onClick={() => void applySessionOptions()}>
                       {applyingOptions ? "正在应用…" : "应用并重启镜像窗口"}
                     </button>
                   )}
-                  <button type="button" className="secondary-button" onClick={resetAllOptions}>恢复默认设置</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={resetAllOptions}>恢复默认设置</button>
                 </div>
               </header>
               <div className="settings-rows">
@@ -5994,7 +5977,7 @@ function App() {
                     <span className="setting-desc">开启后手机把电脑当作外接键盘：点输入框不再弹出全屏软键盘，只在屏幕底部留一条小候选栏，直接用电脑键盘打字即可。关闭则由电脑把组好的文字直接注入手机，手机软键盘照常弹出。更改后重启会话生效。打字没反应或字符全错时，通常是手机端「实体键盘」布局未启用「英语（美国）」——点右侧按钮到手机上确认。</span>
                   </div>
                   <div className="settings-actions">
-                    <button type="button" className="secondary-button" disabled={!readySerial} aria-label="打开手机的实体键盘设置" onClick={() => void openKeyboardSettings()}>手机键盘设置</button>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={!readySerial} aria-label="打开手机的实体键盘设置" onClick={() => void openKeyboardSettings()}>手机键盘设置</button>
                     <label className="setting-toggle"><input type="checkbox" aria-label="键盘直输（手机不弹全屏键盘）" checked={options.keyboard_uhid} onChange={e => updateOptions({...options, keyboard_uhid: e.target.checked})} /></label>
                   </div>
                 </div>
@@ -6055,10 +6038,8 @@ function App() {
                 ④ 只有在一台设备都没有时，才回落全局默认并如实写明。 */}
             <section className={`settings-card${settingsGroup === "desktop" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
-                <div>
-                  <h2>按设备设置 · 桌面模式</h2>
-                  <p>桌面模式与虚拟屏启动的应用按设备单独保存，各设备互不影响。</p>
-                </div>
+                {/* X10-157：卡头对齐预览——标题 + badge「每设备独立」。 */}
+                <h2>按设备设置 · 桌面模式 <span className="badge neutral">每设备独立</span></h2>
               </header>
               <div className="settings-rows">
                 {desktopPrefDevices.length > 0 ? (
@@ -6168,9 +6149,10 @@ function App() {
 
             <section className={`settings-card${settingsGroup === "shortcuts" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
-                <div><h2>全局快捷键</h2><p>镜像运行中全局生效，无需切回本窗口（Windows 用 Ctrl，macOS 用 ⌘）。</p></div>
+                {/* X10-157：卡头对齐预览——标题 + 卡头恢复默认按钮。 */}
+                <h2>全局快捷键</h2>
                 <div className="settings-actions">
-                  <button type="button" className="secondary-button" onClick={() => updateShortcuts({ ...defaultShortcuts })}>恢复默认</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => updateShortcuts({ ...defaultShortcuts })}>恢复默认</button>
                 </div>
               </header>
               <div className="shortcut-grid">
@@ -6186,14 +6168,15 @@ function App() {
 
             <section className={`settings-card${settingsGroup === "license" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
-                <div><h2>版本与授权</h2><p>当前版本：{editionLabel(entitlement?.edition)}{proEdition && entitlement?.key_id ? `（许可证 ${entitlement.key_id}，${expiryText(entitlement.expires_at)}）` : ""}</p></div>
+                {/* X10-157：卡头对齐预览——授权状态是真实动态信息，以 badge 承载（版本/许可证/到期一个不丢）。 */}
+                <h2>版本与授权 <span className="badge neutral">{editionLabel(entitlement?.edition)}{proEdition && entitlement?.key_id ? ` · ${entitlement.key_id} · ${expiryText(entitlement.expires_at)}` : ""}</span></h2>
               </header>
               <div className="settings-rows">
                 {proEdition ? (
                   <>
                     <p className="setting-note">专业版已激活：MP4 录制可用。授权状态保存在本机，激活与使用都不需要联网账号。</p>
                     <div className="settings-actions license-action">
-                      <button type="button" className="secondary-button" disabled={licenseBusy} onClick={() => void deactivateLicense()}>
+                      <button type="button" className="btn btn-secondary btn-sm" disabled={licenseBusy} onClick={() => void deactivateLicense()}>
                         {licenseBusy ? "正在处理…" : "撤销本机授权"}
                       </button>
                     </div>
@@ -6202,7 +6185,7 @@ function App() {
                   <>
                     <div className="license-input-row">
                       <label className="shortcut-row"><span>许可证</span><input value={licenseInput} onChange={e => setLicenseInput(e.target.value)} placeholder="MD1-XXXXXX-XXXXXX-…" autoComplete="off" spellCheck={false} /></label>
-                      <button type="button" className="primary-button" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>
+                      <button type="button" className="btn btn-primary btn-sm" disabled={licenseBusy || !licenseInput.trim()} onClick={() => void activateLicense()}>
                         {licenseBusy ? "正在激活…" : "激活专业版"}
                       </button>
                     </div>
@@ -6217,7 +6200,8 @@ function App() {
             {/* 关于：版本、开发者、许可与项目链接（X10-41）。 */}
             <section className={`settings-card${settingsGroup === "about" ? "" : " panel-hidden"}`}>
               <header className="settings-card-head">
-                <div><h2>关于 MirrorDock</h2><p>版本、开源许可与项目链接。</p></div>
+                {/* X10-157：卡头对齐预览——单行标题，版本等信息在卡身 setting-note。 */}
+                <h2>关于 MirrorDock</h2>
               </header>
               <div className="settings-rows">
                 <p className="setting-note">当前版本：{appVersion || "—"}（测试版）</p>
@@ -6227,13 +6211,13 @@ function App() {
                 <p className="setting-note">检查更新：发现新版本后自动下载安装（更新包经数字签名校验），安装完成后重启应用即完成升级。</p>
                 {updateMessage && <p className="setting-note apply-notice" role="status">{updateMessage}</p>}
                 <div className="settings-actions">
-                  <button type="button" className="secondary-button" onClick={() => void openUrl("https://g-star1024.github.io/MirrorDock/")}>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void openUrl("https://g-star1024.github.io/MirrorDock/")}>
                     打开官网
                   </button>
-                  <button type="button" className="secondary-button" onClick={() => void openUrl("https://github.com/g-star1024/MirrorDock")}>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => void openUrl("https://github.com/g-star1024/MirrorDock")}>
                     GitHub 仓库
                   </button>
-                  <button type="button" className="secondary-button" disabled={updateState !== "idle"} onClick={() => void checkForUpdates()}>
+                  <button type="button" className="btn btn-secondary btn-sm" disabled={updateState !== "idle"} onClick={() => void checkForUpdates()}>
                     {updateState === "idle" ? "检查更新" : updateState === "checking" ? "正在检查…" : "正在更新…"}
                   </button>
                 </div>
@@ -6281,14 +6265,14 @@ function App() {
               <div className="card-head"><h3 className="card-title">诊断包</h3><span className="badge neutral">仅本机 · 不上传</span></div>
               <div className="card-body">
                 <p className="hint">仅含版本、系统与最近操作结果（已抹去序列号、配对码与路径）。先预览，确认后才保存；不会自动上传任何内容。</p>
-                <span>
-                  <button className="secondary-button" type="button" disabled={diagnosticsBusy} onClick={() => void previewDiagnostics()}>
+                <div className="action-row">
+                  <button className="btn btn-secondary btn-sm" type="button" disabled={diagnosticsBusy} onClick={() => void previewDiagnostics()}>
                     {diagnosticsBusy ? "正在处理…" : diagnostics ? "刷新预览" : "预览诊断内容"}
                   </button>
-                  <button className="secondary-button" type="button" disabled={diagnosticsBusy || !diagnostics} onClick={() => void exportDiagnostics()}>
+                  <button className="btn btn-secondary btn-sm" type="button" disabled={diagnosticsBusy || !diagnostics} onClick={() => void exportDiagnostics()}>
                     导出为文件
                   </button>
-                </span>
+                </div>
               {diagnostics && (
                 <div className="screenshot-result">
                   <p className="capability-summary">{diagnostics.app_version} · {diagnostics.system} · 镜像引擎{diagnostics.scrcpy_available ? "可用" : "不可用"} · {diagnostics.events.length} 条最近事件</p>
