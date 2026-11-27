@@ -11,6 +11,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// 会话状态机轮询运行中进程的间隔。
 const MONITOR_INTERVAL: Duration = Duration::from_millis(200);
 
+/// 无线心跳保温间隔（X10-164）。
+///
+/// 10 秒足以维持 TCP 活性（路由器/AP 空闲超时通常数十秒以上，且 scrcpy 静止画面
+/// 时码率极低、链路可能长期近空闲），又不会频繁打扰 adb。与重连线程（5 秒轮询）
+/// 错峰：前者在会话**进行中**保温防断，后者在会话**断后**打捞。
+const WIRELESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+
 /// 优雅结束镜像进程时等待 scrcpy 收尾（写出录像 moov 索引）的上限。
 const PROCESS_GRACEFUL_TIMEOUT: Duration = Duration::from_millis(3000);
 
@@ -1571,6 +1578,13 @@ struct SessionState {
     /// 仅日志用途；重连重启会话时随 `attach_process` 更新。`std::time::Instant`
     /// 不可序列化，但 `SessionState` 从不离开进程内存，无碍。
     attached_at: Option<std::time::Instant>,
+    /// X10-164：无线心跳保温期间探测到的链路抖动次数。
+    ///
+    /// 心跳线程每 10 秒对无线端点做一次轻量 `adb connect`，维持 transport 活性、
+    /// 防路由器/AP 空闲超时静默断连；每次探测发现设备非 Ready 就 +1。仅诊断用途：
+    /// 会话结束时拼进 `mirror_exit` 死因，帮用户归因「网络层抖动」而非手机省电。
+    /// 重连重启会话时经 `attach_process` 保留累计，不归零。
+    heartbeat_drops: u32,
 }
 
 /// 会话表（X10-27 并发多设备）：**每台设备一个会话**。
@@ -1631,6 +1645,7 @@ fn session_entry_mut<'a>(
             record_process: None,
             record_resume_count: 0,
             attached_at: None,
+            heartbeat_drops: 0,
         })
 }
 
@@ -2032,15 +2047,30 @@ fn spawn_session_monitor(store: SessionStore, epoch: u64, serial: String) {
                     } else {
                         "未触发自动重连"
                     };
+                    // X10-164：心跳保温期间累计的链路抖动次数——无线会话死因归因，
+                    // 帮用户区分「网络层抖动」与「手机省电/信号」。
+                    let heartbeat_note = {
+                        let drops = store
+                            .0
+                            .lock()
+                            .ok()
+                            .and_then(|map| map.get(&serial).map(|s| s.heartbeat_drops))
+                            .unwrap_or(0);
+                        if drops > 0 {
+                            format!("，保温期链路抖动 {drops} 次")
+                        } else {
+                            String::new()
+                        }
+                    };
                     let tail = exit_scrcpy_tail.trim();
                     let detail = if tail.is_empty() {
-                        format!("{outcome}，通道 {channel}{uptime}，{reconnect}。")
+                        format!("{outcome}，通道 {channel}{uptime}，{reconnect}{heartbeat_note}。")
                     } else {
                         let lines: Vec<&str> = tail.lines().collect();
                         let excerpt: Vec<&str> =
                             lines.iter().rev().take(4).rev().copied().collect();
                         format!(
-                            "{outcome}，通道 {channel}{uptime}，{reconnect}。scrcpy 末尾：{}",
+                            "{outcome}，通道 {channel}{uptime}，{reconnect}{heartbeat_note}。scrcpy 末尾：{}",
                             excerpt.join(" | ")
                         )
                     };
@@ -2213,6 +2243,69 @@ fn classify_reconnect_probe(adb: &dyn AdbRuntime, endpoint: &str) -> ReconnectPr
             Some(device) if device.state == DeviceState::Ready => ReconnectProbe::Ready,
             _ => ReconnectProbe::NotReady,
         },
+    }
+}
+
+/// 无线心跳保温（X10-164）。
+///
+/// 无线会话**进行中**每 `WIRELESS_HEARTBEAT_INTERVAL` 对端点做一次轻量 `adb connect`，
+/// 刷新 transport 活性，避免路由器/AP 的空闲超时或空口省电在画面静止（scrcpy 码率
+/// 极低）时静默切断连接；同时统计探测到「设备非 Ready」的次数供死因归因。
+///
+/// 自驱动启停：每轮先查会话是否仍活跃（epoch 匹配且显示进程在跑）；用户自己关了、
+/// 已重连或进程结束，线程立即让位。探测用 `adb.connect`（幂等、轻量），不会杀现有
+/// transport，也不会改变设备表状态。
+fn spawn_wireless_heartbeat(
+    adb: Arc<dyn AdbRuntime>,
+    sessions: SessionStore,
+    epoch: u64,
+    endpoint: String,
+) {
+    if !is_wireless_endpoint(&endpoint) {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(WIRELESS_HEARTBEAT_INTERVAL);
+        // 会话还活着才继续保温；epoch 变化或进程消失 = 用户自己处理/已重连，交还控制。
+        let alive = {
+            let Ok(map) = sessions.0.lock() else {
+                return;
+            };
+            map.get(&endpoint)
+                .map(|state| state.epoch == epoch && state.process.is_some())
+                .unwrap_or(false)
+        };
+        if !alive {
+            return;
+        }
+        // 轻量保温：connect 幂等，刷新 transport 活性；再确认设备确实 Ready。
+        let dropped = heartbeat_probe(adb.as_ref(), &endpoint);
+        if dropped {
+            if let Ok(mut map) = sessions.0.lock() {
+                if let Some(state) = map.get_mut(&endpoint) {
+                    if state.epoch == epoch {
+                        state.heartbeat_drops = state.heartbeat_drops.saturating_add(1);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// 单次心跳探测：设备当前是否「非 Ready」（掉线/离线/不可用）。
+///
+/// `true` = 需要计入链路抖动。`adb.connect` 幂等：失败（网络不可达）直接判掉线；
+/// 成功后再核对设备表里该端点确实 `Ready`——connect 可能只是刷新了缓存条目，
+/// 不代表 transport 可用。
+fn heartbeat_probe(adb: &dyn AdbRuntime, endpoint: &str) -> bool {
+    if adb.connect(endpoint).is_err() {
+        return true;
+    }
+    match adb.list_devices() {
+        Ok(devices) => !devices
+            .iter()
+            .any(|device| device.serial == endpoint && device.state == DeviceState::Ready),
+        Err(_) => true,
     }
 }
 
@@ -6985,6 +7078,16 @@ fn launch_into_reserved_session(
         record_path.map(|path| path.to_string_lossy().into_owned()),
     )?;
     spawn_session_monitor(sessions.clone(), epoch, serial.clone());
+    // X10-164：无线心跳保温——会话进行中每 10 秒轻量 connect 维持 transport 活性，
+    // 防路由器/AP 空闲超时静默断连；抖动次数在会话结束时写入死因。
+    if is_wireless_endpoint(&serial) {
+        spawn_wireless_heartbeat(
+            runtimes.adb.clone(),
+            sessions.clone(),
+            epoch,
+            serial.clone(),
+        );
+    }
     if let Some(package) = desktop_app {
         spawn_desktop_app_landing_check(sessions.clone(), epoch, serial.clone(), package);
     }
@@ -12648,6 +12751,58 @@ mod tests {
         assert_eq!(*device_timeout.lock().unwrap(), Some(30000));
         assert_eq!(*device_stay_on.lock().unwrap(), Some(4));
         assert!(keep_awake_backup_of(&store, "192.168.1.9:33739").is_none());
+    }
+
+    // -- X10-164 无线心跳保温：探测归类 --
+
+    #[test]
+    fn heartbeat_probe_ok_when_device_ready() {
+        // connect 成功且设备表里该端点 Ready → 不计数。
+        let adb = FakeAdb {
+            devices: vec![device("192.168.1.10:5555", DeviceState::Ready)],
+            ..Default::default()
+        };
+        assert!(!heartbeat_probe(&adb, "192.168.1.10:5555"));
+    }
+
+    #[test]
+    fn heartbeat_probe_fails_when_connect_fails() {
+        // connect 本身失败（网络不可达）→ 计一次抖动。
+        let adb = FakeAdb {
+            connect_fails: true,
+            ..Default::default()
+        };
+        assert!(heartbeat_probe(&adb, "192.168.1.10:5555"));
+    }
+
+    #[test]
+    fn heartbeat_probe_fails_when_endpoint_not_ready() {
+        // connect 成功但设备表里该端点是 offline（transport 半死）→ 计数。
+        let adb = FakeAdb {
+            devices: vec![device("192.168.1.10:5555", DeviceState::Offline)],
+            ..Default::default()
+        };
+        assert!(heartbeat_probe(&adb, "192.168.1.10:5555"));
+    }
+
+    #[test]
+    fn heartbeat_probe_fails_when_endpoint_absent() {
+        // connect 成功但设备表里没有该端点（刚从网络消失）→ 计数。
+        let adb = FakeAdb {
+            devices: vec![],
+            ..Default::default()
+        };
+        assert!(heartbeat_probe(&adb, "192.168.1.10:5555"));
+    }
+
+    #[test]
+    fn heartbeat_probe_fails_when_device_list_unavailable() {
+        // adb 列表不可用 → 保守计一次抖动。
+        let adb = FakeAdb {
+            unavailable: true,
+            ..Default::default()
+        };
+        assert!(heartbeat_probe(&adb, "192.168.1.10:5555"));
     }
 
     #[test]

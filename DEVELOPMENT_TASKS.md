@@ -1684,3 +1684,16 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **验证**：pnpm build（tsc 0 error）、vitest **130/130**、cargo test **237/237**、cargo clippy `--all-targets -D warnings` **0 warning**（顺手修掉旧 `keyboard_settings_args` 冗余生命周期 + 新命令 `#[allow(clippy::too_many_arguments)]`）；WKWebView 15 视图英文 0 中文，相册控件右上、搜索框 224px，帮助中心 14px；中文态未回归（只增量词典/CSS）。
 - **诚实边界**：图片灯箱与系统播放器的真实交互、缩略图懒加载在 2000 条媒体下的性能、HEVC/3GP 格式兼容性需用户真机确认；沙箱无设备，仅验证了空态与布局。
 - **状态**：已并入 `v0.4.40-beta` 发版。commit `3e5d4a2`（`feat: v0.4.40 相册缩略图与英文界面补齐`），CI run `45975140105` **completed success**，Release `460415594` 已发布（2026-11-27 09:53:32Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.40；官网中英站线上均 v0.4.40 + 重构预览入口。X10-160（README/官网双语 + 客户端语言切换）、X10-162（官网导航折行）同批发布。
+
+## X10-164 无线模式不稳定/总中断 → 心跳保温 + 断连归因
+- **用户反馈**：WiFi 模式下不稳定，总中断。
+- **诊断**：现有无线稳定性已三层（X10-59 熄屏补偿：屏幕超时拉长 12h + 假充电 stay-on；X10-45 自动重连：5s 探测 / 15min 预算；X10-110 死因分类），但**完全没有「连接保温/心跳」**——无线会话期间屏幕常亮也拦不住路由器/AP 的空闲超时或空口省电在画面静止（scrcpy 码率极低）时静默切断 adb TCP 连接。剩余断连根因按概率：①网络/AP 层（客户端隔离/空闲超时/信道切换）②厂商省电 ③信号质量 ④USB 物理层永远比 WiFi 稳。
+- **落地（用户拍板「心跳保温+断连诊断」）**：
+  - 新增 `spawn_wireless_heartbeat`：无线会话**进行中**每 10 秒对端点轻量 `adb connect`（幂等、不杀现有 transport、不改设备表），维持 TCP 活性防静默断连；自驱动启停（epoch 匹配且显示进程在跑才继续），会话结束即退出。
+  - 探测归类抽成可测纯函数 `heartbeat_probe(adb, endpoint) -> bool`：connect 失败 / 设备表非 Ready / 端点消失 / adb 列表不可用 → 计一次抖动。
+  - `SessionState.heartbeat_drops: u32` 累计探测到的链路抖动次数；经 `attach_process` 保留（重连重启不归零）。
+  - `mirror_exit` 死因追加「，保温期链路抖动 N 次」——让断连归因一眼区分「网络层抖动」vs「手机省电/信号」。
+  - 仅影响无线会话，USB 不受影响；无新增权限、无新依赖。
+- **验证**：cargo test **242/242**（新增 5 个 `heartbeat_probe_*` 用例：Ready→false；connect 失败/offline/端点消失/列表不可用→true）；cargo clippy `--all-targets -D warnings` **0 warning**。
+- **诚实边界**：心跳 10s 间隔对「路由器空闲超时 <10s」的极端环境防不住（属异常网络）；保温效果需用户真机观察。用户侧同步建议（非代码）：路由器关客户端隔离/空口省电、固定信道；手机 WiFi「休眠时保持连接=始终」、关电池优化；尽量 5GHz 靠近路由器；能插线就插线。
+- **状态**：已落地工作区，**未 commit、未发版**（用户本轮只报问题，未要求发版）。

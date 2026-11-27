@@ -10,7 +10,7 @@ MirrorDock is a **local-first** Android desktop mirroring and control tool for n
 
 Video, audio, and input travel point-to-point only between your computer and your authorized phone. **No cloud relay, no uploads by default, no telemetry.**
 
-Current version: `0.4.40` (desktop) · `0.3.2` (companion app). Latest release: <https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.40-beta>
+Current version: `0.4.41` (desktop) · `0.3.2` (companion app). Latest release: <https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.41-beta>
 
 ## Features
 

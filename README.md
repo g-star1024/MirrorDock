@@ -10,7 +10,7 @@ MirrorDock 是一个**本地优先**的 Android 桌面镜像与控制工具，�
 
 画面、音频与控制仅在电脑与已授权手机之间点对点传输。**不依赖云端、不默认上传任何数据、不收集遥测。**
 
-当前版本：`0.4.40`（桌面端）· `0.3.2`（伴侣 App）。最新发布：<https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.40-beta>
+当前版本：`0.4.41`（桌面端）· `0.3.2`（伴侣 App）。最新发布：<https://github.com/g-star1024/MirrorDock/releases/tag/v0.4.41-beta>
 
 ## 功能特性
 
