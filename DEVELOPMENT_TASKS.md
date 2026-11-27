@@ -1607,3 +1607,21 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **诚实边界**：浏览器态的 3 条琥珀「无法读取连接状态/会话状态/桌面模式配置」横幅与「无法读取本机最近使用的设备记录」是**真实后端不可达报错**（无 Tauri 的 5173 环境特有），打包客户端不出现，不是样式差距；预览「演示数据/模拟加载」开关仍不搬入。
 - **状态**：**未发版未 commit**（与 X10-156 改动同在工作区，等用户逐页验收后一起 commit+发版；旧 v0.4.35-beta Release 460062645 仍待处置）。
 - **X10-157b 追加（用户复检指出「两个按钮靠在一起了」）**：伴侣扫码配对/常驻通道/批量安装/无线配对/无线发现/诊断 6 处按钮组的裸 `<span>` 容器无 flex/gap（旧规则 `.capability-panel > span` 只覆盖能力面板，connection-card 等处的 span 不在覆盖范围；X10-156 批量换 `.btn` 家族后旧按钮类自带 margin 丢失 → 相邻贴死）。修复：新增预览同款基础类 `.action-row { display:flex; gap:var(--sp-2); flex-wrap:wrap; align-items:center }`（App.css，.btn 定义后），6 处裸 span 全部替换为 `action-row`。验证：实测「开始配对/结束配对」「开启/关闭常驻通道」间距均 8px；tsc 0 error；vitest 125/125。教训：预览 `.btn` 自身无 margin，间距全靠容器 gap——迁移按钮类时必须同步迁移容器语义（span→action-row），否则间距丢失。
+- **✅ X10-156/157/157b 已发版 v0.4.36-beta（2026-11-27 11:35）**：用户验收通过后 commit `be93f24`（10 文件 +380/-258，含版本号 0.4.35→0.4.36 逐处精确编辑、Cargo.lock 只动 mirrordock 包），tag 推送触发 CI run `45933817526` 全绿（verify + 伴侣 APK + 四平台打包 + 发布，约 12 分钟），Release id `460135555` 30 资产全齐（四平台安装包+sig+APK+latest.json+SHA256SUMS+SBOM+version-check）。官网 site/index.html 29 处同步 0.4.36（commits `4274794`/`3f9afe6`）。发版文档 docs/releases/v0.4.36-beta.md（纯 ## 小节，CI 注入正常）。用户需重启客户端或手动下载更新。
+
+## X10-158 用户 14 图复检 10 类问题修复（未发版等验收）
+- **背景**：用户装 0.4.36 后复检，14 图指出 10 类问题。逐一读代码定位根因，全部修复。
+- **A 主题切换被挡（图1）**：根因=主题 e 下 `.titlebar { backdrop-filter }` 创建层叠上下文，theme-menu-pop(z-80) 被锁在 titlebar 上下文内，被 DOM 靠后的内容区整层盖住（红框露出的「磁贴 Prism」+theme-dot 正是菜单项残影）。修复：titlebar 加 `position:relative; z-index:50`。
+- **E 下拉错位覆盖（图7/8）**：根因=主题 e 给 settings-card/connection-card/device-card 等加 backdrop-filter → AppSelect 浮层(z-40)被锁在卡内层叠上下文，被后面的卡穿透。修复：**移除全部 6 处 backdrop-filter**（预览本就无毛玻璃，半透明 surface 保留）。
+- **B 圆点错位（图2）**：v3 块 steps ::before 用 inline-block+基线对齐导致偏上。修复：改预览同款 li flex+align-items:flex-start+::before 静态块+margin-top:7px。
+- **C 按钮贴文字（图3/4）**：connection-card .action-row 与关于卡 settings-actions 无 margin。修复：各加 10px 上下间距。
+- **D 主题色条不一致（图5/6）**：客户端 swatch-a~e 用旧配色（顺序/色值与预览不同）。修复：五组色值逐字对齐预览 dots（bg+accent+白）。
+- **F 开关样式（图9/10）**：预览是 28×16 胶囊 switch，客户端是原生 checkbox。修复：appearance:none 纯 CSS 拉皮成预览同款 toggle（交互逻辑零改动）。
+- **G 帮助贴边（图11）**：`.card.capability-panel { padding:0 }`（X10-156 供卡头拉满）误伤帮助文章正文。修复：正文 p 补 padding 0 sp-5 sp-5（首段补 padding-top）。
+- **H chips 药丸圆角（图12）**：.assistant-chip border-radius:13px（高一半=药丸）→ var(--r-control)。
+- **I 设备卡按钮竖排（图13/14）**：1030 行 `.hero-actions .device-card-actions { flex-direction:column }` 强制竖排。修复：改 row+wrap+右对齐。
+- **J USB 已插不显示（图2 附注）**：检测链路代码完好（首屏 check_adb_devices + devices-changed 事件监听，本轮未触碰）。自查步骤：①点连接页「重新检查」②手机解锁看有无「允许 USB 调试」弹窗（换电脑/重装后需重新授权）③换数据线（充电线不传数据）④重启客户端。若仍不行再报。
+- **验证**：tsc 0 error、vite build 过、vitest 125/125、19 视图 0 溢出；Playwright 实测：主题菜单弹出正常、设置卡色条 5 组齐全对齐预览、toggle 胶囊开关生效、AppSelect 浮层完整覆盖无穿透、步骤圆点与标题对齐、连接页按钮间距正常、帮助正文留白正常。
+- **状态**：**未 commit 未发版**，等用户验收。
+- **X10-158-B 二次修复（用户复检「那个点还是错行」）**：根因=App.css 存在**两个同优先级 steps 覆盖块**——X10-158-B 修复块插在 1620 行（中途），而 X10-156 时代追加在文件尾部的旧块（原 1746-1750，li `display:block` + ::before `display:block`）**更晚生效**，把 flex 修复整个盖掉 → ::before 恢复块级独占一行（正是用户截图的「圆点在标题上方独立一行」）。修复：删除中途重复块，文件尾最终块改为正确 flex 版（li flex + ::before 流内 flex item + margin-top:7px）。实测 computed：li=flex、::before=static/block/margin-top 7px、strong top=0 同行；截图 x158c-steps-fixed.png 确认三步骤圆点均与标题同行。**元教训：改样式时若存在多个同名覆盖块，必须修「cascade 最后生效」的那个块，插入新块只会被旧块覆盖（同类教训第二次，X10-158-G 同源）。**
+- **X10-158-K 追加（用户复检「文案贴边没有边距」，要求同类问题一块修）**：品牌引导卡卡尾说明「菜单名称因机型而异…」贴住 chips 按钮（实测仅 ~3px）。根因=`.card-body > .hint { margin: 0 0 14px }` 上边距为 0，紧跟按钮行时贴死；预览此行是内联 `margin-top:10px`。修复：①`.brand-guide-card .card-body > .hint:last-child { margin-top:10px }`（对齐预览）②通用兜底 `.card-body > .action-row { margin:10px 0 }`（顺带修复诊断包卡同款贴边）。**同类问题全视图程序化扫描**（相邻兄弟：文字块 vs 含按钮容器，垂直间距 <6px 判定）：19 视图 + 设置 7 分组全部 CLEAN（此前 16 视图首轮即干净，键位映射/多端/设备与桌面模式补扫干净）。实测品牌卡 chips→卡尾 hint 间距 3px→10px。验证：vite build 过、vitest 125/125。
