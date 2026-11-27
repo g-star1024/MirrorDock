@@ -1683,4 +1683,4 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **④ 布局错位**：App manager Open/Uninstall 由竖排改同行（`.table td[data-col=ops] .detail-ops{flex-wrap:nowrap;gap:6px}` + min-width 148px）；定时录制表单提交按钮、Pro 激活按钮窄栏不再被挤走；相册搜索框加宽；帮助中心 `.kb-list` 补 `margin-bottom:14px`（WKWebView 实测 kbBottom→diagTop gap=14）。
 - **验证**：pnpm build（tsc 0 error）、vitest **130/130**、cargo test **237/237**、cargo clippy `--all-targets -D warnings` **0 warning**（顺手修掉旧 `keyboard_settings_args` 冗余生命周期 + 新命令 `#[allow(clippy::too_many_arguments)]`）；WKWebView 15 视图英文 0 中文，相册控件右上、搜索框 224px，帮助中心 14px；中文态未回归（只增量词典/CSS）。
 - **诚实边界**：图片灯箱与系统播放器的真实交互、缩略图懒加载在 2000 条媒体下的性能、HEVC/3GP 格式兼容性需用户真机确认；沙箱无设备，仅验证了空态与布局。
-- **状态**：待 commit + tag `v0.4.40-beta` 发版；官网与中英 README 已同步 0.4.40。X10-160（README/官网双语 + 客户端语言切换）同批发布。
+- **状态**：已并入 `v0.4.40-beta` 发版。commit `3e5d4a2`（`feat: v0.4.40 相册缩略图与英文界面补齐`），CI run `45975140105` **completed success**，Release `460415594` 已发布（2026-11-27 09:53:32Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.40；官网中英站线上均 v0.4.40 + 重构预览入口。X10-160（README/官网双语 + 客户端语言切换）、X10-162（官网导航折行）同批发布。
