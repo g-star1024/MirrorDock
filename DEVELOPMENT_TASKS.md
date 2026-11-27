@@ -1696,4 +1696,4 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - 仅影响无线会话，USB 不受影响；无新增权限、无新依赖。
 - **验证**：cargo test **242/242**（新增 5 个 `heartbeat_probe_*` 用例：Ready→false；connect 失败/offline/端点消失/列表不可用→true）；cargo clippy `--all-targets -D warnings` **0 warning**。
 - **诚实边界**：心跳 10s 间隔对「路由器空闲超时 <10s」的极端环境防不住（属异常网络）；保温效果需用户真机观察。用户侧同步建议（非代码）：路由器关客户端隔离/空口省电、固定信道；手机 WiFi「休眠时保持连接=始终」、关电池优化；尽量 5GHz 靠近路由器；能插线就插线。
-- **状态**：已落地工作区，**未 commit、未发版**（用户本轮只报问题，未要求发版）。
+- **状态**：已并入 `v0.4.41-beta` 发版。commit `0fbea88`（`feat: v0.4.41 无线心跳保温与断连归因`），CI run `46032586421` **completed success**，Release `460841542` 已发布（2026-11-27 16:32:48Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.41；官网中英站线上均 v0.4.41。前端 0 改动（纯后端保温），README/官网版本同步。
