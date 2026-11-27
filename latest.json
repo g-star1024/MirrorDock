@@ -1,23 +1,23 @@
 {
-  "version": "0.4.38",
-  "notes": "## 修复\n\n- **主题色块不显示（真根因=WebKit 引擎差异）**：色块自 0.4.36 起就在包内，但 macOS 客户端（WKWebView）下 flex 列容器内的色块条宽度塌缩为 0，Chromium 下却渲染正常——所以历次复检都\"看不到\"。已补 WebKit 兼容（`width:100%`），真机同款引擎实测色块可见。\n- **主题说明文案换行**：宽窗口下不再拉成一行横贯整页，限宽换行成段落。\n- **关于页按钮与文案贴在一起（上轮未修复的补刀）**：上轮样式选择器写错了真实父级，本轮改对，按钮与上方文字间距 10px。\n- **设备中心 Hero 按钮**：「重新检查」与屏幕唤醒/开始镜像/取消授权恢复同一行（原来是纵向堆叠）；收藏星标移到设备名后面。\n- **设备中心模块拆分**：常用工具、最近任务移出连接卡成为独立模块，模块间距统一 18px，不再贴在一起。\n- **帮助中心新增「功能说明知识库」**：原先散落在各工具页底部的 16 条静态说明（安全边界、诊断、多端、黑屏、演示、映射、计划、回放、截图、录像、相册、应用管理、通知、激活、隐私承诺等）统一收纳到帮助中心，可折叠查看；各页底部不再堆说明条。错误提示、安装进度等动态状态仍留在对应页面实时展示。\n\n## 说明\n\n- 「按品牌查看开启步骤」维持原逻辑：仅在无就绪设备时显示。\n- 动态反馈（错误/进度/操作结果）按设计保留在页面内，未进知识库。",
-  "pub_date": "2026-11-27T07:05:35Z",
+  "version": "0.4.39",
+  "notes": "## 修复\n\n- **桌面模式打开键盘设置白屏**：实体键盘设置页现在被显式固定到手机物理屏（display 0），不会再被推到 scrcpy 虚拟屏。此前虚拟屏没有系统导航栏，设置页一旦落到上面就会白屏、无法返回，只能强关镜像。\n- **虚拟屏一键恢复**：按键映射页新增「恢复桌面模式画面」按钮。如果镜像窗口仍被设置页覆盖，点它即可关闭误入虚拟屏的 Settings 并把桌面应用拉回，不需要关闭镜像。操作按钮所在页会明确回执（原来提示只出现在设置页，用户看不到）。\n- **删除两处空状态说明**：按键映射「还没有映射方案…」与操作回放「还没有回放脚本…」不再显示；客户端与官网重构预览已同步。\n\n## 增强\n\n- **相册升级为全机媒体库**：改用 Android MediaStore 枚举图片与视频，覆盖相机、截图、微信等所有子目录（此前只能看到固定几个目录的第一层）。支持按图片/视频筛选、按文件名或目录搜索、逐条取回与「一键取回当前筛选」；手机端仍为只读，不修改、不删除、不上传。\n- **投屏演示指南**：演示页新增「查看演示指南」，直接打开帮助中心对应条目，写清楚五步用法与真实能力边界（不是 PPT 播放器；激光笔、白板标注、演示文稿与多屏排版尚未实现）。\n- **帮助知识库同步**：相册只读边界、映射注入与桌面模式恢复、演示用法与缺口三条说明更新为中英双语。\n\n## 验证\n\n- 前端：TypeScript 0 error、vite build 通过、vitest 130/130；Rust 237 项测试全绿（新增 MediaStore 行解析、路径白名单、虚拟屏定位、键盘设置 argv 固定用例）。\n- 真实 WKWebView（客户端同款引擎）走查：相册媒体库、按键映射、演示指南在中英两态均渲染正常，空态与筛选文案翻译到位。\n- 真机（Redmi M2104K10AC / Android 13）取证：`content query` MediaStore 图片/视频全量可读；`am start --display 0` 后虚拟屏前台应用保持不变，白屏触发路径已切断。",
+  "pub_date": "2026-11-27T08:38:40Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTJlUTYxcnJwZGlyallzRG02eUg4NnZwU2NoZFhXaVp6REdsd3FRMHhNTlprSXBHTU8wd0s5K0N5N25JcldjMSt6M0FMQWk0ZWNKNk9BMVY2N2FrVUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzYyODgwCWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM4CmJTSWo5QkRDcDJRZTVHWXpVUjZNOGpxVW9yamRiQVc1dkZyYkxEa1FKNitia1lGR2J2eitoVkJmRWZCU3dVUFVqNlpiUkN4NkFaNjV1cEp6UjlJN0R3PT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.38-beta/MirrorDock_0.4.38_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXh0SWVoa0IyUTIzTVIrUGZMa3FRRnhvU0kwTmp4YTRValJRTm82WjBpRU5XK0lXcnI5cTBtM01PQXhsYTNkWFBFN0NTRmZQaHI3K1ZaMkFySnBTOHd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzY4NTI0CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM5CjNFTnc2cEJoeVQxU3RoVUFEQXdPV25Ca1ZuWlUyc0U0ekpxRlF1VUFzMkpmUXQ0TkpuYWdFMFJqWVA4cjNLVTlYck5ZVW4reUU5L0NmRks1WEJtY0JRPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTFhQTh0aU1OYVZDRjBibzVUYldYaEF0QldHcjI0TkUwMVR5ek5SdzEwWUR6enZtNXF0eUsrZ2VtKzl1Z0NuS08zMGV5T0pDNVQ5NXFuVGRqdzNVTWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzYzMDg3CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM4ClprZmZoWC9xb1gvL2pkOG0xdjFCNE41dFNZVWpmS2xJT05rZlNDV1FjQUpzaHo2amNrNE95WGE5ODBJVkU0VEdxWDF6cUVjQytHZkVHRy9rMEdhb0FnPT0K",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.38-beta/MirrorDock_0.4.38_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTRVVVZLblVjL0FxN3Z6STVSYTd1dXA0ZFFVQ29iZDJMOWxqcTBGalRDSjJxR1UvK1dYbVhPZVhONm01NXNTazlUMnVoSG1xVXBGS0pQU21BOElTdmdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzY4NjU1CWZpbGU6TWlycm9yRG9jay5hcHAudGFyLmd6CXZlcnNpb246MC40LjM5ClVha3hGaUsyRDlTMmx2UWk0SGFyVlpEZmNrNnQ1Z0dqWmJNQnNyZ3Q0UkR6ZEhISXYxZzU0a1R2akJJcWZWNG5iWUJDV25lTmxtT3NVbXkwSW5QUUFBPT0K",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64.app.tar.gz"
     },
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXc0dVpsSG1HdSt3NEkxMDlEZUt1UXl6YnpJZE8xbWg1RWswcWxMZVNTMmo0YURXcVVPd3dLejJYYmhSbGtUSjkrTUk0RkxsRm53R2p4ak82bEtlclFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzYyOTg1CWZpbGU6TWlycm9yRG9ja18wLjQuMzhfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMzgKbXhCdTdWeG9IbGwvTm0wYzZ0akFXNEQ4OVJOekJZRi9NeGZmN1hBbU9vSXlZSkRTdWZhM2J6UW03MFJ3RGdXOGcwc0JOSzNNYXA1NXMwZllVd0RuQmc9PQo=",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.38-beta/MirrorDock_0.4.38_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXg3WUxhR3FqVUFwdnloL0FLWHB5SWZIYVBIY1E2YlREaTNXTHdNQWhReEtEYkowMmc4QnJpTTA4akRtV0V5dWFoVlkvK2dNMkxoT0hNc2hNUVMvZ0FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzY4NjgzCWZpbGU6TWlycm9yRG9ja18wLjQuMzlfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjQuMzkKdDVVcCtRSzVHS3I2TU50Z3ZEMDRuYW5kTVNRV1VYUW1RTm9aaVpxck5iN1Z6NVBrQU1hcEtab0crak1oSUcwQ09YdGJwWUFRQkJMUE1wT0xUYlNPQlE9PQo=",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaTNqV096Sks5VXE4RWV0NjdBbi9pdDJFNDZ3S1owK0psd013S2VyMVNMMVRvSGg1cHNST3IxSE1uSDJvdnJpbmpvNWU1ZFhPSjhKUGF2N0ltTUpDb3dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzYyODc0CWZpbGU6TWlycm9yRG9ja18wLjQuMzhfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4zOApTMVlqbGhpZkViU2ZwMzMzY1JYbmR6V0lIcTEwTFQ5dXRCK1E5THkrUEwvc01ySmNETzBOc3lUWE11YkhUZDNuYjFVSUhtVnNEc09SMy9XemJTbkpBZz09Cg==",
-      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.38-beta/MirrorDock_0.4.38_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRd242a3ZOcjBLaXcvdmZoWitTM1EySk1MZXc0WG9JWFNOdXlJTms4YWUrWTRoOTlvMjJoUTA5MVM5UlVCeDFpMGtrSk9laXJlZmo4WWpsMFVZZjV3NGZnS0h1bGhmeWdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzY4NjMwCWZpbGU6TWlycm9yRG9ja18wLjQuMzlfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuNC4zOQo3c2MzeWNzRlU5MlVtQlMxNUs0a3lML0QzUmZwcmlUT1FEcHhLN1JVb3U4bXpwQkgzSFQvaU9XSWplK1ZXV2hPM2oxNUthRDlwR2FzeVUxVlZYN2VCQT09Cg==",
+      "url": "https://github.com/g-star1024/MirrorDock/releases/download/v0.4.39-beta/MirrorDock_0.4.39_x64-setup.exe"
     }
   }
 }
