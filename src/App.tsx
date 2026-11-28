@@ -259,6 +259,8 @@ type SessionOptions = { quality: "smooth" | "balanced" | "sharp"; fullscreen: bo
 type SessionUpdate = { applied: boolean; note: string | null; session: MirrorSession };
 // 最近一次会话的录制文件。active 表示此刻进程是否仍在写这个文件。
 type Recording = { file_name: string; path: string; active: boolean };
+// X10-170：录屏转 GIF 的结果（本机路径）。
+type GifExportReceipt = { file_name: string; path: string; bytes: number };
 
 // C4-01 伴侣 App 配对（POC）：桌面作为 TLS 服务端，二维码携带连接信息
 // 与服务器证书 SPKI 指纹，伴侣 App 出带校验后建立加密会话。
@@ -2387,6 +2389,28 @@ function App() {
       await revealItemInDir(recording.path);
     } catch (error) {
       setRecordingError(errorMessage(error, "无法打开录像所在的文件夹。"));
+    }
+  }
+
+  // X10-170：把录屏 .mp4 转成 GIF（本机 ffmpeg，同目录同名 .gif）。
+  const [gifBusy, setGifBusy] = useState(false);
+  const [gifResult, setGifResult] = useState<GifExportReceipt | null>(null);
+
+  async function convertRecordingToGif() {
+    if (!recording || gifBusy) return;
+    setGifBusy(true);
+    setRecordingError(null);
+    setGifResult(null);
+    try {
+      const receipt = await invoke<GifExportReceipt>("convert_recording_to_gif", {
+        input: recording.path,
+      });
+      setGifResult(receipt);
+      pushRecentTask(`${receipt.file_name} 已生成`, "done");
+    } catch (error) {
+      setRecordingError(errorMessage(error, "视频转 GIF 没有完成。"));
+    } finally {
+      setGifBusy(false);
     }
   }
 
@@ -5256,7 +5280,8 @@ function App() {
             ),
           }] : []),
           { kind: "kv", title: "录像参数", tone: 5, items: [["状态", recording?.active ? `正在录制：${recording.file_name}` : recording ? "已结束" : "未开始"], ["文件", recording?.file_name ?? "—"], ["保存位置", appSettings.recording_dir ?? "本机视频 / MirrorDock"], ["授权", "手动启停，不重启镜像"]] },
-          { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active }, { label: "在文件夹中显示", onClick: () => void revealRecording(), disabled: !recording }] },
+          { kind: "actions", actions: [{ label: "开始录制", primary: true, onClick: () => void toggleRecording(), disabled: recordingBusy }, { label: "结束录制", onClick: () => void toggleRecording(), disabled: recordingBusy || !recording?.active }, { label: "在文件夹中显示", onClick: () => void revealRecording(), disabled: !recording }, { label: "转为 GIF", onClick: () => void convertRecordingToGif(), disabled: gifBusy || !recording || recording.active }] },
+          ...(gifResult ? [{ kind: "note" as const, text: `已生成 GIF：${gifResult.file_name}（${formatBytes(gifResult.bytes)}）` }] : []),
           // X10-159：静态说明移入帮助中心知识库（kb-record），此处只保留动态错误。
           ...(recordingError ? [{ kind: "note" as const, text: recordingError, kind_of_alert: "warn" as const }] : []),
         ];

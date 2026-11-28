@@ -1678,3 +1678,76 @@ describe("storage & file search (X10-169)", () => {
     expect(await screen.findByText("没有找到匹配的文件。")).toBeInTheDocument();
   });
 });
+
+describe("recording to gif (X10-170)", () => {
+  function withEndedRecording(extra?: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "check_adb_devices":
+          return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+        case "mirror_sessions":
+        case "mirror_session":
+          return Promise.resolve(
+            cmd === "mirror_sessions"
+              ? [{ phase: "streaming", serial: "phone", first_frame: "reached", error: null }]
+              : { phase: "streaming", serial: "phone", first_frame: "reached", error: null },
+          );
+        case "entitlement_status":
+          return Promise.resolve({ edition: "pro", key_id: "k", expires_at: null });
+        case "current_recording":
+          return Promise.resolve({
+            file_name: "mirrordock-record-x.mp4",
+            path: "/v/MirrorDock/mirrordock-record-x.mp4",
+            active: false,
+          });
+        case "list_device_files":
+          return Promise.resolve([]);
+        default:
+          return extra?.(cmd) ?? baseInvoke(cmd);
+      }
+    });
+  }
+
+  it("converts_an_ended_recording_to_gif", async () => {
+    withEndedRecording((cmd) => {
+      if (cmd === "convert_recording_to_gif") {
+        return Promise.resolve({
+          file_name: "mirrordock-record-x.gif",
+          path: "/v/MirrorDock/mirrordock-record-x.gif",
+          bytes: 12345,
+        });
+      }
+      return undefined;
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "录像" }));
+
+    const btn = await screen.findByRole("button", { name: "转为 GIF" });
+    expect(btn).toBeEnabled();
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "convert_recording_to_gif");
+      expect(call?.[1]).toMatchObject({ input: "/v/MirrorDock/mirrordock-record-x.mp4" });
+    });
+    expect(await screen.findByText(/已生成 GIF：mirrordock-record-x.gif/)).toBeInTheDocument();
+  });
+
+  it("reports_an_honest_error_when_ffmpeg_is_missing", async () => {
+    withEndedRecording((cmd) => {
+      if (cmd === "convert_recording_to_gif") {
+        return Promise.reject({
+          code: "gif_ffmpeg_missing",
+          message: "本机没有找到 ffmpeg，无法转 GIF。",
+          recovery: "请安装 ffmpeg（macOS：brew install ffmpeg）后重试。",
+        });
+      }
+      return undefined;
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "录像" }));
+
+    const btn = await screen.findByRole("button", { name: "转为 GIF" });
+    fireEvent.click(btn);
+    expect(await screen.findByText(/没有找到 ffmpeg/)).toBeInTheDocument();
+  });
+});

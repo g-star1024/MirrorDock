@@ -6467,6 +6467,18 @@ fn current_recording(sessions: State<SessionStore>) -> Result<Option<Recording>,
     current_recording_with(&sessions)
 }
 
+/// X10-170：把录屏 .mp4 转成 GIF（同目录同名 .gif）。本机 ffmpeg 转换，不涉及手机。
+#[tauri::command]
+fn convert_recording_to_gif(
+    input: String,
+) -> Result<GifExportReceipt, AppError> {
+    let result = convert_recording_to_gif_with(&input);
+    if let Err(error) = &result {
+        eprintln!("[mirrordock] convert_recording_to_gif failed for {input}: {}", error.code);
+    }
+    result
+}
+
 /// X10-92：开始录制（双通道）。在显示会话之外另起一条 `--no-playback --no-window` 的
 /// scrcpy 录制进程，画面窗口全程不重启。要求该设备已有运行中的显示会话。
 #[tauri::command]
@@ -6687,6 +6699,118 @@ fn any_session_recording(store: &SessionStore) -> bool {
         .lock()
         .map(|map| map.values().any(|state| state.record_process.is_some()))
         .unwrap_or(false)
+}
+
+/// 录屏转 GIF 的结果（X10-170）。`path` 是本机 GIF 完整路径。
+#[derive(Serialize, Clone, Debug)]
+struct GifExportReceipt {
+    file_name: String,
+    path: String,
+    bytes: u64,
+}
+
+fn gif_input_invalid_error() -> AppError {
+    AppError::new(
+        "gif_input_invalid",
+        "这个视频文件不能转换。",
+        "请选择一个 .mp4 录屏文件后重试。",
+    )
+}
+
+fn gif_input_missing_error() -> AppError {
+    AppError::new(
+        "gif_input_missing",
+        "找不到这个视频文件。",
+        "文件可能已被移动或删除；请重新选择后重试。",
+    )
+}
+
+fn gif_ffmpeg_missing_error() -> AppError {
+    AppError::new(
+        "gif_ffmpeg_missing",
+        "本机没有找到 ffmpeg，无法转 GIF。",
+        "请安装 ffmpeg（macOS：`brew install ffmpeg`）后重试；或保留 .mp4 录屏直接用。",
+    )
+}
+
+fn gif_convert_failed_error() -> AppError {
+    AppError::new(
+        "gif_convert_failed",
+        "视频转 GIF 没有完成。",
+        "文件可能损坏或编码不支持；请重试，或改用其他视频。",
+    )
+}
+
+/// 查找本机 ffmpeg 可执行文件。依次尝试：显式环境变量 → PATH → 常见安装路径。
+fn ffmpeg_binary() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("MIRRORDOCK_FFMPEG_PATH") {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("ffmpeg");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let exe = dir.join("ffmpeg.exe");
+                if exe.is_file() {
+                    return Some(exe);
+                }
+            }
+        }
+    }
+    for candidate in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// X10-170：把录屏 .mp4 转成 GIF（同目录同名 .gif）。
+/// ffmpeg 参数固定：12fps、宽 480 等比缩放、lanczos 抗锯齿、无限循环。
+fn convert_recording_to_gif_with(input: &str) -> Result<GifExportReceipt, AppError> {
+    let path = PathBuf::from(input);
+    let is_mp4 = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("mp4"))
+        .unwrap_or(false);
+    if !path.is_absolute() || !is_mp4 {
+        return Err(gif_input_invalid_error());
+    }
+    if !path.is_file() {
+        return Err(gif_input_missing_error());
+    }
+    let output = path.with_extension("gif");
+    let ffmpeg = ffmpeg_binary().ok_or_else(gif_ffmpeg_missing_error)?;
+    let status = Command::new(&ffmpeg)
+        .args(["-y", "-i", input])
+        .args(["-vf", "fps=12,scale=480:-1:flags=lanczos"])
+        .args(["-loop", "0"])
+        .arg(&output)
+        .output();
+    match status {
+        Ok(output_status) if output_status.status.success() => {
+            let bytes = output.metadata().map(|m| m.len()).unwrap_or(0);
+            let file_name = output
+                .file_name()
+                .map(|v| v.to_string_lossy().into_owned())
+                .unwrap_or_else(|| output.to_string_lossy().into_owned());
+            Ok(GifExportReceipt {
+                file_name,
+                path: output.to_string_lossy().into_owned(),
+                bytes,
+            })
+        }
+        _ => Err(gif_convert_failed_error()),
+    }
 }
 
 /// 删除一个录像文件，对应界面上的「撤销」。
@@ -10931,6 +11055,7 @@ pub fn run() {
             inject_device_tap,
             inject_device_swipe,
             current_recording,
+            convert_recording_to_gif,
             start_recording,
             stop_recording,
             delete_recording,
@@ -16527,6 +16652,45 @@ mod tests {
             exit: None,
             killed: Arc::new(Mutex::new(false)),
         }));
+    }
+
+    /// X10-170：录屏转 GIF 的输入校验——只接受绝对路径的 .mp4 文件。
+    #[test]
+    fn convert_recording_to_gif_validates_input() {
+        // 相对路径：拒绝。
+        assert_eq!(
+            convert_recording_to_gif_with("clip.mp4").unwrap_err().code,
+            "gif_input_invalid"
+        );
+        // 非 mp4 后缀：拒绝。
+        assert_eq!(
+            convert_recording_to_gif_with("/tmp/clip.mov").unwrap_err().code,
+            "gif_input_invalid"
+        );
+        // 绝对路径但文件不存在：如实说找不到。
+        assert_eq!(
+            convert_recording_to_gif_with("/tmp/definitely-missing.mp4")
+                .unwrap_err()
+                .code,
+            "gif_input_missing"
+        );
+    }
+
+    /// X10-170：ffmpeg 探测——显式环境变量优先，路径存在才返回。
+    #[test]
+    fn ffmpeg_binary_honors_explicit_env_path() {
+        let directory = scratch_dir("ffmpeg-probe");
+        fs::create_dir_all(&directory).unwrap();
+        let fake = directory.join("ffmpeg");
+        fs::write(&fake, b"#!/bin/sh").unwrap();
+        std::env::set_var("MIRRORDOCK_FFMPEG_PATH", &fake);
+        assert_eq!(ffmpeg_binary(), Some(fake.clone()));
+        std::env::remove_var("MIRRORDOCK_FFMPEG_PATH");
+        // 指向不存在路径时回退其他候选（本机可能有 /usr/local/bin/ffmpeg 等）。
+        std::env::set_var("MIRRORDOCK_FFMPEG_PATH", directory.join("nope"));
+        let _ = ffmpeg_binary(); // 不应 panic。
+        std::env::remove_var("MIRRORDOCK_FFMPEG_PATH");
+        let _ = fs::remove_dir_all(&directory);
     }
 
     /// X10-107：续录分段文件名在原主干后追加 -part<N>，扩展名保留。

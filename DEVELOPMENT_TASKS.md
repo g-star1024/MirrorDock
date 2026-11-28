@@ -1733,3 +1733,11 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **诚实边界**：`find` 不保证输出大小 → `bytes` 恒 0，前端如实显示「大小未知」不伪装 0 字节；搜索关键词含 shell 危险字符如实拒绝；读不到字段如实 null。
 - **验证**：cargo test **267/267**（新增 4 例）；clippy 0 warning；tsc 0 error；vitest **141/141**（新增 storage & file search 3 例）；Playwright 0 溢出 / 0 控制台错误。
 - **状态**：代码完成，待并入 v0.4.43 发版。
+
+## X10-170 录屏转 GIF（2026-11-28）
+- **功能**：录像视图加「转为 GIF」——把已结束的录屏 .mp4 转成同目录同名 .gif（本机 ffmpeg）。
+- **Rust**：`ffmpeg_binary()`（显式环境变量 `MIRRORDOCK_FFMPEG_PATH` → PATH → `/opt/homebrew`/`/usr/local` 常见路径）；`convert_recording_to_gif_with`（校验绝对路径 + .mp4 + 存在；`ffmpeg -y -i in.mp4 -vf fps=12,scale=480:-1:flags=lanczos -loop 0 out.gif`）；回执 `GifExportReceipt`；命令 `convert_recording_to_gif`。
+- **前端**：录像视图 actions 加「转为 GIF」（禁用条件：无录制 / 仍在录制）；成功后提示文件名 + 大小并写入最近任务；ffmpeg 缺失时如实报错并提示安装命令。
+- **诚实边界**：非绝对路径 / 非 .mp4 / 文件不存在 / ffmpeg 缺失 / 转换失败，各自如实报错，不猜默认。
+- **验证**：cargo test **269/269**（新增 2 例）；clippy 0 warning；tsc 0 error；vitest **143/143**（新增 recording to gif 2 例）；Playwright 0 溢出 / 0 控制台错误（本机 ffmpeg 9.0.2 实测存在）。
+- **状态**：代码完成，待并入 v0.4.43 发版。
