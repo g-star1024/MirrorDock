@@ -1874,3 +1874,41 @@ form.detail-row > button[type="submit"] { flex: 0 0 auto; }
 .fm-name:disabled { opacity: .6; cursor: default; }
 .fm-kind { color: var(--muted); font-size: 13px; flex: none; }
 .fm-kind.dir { color: var(--accent); }
+
+/* X10-168 设备控制与性能：亮度/音量滑条行 + 性能指标格 */
+.device-control-row {
+  display: grid; grid-template-columns: 56px minmax(0, 1fr) 48px;
+  align-items: center; gap: 12px; margin-bottom: 12px;
+}
+.device-control-label { color: var(--text); font-size: 13px; font-weight: 600; }
+.device-control-row input[type="range"] {
+  width: 100%; accent-color: var(--accent); margin: 0; cursor: pointer;
+}
+.device-control-row input[type="range"]:disabled { opacity: .5; cursor: default; }
+.device-control-value {
+  color: var(--muted); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums;
+}
+.device-metric {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; border-radius: var(--radius, 12px);
+  background: var(--surface-2, rgba(0,0,0,.04)); min-width: 0;
+}
+.device-metric-label { color: var(--muted); font-size: 12px; }
+.device-metric-value {
+  color: var(--text); font-size: 14px; font-weight: 600;
+  font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* X10-169 存储分析与文件搜索：目录占用条 + 搜索行 + 结果列表 */
+.storage-dir-list { margin: 12px 0 4px; display: flex; flex-direction: column; gap: 6px; }
+.storage-dir-row { display: grid; grid-template-columns: minmax(80px, 120px) minmax(0, 1fr) 56px; align-items: center; gap: 10px; }
+.storage-dir-name { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-dir-bar { height: 8px; border-radius: 4px; background: var(--surface-2, rgba(0,0,0,.06)); overflow: hidden; }
+.storage-dir-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent, #4f7cff); }
+.storage-dir-size { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.phone-search-row { display: flex; gap: 8px; margin-top: 12px; }
+.phone-search-row input[type="search"] { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--border, rgba(0,0,0,.14)); border-radius: var(--radius, 12px); background: var(--surface, #fff); color: var(--text); font-size: 13px; }
+.phone-search-results { margin-top: 10px; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.phone-search-item { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: 8px; background: var(--surface-2, rgba(0,0,0,.03)); }
+.phone-search-name { color: var(--text); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-search-path { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

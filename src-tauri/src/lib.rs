@@ -380,9 +380,50 @@ trait AdbRuntime: Send + Sync {
         package: &str,
         keep_data: bool,
     ) -> Result<(), std::io::Error>;
+    /// 查询应用 APK 的安装路径（`pm path <package>` 原始输出，X10-167）。
+    /// 返回原始输出（每行 `package:<apk 路径>`），由调用方解析；base.apk 与
+    /// split_*.apk 各占一行。读操作，不改变设备状态。
+    /// 默认实现返回错误：测试替身不关心 APK 提取，真实实现覆盖。
+    fn app_apk_paths(&self, _serial: &str, _package: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("app_apk_paths not implemented"))
+    }
     /// 电池与存储摘要原始输出（X10-136）：`dumpsys battery` + `df -h /sdcard`。
     /// 只读操作，调用方自行解析感兴趣的字段。
     fn battery_storage(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 读取当前屏幕亮度（`settings get system screen_brightness` 原始输出，X10-168）。
+    /// 返回原始输出（一行数字或 `null`），由调用方解析。读操作。
+    /// 默认实现返回错误：测试替身不关心，真实实现覆盖。
+    fn get_screen_brightness(&self, _serial: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("get_screen_brightness not implemented"))
+    }
+    /// 读取当前媒体音量（`media volume --stream 3 --get` 原始输出，X10-168）。
+    fn get_media_volume(&self, _serial: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("get_media_volume not implemented"))
+    }
+    /// 设置屏幕亮度（先切手动模式 `screen_brightness_mode=0` 再写值，X10-168）。
+    /// 写操作；只写 0..=255，由调用方校验。
+    fn set_screen_brightness(&self, _serial: &str, _value: u8) -> Result<(), std::io::Error> {
+        Err(std::io::Error::other("set_screen_brightness not implemented"))
+    }
+    /// 设置媒体音量（`media volume --stream 3 --set`，X10-168）。写操作；0..=15。
+    fn set_media_volume(&self, _serial: &str, _value: u8) -> Result<(), std::io::Error> {
+        Err(std::io::Error::other("set_media_volume not implemented"))
+    }
+    /// 性能快照原始输出（X10-168）：`top -n 1 -b` + `/proc/meminfo` + `dumpsys battery`
+    /// 合并（节间用 `--- xxx ---` 分隔），由调用方解析 CPU/内存/温度。只读。
+    fn performance_snapshot(&self, _serial: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("performance_snapshot not implemented"))
+    }
+    /// 存储分析原始输出（X10-169）：`df -h /storage/emulated/0` + `du -sh` 各顶层目录
+    /// 合并（节间 `--- df ---` / `--- du ---`），由调用方解析总容量与目录占用。只读。
+    fn storage_analysis(&self, _serial: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("storage_analysis not implemented"))
+    }
+    /// 公共存储全盘文件搜索原始输出（X10-169）：`find /storage/emulated/0 -type f
+    /// -iname *<query>*`（跳过 Android/data、Android/obb），由调用方解析。只读。
+    fn search_phone_files(&self, _serial: &str, _query: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("search_phone_files not implemented"))
+    }
     /// 列出设备目录条目（`ls -la` 原始输出），供文件管理解析目录/文件/大小/时间（X10-166）。
     /// 默认实现返回错误：测试替身不关心文件管理，真实实现覆盖。
     fn list_phone_dir(&self, _serial: &str, _remote_dir: &str) -> Result<String, std::io::Error> {
@@ -1265,6 +1306,10 @@ impl AdbRuntime for SystemAdbRuntime {
         Self::capture(&["-s", serial, "shell", "pm", "list", "packages", "-3"])
     }
 
+    fn app_apk_paths(&self, serial: &str, package: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "pm", "path", package])
+    }
+
     fn launch_device_app(&self, serial: &str, package: &str) -> Result<(), std::io::Error> {
         // monkey 参数 1 = 每个包只发一个 LAUNCHER intent。包名作为单个 argv。
         Self::run(&["-s", serial, "shell", "monkey", "-p", package, "1"])
@@ -1287,6 +1332,116 @@ impl AdbRuntime for SystemAdbRuntime {
         let battery = Self::capture(&["-s", serial, "shell", "dumpsys", "battery"])?;
         let df = Self::capture(&["-s", serial, "shell", "df", "-h", "/sdcard"]).unwrap_or_default();
         Ok(format!("{battery}\n--- df ---\n{df}"))
+    }
+
+    fn get_screen_brightness(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&[
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "get",
+            "system",
+            "screen_brightness",
+        ])
+    }
+
+    fn get_media_volume(&self, serial: &str) -> Result<String, std::io::Error> {
+        Self::capture(&["-s", serial, "shell", "media", "volume", "--stream", "3", "--get"])
+    }
+
+    fn set_screen_brightness(&self, serial: &str, value: u8) -> Result<(), std::io::Error> {
+        // 先切到手动模式，否则系统按「自动亮度」覆盖我们的写入值。
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "put",
+            "system",
+            "screen_brightness_mode",
+            "0",
+        ])?;
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "settings",
+            "put",
+            "system",
+            "screen_brightness",
+            &value.to_string(),
+        ])
+    }
+
+    fn set_media_volume(&self, serial: &str, value: u8) -> Result<(), std::io::Error> {
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "media",
+            "volume",
+            "--stream",
+            "3",
+            "--set",
+            &value.to_string(),
+        ])
+    }
+
+    fn performance_snapshot(&self, serial: &str) -> Result<String, std::io::Error> {
+        let top = Self::capture(&["-s", serial, "shell", "top", "-n", "1", "-b"])?;
+        let mem =
+            Self::capture(&["-s", serial, "shell", "cat", "/proc/meminfo"]).unwrap_or_default();
+        let battery =
+            Self::capture(&["-s", serial, "shell", "dumpsys", "battery"]).unwrap_or_default();
+        Ok(format!("--- top ---\n{top}\n--- meminfo ---\n{mem}\n--- battery ---\n{battery}"))
+    }
+
+    fn storage_analysis(&self, serial: &str) -> Result<String, std::io::Error> {
+        let df = Self::capture(&["-s", serial, "shell", "df", "-h", "/storage/emulated/0"])
+            .unwrap_or_default();
+        // du 需要设备端 shell 展开顶层通配：adb shell 会把 argv 拼成命令串交给
+        // 设备端 shell，`/storage/emulated/0/*` 在那里展开为各顶层目录。只读。
+        let du = Self::capture(&[
+            "-s",
+            serial,
+            "shell",
+            "du",
+            "-sh",
+            "/storage/emulated/0/*",
+        ])
+        .unwrap_or_default();
+        Ok(format!("--- df ---\n{df}\n--- du ---\n{du}"))
+    }
+
+    fn search_phone_files(&self, serial: &str, query: &str) -> Result<String, std::io::Error> {
+        // 通配与管道必须交给设备端 shell 解释（adb shell 拼串后）。query 已经
+        // `validate_phone_search_query` 白名单校验（拒绝 shell 危险字符），这里再
+        // 用 shell_quote 把含 `*` 的模式包成设备端字面量，避免被通配提前展开。
+        let pattern = shell_quote(&format!("*{query}*"));
+        let data_pattern = shell_quote("*/Android/data/*");
+        let obb_pattern = shell_quote("*/Android/obb/*");
+        Self::capture(&[
+            "-s",
+            serial,
+            "shell",
+            "find",
+            "/storage/emulated/0",
+            "-type",
+            "f",
+            "-iname",
+            &pattern,
+            "-not",
+            "-path",
+            &data_pattern,
+            "-not",
+            "-path",
+            &obb_pattern,
+            "|",
+            "head",
+            "-n",
+            "200",
+        ])
     }
 
     fn activity_dumpsys(&self, serial: &str) -> Result<String, std::io::Error> {
@@ -8717,6 +8872,25 @@ fn uninstall_device_app(
     result
 }
 
+/// 把应用的所有 APK 导出到本机「下载 / MirrorDock / APK / <包名>」（X10-167）。
+/// 读操作：只从手机拉取文件，不改变手机状态。支持 split APK（一次导出多个文件）。
+#[tauri::command]
+fn export_apk(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    package: String,
+) -> Result<ApkExportReceipt, AppError> {
+    let directory = match transfer_download_dir(&app) {
+        Ok(dir) => dir.join("APK"),
+        Err(error) => return Err(error),
+    };
+    let result = export_apk_with(&runtimes, &directory, serial.clone(), package.clone());
+    log.record_outcome("apk_export", result.as_ref().err(), &[&serial, &package]);
+    result
+}
+
 /// 读取手机的电池与存储摘要（X10-136）。只读。
 #[tauri::command]
 fn device_battery_storage(
@@ -8726,6 +8900,81 @@ fn device_battery_storage(
 ) -> Result<DevicePowerStorage, AppError> {
     let result = battery_storage_with(&runtimes, serial.clone());
     log.record_outcome("battery_storage", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 读取当前屏幕亮度与媒体音量（X10-168）。只读；读不到字段如实为 null。
+#[tauri::command]
+fn device_display_settings(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+) -> Result<DeviceDisplaySettings, AppError> {
+    let result = display_settings_with(&runtimes, serial.clone());
+    log.record_outcome("display_settings", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 设置屏幕亮度（X10-168）。写操作：先切手动模式，再写 0-255。
+#[tauri::command]
+fn set_device_brightness(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    value: u8,
+) -> Result<(), AppError> {
+    let result = set_device_brightness_with(&runtimes, serial.clone(), value);
+    log.record_outcome("brightness_set", result.as_ref().err(), &[&serial, &value.to_string()]);
+    result
+}
+
+/// 设置媒体音量（X10-168）。写操作：0-15。
+#[tauri::command]
+fn set_device_volume(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    value: u8,
+) -> Result<(), AppError> {
+    let result = set_device_volume_with(&runtimes, serial.clone(), value);
+    log.record_outcome("volume_set", result.as_ref().err(), &[&serial, &value.to_string()]);
+    result
+}
+
+/// 读取设备性能快照（X10-168）：CPU 占用 / 内存 / 温度。只读。
+#[tauri::command]
+fn device_performance(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+) -> Result<DevicePerformance, AppError> {
+    let result = device_performance_with(&runtimes, serial.clone());
+    log.record_outcome("performance", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 读取设备存储分析（X10-169）：存储卷摘要 + 顶层目录占用。只读。
+#[tauri::command]
+fn storage_analysis(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+) -> Result<StorageAnalysis, AppError> {
+    let result = storage_analysis_with(&runtimes, serial.clone());
+    log.record_outcome("storage_analysis", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 搜索手机公共存储文件（X10-169）：`find -iname *query*`。只读。
+#[tauri::command]
+fn search_phone_files(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    query: String,
+) -> Result<Vec<PhoneSearchResult>, AppError> {
+    let result = search_phone_files_with(&runtimes, serial.clone(), query.clone());
+    log.record_outcome("phone_search", result.as_ref().err(), &[&serial, &query]);
     result
 }
 
@@ -8854,6 +9103,113 @@ fn uninstall_device_app_with(
         })
 }
 
+/// 解析 `pm path` 输出（X10-167）：每行 `package:<apk 路径>`，提取路径部分。
+/// 只保留 `/` 开头的绝对路径；空行、`Error:` 等异常行跳过。
+/// 应用有多个 APK（base + split_*.apk）时每行一个，顺序保留。
+fn parse_pm_path(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let (_, path) = line.split_once(':')?;
+            let path = path.trim();
+            if path.is_empty() || !path.starts_with('/') {
+                return None;
+            }
+            Some(path.to_owned())
+        })
+        .collect()
+}
+
+/// 导出单个 APK 文件的结果（X10-167）。
+#[derive(serde::Serialize, Debug)]
+struct ApkExportFile {
+    name: String,
+    path: String,
+    bytes: u64,
+}
+
+/// 一次「导出 APK」的完整回执（X10-167）。一个应用可能是 split APK（base + 各 ABI/语言
+/// 拆分包），所以导出的是整个目录里的一个或多个文件；`dir` 是本机保存目录。
+#[derive(serde::Serialize, Debug)]
+struct ApkExportReceipt {
+    package: String,
+    dir: String,
+    files: Vec<ApkExportFile>,
+    total_bytes: u64,
+}
+
+/// 把应用的所有 APK 从手机拉到本机目录（X10-167）。
+/// `directory` 是「APK/<package>/」的父级，由调用方拼好；导出目录按包名再分一层，
+/// 避免多个应用的 base.apk 互相覆盖。
+fn export_apk_with(
+    runtimes: &AppRuntimes,
+    directory: &Path,
+    serial: String,
+    package: String,
+) -> Result<ApkExportReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+    let package = validate_package_name(&package)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes
+        .adb
+        .app_apk_paths(&serial, &package)
+        .map_err(|_| {
+            AppError::new(
+                "apk_export_pm_failed",
+                "无法查询应用安装路径。",
+                "请确认连接仍然有效，然后重试。",
+            )
+        })?;
+    let apk_paths = parse_pm_path(&raw);
+    if apk_paths.is_empty() {
+        return Err(AppError::new(
+            "apk_export_no_apk",
+            "没有找到这个应用的 APK 文件。",
+            "可能是系统预装或精简安装的应用；请确认这是通过应用商店或安装包安装的第三方应用。",
+        ));
+    }
+    let pkg_dir = directory.join(&package);
+    fs::create_dir_all(&pkg_dir).map_err(|_| transfer_dir_unavailable_error())?;
+    let mut files = Vec::new();
+    let mut total_bytes = 0u64;
+    for remote in &apk_paths {
+        let base_name = Path::new(remote)
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{package}.apk"));
+        let local = unique_file_path(&pkg_dir, &base_name);
+        runtimes
+            .adb
+            .pull_file(&serial, remote, &local)
+            .map_err(|_| {
+                AppError::new(
+                    "apk_export_pull_failed",
+                    "APK 没有导出到本机。",
+                    "请确认手机存储空间与连接正常，然后重试。",
+                )
+            })?;
+        let bytes = fs::metadata(&local).map(|metadata| metadata.len()).unwrap_or(0);
+        total_bytes += bytes;
+        files.push(ApkExportFile {
+            name: local
+                .file_name()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or(base_name),
+            path: local.to_string_lossy().into_owned(),
+            bytes,
+        });
+    }
+    Ok(ApkExportReceipt {
+        package,
+        dir: pkg_dir.to_string_lossy().into_owned(),
+        files,
+        total_bytes,
+    })
+}
+
 /// 电池与存储摘要（X10-136）。全部字段可缺失——读不到就如实返回 null，
 /// 不猜默认值。
 #[derive(Serialize, Clone, Default, Debug)]
@@ -8916,6 +9272,382 @@ fn battery_storage_with(
         )
     })?;
     Ok(parse_battery_storage(&raw))
+}
+
+/// 当前屏幕亮度与媒体音量（X10-168）。读不到如实为 None，不猜默认值。
+#[derive(Serialize, Clone, Default, Debug)]
+struct DeviceDisplaySettings {
+    brightness: Option<u8>,
+    volume: Option<u8>,
+}
+
+/// 设备性能快照（X10-168）。字段可缺失——读不到如实 None。
+#[derive(Serialize, Clone, Default, Debug)]
+struct DevicePerformance {
+    cpu_percent: Option<f64>,
+    mem_total_mb: Option<u64>,
+    mem_avail_mb: Option<u64>,
+    temperature: Option<f64>,
+}
+
+/// 解析 `settings get system screen_brightness`：一行数字（0-255）或 `null`。
+fn parse_screen_brightness(raw: &str) -> Option<u8> {
+    raw.trim().parse::<u8>().ok()
+}
+
+/// 解析 `media volume --stream 3 --get`：输出如 `Current volume: 7 (stream 3, ...)`
+/// 或部分设备输出纯数字。取第一个出现的整数作为音量。
+fn parse_media_volume(raw: &str) -> Option<u8> {
+    for token in raw.split_whitespace() {
+        let cleaned: String = token.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !cleaned.is_empty() {
+            if let Ok(value) = cleaned.parse::<u8>() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// 解析 `top -n 1 -b` 的 CPU 行：toybox 格式 `Cpu: 12% usr 5% sys 0% nic 83% idle ...`，
+/// 取 usr + sys 作为总占用百分比（nic/idle/wait 不计入）。
+fn parse_cpu_percent(top_raw: &str) -> Option<f64> {
+    for line in top_raw.lines() {
+        let line = line.trim();
+        if line.starts_with("Cpu:") || line.starts_with("%Cpu") {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            let mut usr = 0.0;
+            let mut sys = 0.0;
+            for (index, token) in tokens.iter().enumerate() {
+                if *token == "usr" || *token == "us" {
+                    if let Some(prev) = index.checked_sub(1) {
+                        usr = tokens[prev].trim_end_matches('%').parse().unwrap_or(0.0);
+                    }
+                } else if *token == "sys" || *token == "sy" {
+                    if let Some(prev) = index.checked_sub(1) {
+                        sys = tokens[prev].trim_end_matches('%').parse().unwrap_or(0.0);
+                    }
+                }
+            }
+            if usr > 0.0 || sys > 0.0 {
+                return Some(usr + sys);
+            }
+        }
+    }
+    None
+}
+
+/// 从 `/proc/meminfo` 取一个 `Key:` 的 KB 值。
+fn parse_meminfo_kb(raw: &str, key: &str) -> Option<u64> {
+    raw.lines()
+        .find(|line| line.trim().starts_with(key))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+/// 从性能快照合并输出解析 CPU / 内存 / 温度。温度复用 `dumpsys battery` 的解析。
+fn parse_performance(raw: &str) -> DevicePerformance {
+    let top_section = raw.split("--- top ---").nth(1).unwrap_or("");
+    let mem_section = raw.split("--- meminfo ---").nth(1).unwrap_or("");
+    let battery_section = raw.split("--- battery ---").nth(1).unwrap_or("");
+    DevicePerformance {
+        cpu_percent: parse_cpu_percent(top_section),
+        mem_total_mb: parse_meminfo_kb(mem_section, "MemTotal:").map(|kb| kb / 1024),
+        mem_avail_mb: parse_meminfo_kb(mem_section, "MemAvailable:").map(|kb| kb / 1024),
+        temperature: parse_battery_storage(battery_section).temperature,
+    }
+}
+
+fn display_settings_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<DeviceDisplaySettings, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let brightness = runtimes
+        .adb
+        .get_screen_brightness(&serial)
+        .ok()
+        .and_then(|raw| parse_screen_brightness(&raw));
+    let volume = runtimes
+        .adb
+        .get_media_volume(&serial)
+        .ok()
+        .and_then(|raw| parse_media_volume(&raw));
+    Ok(DeviceDisplaySettings { brightness, volume })
+}
+
+fn set_device_brightness_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    value: u8,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    runtimes
+        .adb
+        .set_screen_brightness(&serial, value)
+        .map_err(|_| {
+            AppError::new(
+                "brightness_set_failed",
+                "屏幕亮度没有调整。",
+                "请确认连接仍然有效，然后重试。",
+            )
+        })
+}
+
+fn set_device_volume_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    value: u8,
+) -> Result<(), AppError> {
+    if value > 15 {
+        return Err(AppError::new(
+            "volume_out_of_range",
+            "音量值超出范围。",
+            "媒体音量范围是 0-15。",
+        ));
+    }
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    runtimes.adb.set_media_volume(&serial, value).map_err(|_| {
+        AppError::new(
+            "volume_set_failed",
+            "音量没有调整。",
+            "部分 Android 版本不支持 media volume 命令；请确认连接仍然有效。",
+        )
+    })
+}
+
+fn device_performance_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<DevicePerformance, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes.adb.performance_snapshot(&serial).map_err(|_| {
+        AppError::new(
+            "performance_failed",
+            "无法读取设备性能数据。",
+            "请确认连接仍然有效，然后重试。",
+        )
+    })?;
+    Ok(parse_performance(&raw))
+}
+
+/// 存储分析（X10-169）：设备存储卷摘要 + 公共存储顶层目录占用。
+#[derive(Serialize, Clone, Debug)]
+struct StorageAnalysis {
+    /// 存储卷摘要（人类可读或 null，读不到如实返回）。
+    total: Option<String>,
+    free: Option<String>,
+    used: Option<String>,
+    /// 顶层目录占用，按字节降序。
+    top_dirs: Vec<StorageTopDir>,
+}
+
+/// 公共存储一个顶层目录的占用（X10-169）。
+#[derive(Serialize, Clone, Debug)]
+struct StorageTopDir {
+    name: String,
+    bytes: u64,
+    /// 人类可读大小（`du -sh` 原始输出）。
+    human: String,
+}
+
+/// 手机文件搜索结果（X10-169）。`find -type f -iname` 不保证输出大小，
+/// 所以 `bytes` 恒为 0，前端如实显示「大小未知」，不伪装成 0 字节。
+#[derive(Serialize, Clone, Debug)]
+struct PhoneSearchResult {
+    path: String,
+    name: String,
+    bytes: u64,
+}
+
+fn phone_search_query_invalid_error() -> AppError {
+    AppError::new(
+        "phone_search_query_invalid",
+        "搜索内容不可用。",
+        "请输入 1-64 个不含空白与 shell 特殊字符的常规关键词后重试。",
+    )
+}
+
+/// X10-169：校验文件搜索关键词——只允许常规文件名片段，拒绝 shell 危险字符。
+fn validate_phone_search_query(query: &str) -> Result<String, AppError> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return Err(phone_search_query_invalid_error());
+    }
+    // 拒绝空白与 shell 元字符：这些字符在 `find -iname *...*` 里需要转义，
+    // 且 adb shell 会把命令拼成字符串交给设备端解释，风险更高。
+    if trimmed
+        .chars()
+        .any(|c| c.is_whitespace() || "`$;&|<>(){}[]'\"\\!*?~#".contains(c))
+    {
+        return Err(phone_search_query_invalid_error());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// X10-169：解析 `df -h /storage/emulated/0` 输出。按列名定位，不依赖列顺序。
+/// 返回 `(total, used, free)` 的人类可读字符串；任一项读不到就是 None。
+fn parse_df_h(raw: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let mut header: Option<Vec<String>> = None;
+    for line in raw.lines() {
+        let tokens: Vec<String> = line.split_whitespace().map(|s| s.to_string()).collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        if header.is_none() && tokens.iter().any(|t| t == "Size" || t == "Avail") {
+            header = Some(tokens);
+            continue;
+        }
+        if let Some(head) = &header {
+            let get = |name: &str| -> Option<String> {
+                head.iter()
+                    .position(|t| t == name)
+                    .and_then(|idx| tokens.get(idx))
+                    .cloned()
+            };
+            let size = get("Size");
+            let used = get("Used");
+            let avail = get("Avail");
+            if size.is_some() || avail.is_some() {
+                return (size, used, avail);
+            }
+        }
+    }
+    (None, None, None)
+}
+
+/// X10-169：解析 `du -sh /storage/emulated/0/*` 输出。每行 `SIZE\tPATH`，
+/// 取 basename 作为目录名，按字节降序。
+fn parse_du_sh(raw: &str) -> Vec<StorageTopDir> {
+    let mut dirs: Vec<StorageTopDir> = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, '\t');
+        let size = parts.next().unwrap_or("").trim().to_string();
+        let path = parts.next().unwrap_or("").trim().to_string();
+        if size.is_empty() || path.is_empty() {
+            continue;
+        }
+        let name = path.rsplit('/').next().unwrap_or(&path).trim().to_string();
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let bytes = parse_human_size(&size);
+        dirs.push(StorageTopDir { name, bytes, human: size });
+    }
+    dirs.sort_by_key(|b| std::cmp::Reverse(b.bytes));
+    dirs
+}
+
+/// X10-169：解析 `du -sh` 的人类可读大小（如 `1.2G`、`345M`、`12K`、`1024`）为字节。
+fn parse_human_size(size: &str) -> u64 {
+    let size = size.trim();
+    if size.is_empty() {
+        return 0;
+    }
+    let (number, unit) = match size.chars().last() {
+        Some(c) if c.is_ascii_alphabetic() => (&size[..size.len() - 1], c.to_ascii_lowercase()),
+        _ => (size, 'b'),
+    };
+    let value: f64 = number.trim().parse().unwrap_or(0.0);
+    let factor = match unit {
+        'k' => 1024.0,
+        'm' => 1024.0 * 1024.0,
+        'g' => 1024.0 * 1024.0 * 1024.0,
+        't' => 1024.0_f64.powi(4),
+        _ => 1.0,
+    };
+    (value * factor) as u64
+}
+
+/// X10-169：解析存储分析合并输出（`--- df ---` / `--- du ---`）。
+fn parse_storage_analysis(raw: &str) -> StorageAnalysis {
+    let df_section = raw.split("--- df ---").nth(1).unwrap_or("");
+    let du_section = raw.split("--- du ---").nth(1).unwrap_or("");
+    let (total, used, free) = parse_df_h(df_section);
+    StorageAnalysis {
+        total,
+        free,
+        used,
+        top_dirs: parse_du_sh(du_section),
+    }
+}
+
+/// X10-169：解析 `find` 搜索结果（每行一个绝对路径）。
+fn parse_find_results(raw: &str) -> Vec<PhoneSearchResult> {
+    let mut results = Vec::new();
+    for line in raw.lines() {
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let name = path.rsplit('/').next().unwrap_or(path).trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        results.push(PhoneSearchResult {
+            path: path.to_string(),
+            name,
+            bytes: 0,
+        });
+    }
+    results
+}
+
+fn storage_analysis_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+) -> Result<StorageAnalysis, AppError> {
+    let serial = validate_serial(&serial)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes.adb.storage_analysis(&serial).map_err(|_| {
+        AppError::new(
+            "storage_analysis_failed",
+            "无法读取手机存储分析。",
+            "请确认连接仍然有效，然后重试。",
+        )
+    })?;
+    Ok(parse_storage_analysis(&raw))
+}
+
+fn search_phone_files_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    query: String,
+) -> Result<Vec<PhoneSearchResult>, AppError> {
+    let serial = validate_serial(&serial)?;
+    let query = validate_phone_search_query(&query)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes
+        .adb
+        .search_phone_files(&serial, &query)
+        .map_err(|_| {
+            AppError::new(
+                "phone_search_failed",
+                "搜索没有完成。",
+                "请确认连接仍然有效，然后重试。",
+            )
+        })?;
+    Ok(parse_find_results(&raw))
 }
 
 /// 运行 `scrcpy --list-apps -s <serial>`，返回 stdout；失败或超时返回 None。
@@ -10172,7 +10904,14 @@ pub fn run() {
             list_device_apps,
             launch_device_app,
             uninstall_device_app,
+            export_apk,
             device_battery_storage,
+            device_display_settings,
+            set_device_brightness,
+            set_device_volume,
+            device_performance,
+            storage_analysis,
+            search_phone_files,
             fetch_file_from_device,
             delete_device_file,
             install_apk_to_device,
@@ -10362,8 +11101,20 @@ mod tests {
         mdns_output: Option<String>,
         /// `list_device_apps` 的 canned 输出（X10-53 解析测试用）。
         apps_output: Option<String>,
+        /// `app_apk_paths`（pm path）的 canned 输出（X10-167 解析测试用）。
+        apk_paths_output: Option<String>,
         /// `battery_storage` 的 canned 输出（X10-136 解析测试用）。
         battery_storage_output: Option<String>,
+        /// `get_screen_brightness` 的 canned 输出（X10-168 解析测试用）。
+        brightness_output: Option<String>,
+        /// `get_media_volume` 的 canned 输出（X10-168 解析测试用）。
+        volume_output: Option<String>,
+        /// `performance_snapshot` 的 canned 输出（X10-168 解析测试用）。
+        performance_output: Option<String>,
+        /// `storage_analysis` 的 canned 输出（X10-169 解析测试用）。
+        storage_analysis_output: Option<String>,
+        /// `search_phone_files` 的 canned 输出（X10-169 解析测试用）。
+        search_output: Option<String>,
         /// 为真时 `connect` 一律失败（模拟无线调试已关/未配对）。
         connect_fails: bool,
         /// `pull_file` 成功时写进本机文件的内容，用于验证回执字节数。
@@ -10856,12 +11607,82 @@ mod tests {
             Ok(())
         }
 
+        fn app_apk_paths(&self, serial: &str, package: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("pm_path {package} {serial}"));
+            Ok(self.apk_paths_output.clone().unwrap_or_default())
+        }
+
         fn battery_storage(&self, serial: &str) -> Result<String, std::io::Error> {
             self.calls
                 .lock()
                 .unwrap()
                 .push(format!("battery_storage {serial}"));
             Ok(self.battery_storage_output.clone().unwrap_or_default())
+        }
+
+        fn get_screen_brightness(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("get_brightness {serial}"));
+            Ok(self.brightness_output.clone().unwrap_or_default())
+        }
+
+        fn get_media_volume(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("get_volume {serial}"));
+            Ok(self.volume_output.clone().unwrap_or_default())
+        }
+
+        fn set_screen_brightness(&self, serial: &str, value: u8) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("set_brightness {value} {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
+            Ok(())
+        }
+
+        fn set_media_volume(&self, serial: &str, value: u8) -> Result<(), std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("set_volume {value} {serial}"));
+            if *self.device_writes_fail.lock().unwrap() {
+                return Err(std::io::Error::other("device offline"));
+            }
+            Ok(())
+        }
+
+        fn performance_snapshot(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("performance_snapshot {serial}"));
+            Ok(self.performance_output.clone().unwrap_or_default())
+        }
+
+        fn storage_analysis(&self, serial: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("storage_analysis {serial}"));
+            Ok(self.storage_analysis_output.clone().unwrap_or_default())
+        }
+
+        fn search_phone_files(&self, serial: &str, query: &str) -> Result<String, std::io::Error> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("search_phone_files {serial} {query}"));
+            Ok(self.search_output.clone().unwrap_or_default())
         }
     }
 
@@ -14933,6 +15754,88 @@ mod tests {
     }
 
     #[test]
+    fn parse_pm_path_extracts_absolute_apk_paths() {
+        let sample = "package:/data/app/~~abc/com.example.app/base.apk\n\
+                      package:/data/app/~~abc/com.example.app/split_config.arm64_v8a.apk\n\
+                      Error: no apk\n\
+                      \n";
+        let paths = parse_pm_path(sample);
+        assert_eq!(paths.len(), 2, "只取绝对路径行，跳过 Error 与空行");
+        assert!(paths[0].ends_with("base.apk"));
+        assert!(paths[1].ends_with("split_config.arm64_v8a.apk"));
+    }
+
+    #[test]
+    fn parse_pm_path_skips_malformed_lines() {
+        assert!(parse_pm_path("garbage").is_empty());
+        assert!(parse_pm_path("package:\n").is_empty());
+        assert!(parse_pm_path("").is_empty());
+    }
+
+    #[test]
+    fn export_apk_pulls_all_apks_into_package_dir() {
+        let mut adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        adb.apk_paths_output = Some(
+            "package:/data/app/~~x/com.example.app/base.apk\n\
+             package:/data/app/~~x/com.example.app/split_config.arm64_v8a.apk\n"
+                .to_owned(),
+        );
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let directory = scratch_dir("apk-export");
+
+        let receipt =
+            export_apk_with(&runtimes, &directory, "phone".into(), "com.example.app".into())
+                .unwrap();
+
+        assert_eq!(receipt.package, "com.example.app");
+        assert_eq!(receipt.files.len(), 2, "split APK 应导出多个文件");
+        assert_eq!(receipt.total_bytes, 24, "两个文件各 12 字节（device-bytes）");
+        assert!(receipt.dir.ends_with("com.example.app"));
+        assert!(receipt.files[0].name.ends_with("base.apk"));
+        assert!(receipt.files[1].name.ends_with("split_config.arm64_v8a.apk"));
+        assert!(fs::metadata(&receipt.files[0].path).unwrap().len() > 0);
+        assert!(fs::metadata(&receipt.files[1].path).unwrap().len() > 0);
+        let recorded = calls.lock().unwrap().clone();
+        assert!(recorded.contains(&"pm_path com.example.app phone".to_owned()));
+        assert!(recorded.iter().any(|c| c.starts_with(
+            "pull phone /data/app/~~x/com.example.app/base.apk"
+        )));
+        assert!(recorded
+            .iter()
+            .any(|c| c.contains("split_config.arm64_v8a.apk")));
+    }
+
+    #[test]
+    fn export_apk_rejects_unready_device_and_bad_package() {
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let directory = scratch_dir("apk-export-unready");
+        let error = export_apk_with(&runtimes, &directory, "phone".into(), "com.example.app".into())
+            .unwrap_err();
+        assert_eq!(error.code, "device_unauthorized");
+        assert!(calls.lock().unwrap().is_empty(), "未授权设备不得发命令");
+
+        let runtimes =
+            screenshot_runtimes(FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]));
+        let error = export_apk_with(&runtimes, &directory, "phone".into(), "bad package".into())
+            .unwrap_err();
+        assert_eq!(error.code, "app_package_invalid");
+    }
+
+    #[test]
+    fn export_apk_reports_empty_pm_path() {
+        // apk_paths_output = None → pm path 返回空串 → 解析为空 → 如实报「没有找到 APK」。
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        let runtimes = screenshot_runtimes(adb);
+        let directory = scratch_dir("apk-export-empty");
+        let error = export_apk_with(&runtimes, &directory, "phone".into(), "com.example.app".into())
+            .unwrap_err();
+        assert_eq!(error.code, "apk_export_no_apk");
+    }
+
+    #[test]
     fn battery_storage_parses_level_charging_temperature_and_df() {
         let sample = "Current battery service state:\n\
                       AC powered: false\n\
@@ -14962,6 +15865,221 @@ mod tests {
         let idle = parse_battery_storage("plugged: 0\nlevel: 40\n");
         assert_eq!(idle.charging, Some(false));
         assert_eq!(idle.battery_level, Some(40));
+    }
+
+    #[test]
+    fn parse_screen_brightness_parses_number_and_null() {
+        assert_eq!(parse_screen_brightness("128\n"), Some(128));
+        assert_eq!(parse_screen_brightness("0\n"), Some(0));
+        assert_eq!(parse_screen_brightness("null\n"), None);
+        assert_eq!(parse_screen_brightness("garbage"), None);
+    }
+
+    #[test]
+    fn parse_media_volume_parses_current_volume_and_digits() {
+        assert_eq!(
+            parse_media_volume("Current volume: 7 (stream 3, ...)\n"),
+            Some(7)
+        );
+        assert_eq!(parse_media_volume("7\n"), Some(7));
+        assert_eq!(parse_media_volume("Device 0: 12"), Some(0));
+        assert_eq!(parse_media_volume("error"), None);
+    }
+
+    #[test]
+    fn parse_cpu_percent_parses_usr_sys() {
+        let sample = "Tasks: 300 total\n\
+                      Cpu: 12% usr 5% sys 0% nic 83% idle 0% wait 0% irq 0% sirq\n\
+                      Mem: 3000M total, 200M used\n";
+        assert_eq!(parse_cpu_percent(sample), Some(17.0));
+        assert_eq!(parse_cpu_percent("no cpu line"), None);
+    }
+
+    #[test]
+    fn parse_meminfo_kb_parses_total_avail() {
+        let sample = "MemTotal:       3987644 kB\nMemAvailable:   1234567 kB\nMemFree:         500000 kB\n";
+        assert_eq!(parse_meminfo_kb(sample, "MemTotal:"), Some(3987644));
+        assert_eq!(parse_meminfo_kb(sample, "MemAvailable:"), Some(1234567));
+        assert_eq!(parse_meminfo_kb(sample, "Missing:"), None);
+    }
+
+    #[test]
+    fn parse_performance_combines_all_sections() {
+        let sample = "--- top ---\n\
+                      Cpu: 12% usr 5% sys 0% nic 83% idle\n\
+                      --- meminfo ---\n\
+                      MemTotal: 3987644 kB\nMemAvailable: 1234567 kB\n\
+                      --- battery ---\n\
+                      level: 80\n\
+                      temperature: 350\n";
+        let perf = parse_performance(sample);
+        assert_eq!(perf.cpu_percent, Some(17.0));
+        assert_eq!(perf.mem_total_mb, Some(3894), "3987644 / 1024 = 3894");
+        assert_eq!(perf.mem_avail_mb, Some(1205), "1234567 / 1024 = 1205");
+        assert_eq!(perf.temperature, Some(35.0));
+    }
+
+    #[test]
+    fn display_settings_reads_both_and_records() {
+        let mut adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        adb.brightness_output = Some("128\n".to_owned());
+        adb.volume_output = Some("Current volume: 7\n".to_owned());
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let settings = display_settings_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(settings.brightness, Some(128));
+        assert_eq!(settings.volume, Some(7));
+        let recorded = calls.lock().unwrap().clone();
+        assert!(recorded.contains(&"get_brightness phone".to_owned()));
+        assert!(recorded.contains(&"get_volume phone".to_owned()));
+    }
+
+    #[test]
+    fn set_brightness_volume_require_ready_and_validate() {
+        // 未授权设备：不发任何命令。
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        let error = set_device_brightness_with(&runtimes, "phone".into(), 100).unwrap_err();
+        assert_eq!(error.code, "device_unauthorized");
+        let error = set_device_volume_with(&runtimes, "phone".into(), 5).unwrap_err();
+        assert_eq!(error.code, "device_unauthorized");
+        assert!(calls.lock().unwrap().is_empty(), "未授权设备不得发命令");
+
+        // 音量越界：校验先行。
+        let runtimes =
+            screenshot_runtimes(FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]));
+        let error = set_device_volume_with(&runtimes, "phone".into(), 16).unwrap_err();
+        assert_eq!(error.code, "volume_out_of_range");
+
+        // 就绪设备：正常下发（亮度无上界检查，值本身是 u8）。
+        let runtimes =
+            screenshot_runtimes(FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]));
+        set_device_brightness_with(&runtimes, "phone".into(), 200).unwrap();
+        set_device_volume_with(&runtimes, "phone".into(), 10).unwrap();
+    }
+
+    #[test]
+    fn device_performance_reports_honest_fields() {
+        let mut adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        adb.performance_output = Some(
+            "--- top ---\nCpu: 10% usr 4% sys 0% nic 86% idle\n\
+             --- meminfo ---\nMemTotal: 4000000 kB\nMemAvailable: 2000000 kB\n\
+             --- battery ---\nlevel: 90\ntemperature: 330\n"
+                .to_owned(),
+        );
+        let runtimes = screenshot_runtimes(adb);
+        let perf = device_performance_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(perf.cpu_percent, Some(14.0));
+        assert_eq!(perf.mem_total_mb, Some(3906), "4000000 / 1024 = 3906");
+        assert_eq!(perf.mem_avail_mb, Some(1953), "2000000 / 1024 = 1953");
+        assert_eq!(perf.temperature, Some(33.0));
+
+        // 快照输出缺失：字段如实为 None，不报错、不猜默认值。
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        let runtimes = screenshot_runtimes(adb);
+        let perf = device_performance_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(perf.cpu_percent, None);
+        assert_eq!(perf.mem_total_mb, None);
+        assert_eq!(perf.temperature, None);
+    }
+
+    #[test]
+    fn parse_storage_analysis_reads_df_and_top_dirs() {
+        let sample = "--- df ---\n\
+                      Filesystem Size Used Avail Use% Mounted on\n\
+                      /dev/block/dm-0 107G 52G 55G 49% /storage/emulated/0\n\
+                      --- du ---\n\
+                      1.2G\t/storage/emulated/0/Android\n\
+                      345M\t/storage/emulated/0/Download\n\
+                      12K\t/storage/emulated/0/DCIM\n";
+        let analysis = parse_storage_analysis(sample);
+        assert_eq!(analysis.total.as_deref(), Some("107G"));
+        assert_eq!(analysis.used.as_deref(), Some("52G"));
+        assert_eq!(analysis.free.as_deref(), Some("55G"));
+        // 顶层目录按字节降序：Android(1.2G) > Download(345M) > DCIM(12K)。
+        assert_eq!(analysis.top_dirs.len(), 3);
+        assert_eq!(analysis.top_dirs[0].name, "Android");
+        assert_eq!(analysis.top_dirs[0].human, "1.2G");
+        assert!(analysis.top_dirs[0].bytes > analysis.top_dirs[1].bytes);
+        assert_eq!(analysis.top_dirs[2].name, "DCIM");
+    }
+
+    #[test]
+    fn parse_human_size_handles_all_units() {
+        assert_eq!(parse_human_size("1.2G"), 1288490188);
+        assert_eq!(parse_human_size("345M"), 361758720);
+        assert_eq!(parse_human_size("12K"), 12288);
+        assert_eq!(parse_human_size("1024"), 1024);
+        assert_eq!(parse_human_size(""), 0);
+    }
+
+    #[test]
+    fn search_phone_files_validates_query_and_reads_results() {
+        // 含 shell 危险字符 / 空 / 过长 → 拒绝。
+        assert_eq!(
+            validate_phone_search_query("a;rm -rf /").unwrap_err().code,
+            "phone_search_query_invalid"
+        );
+        assert_eq!(
+            validate_phone_search_query("   ").unwrap_err().code,
+            "phone_search_query_invalid"
+        );
+        assert_eq!(
+            validate_phone_search_query(&"x".repeat(65)).unwrap_err().code,
+            "phone_search_query_invalid"
+        );
+        assert_eq!(validate_phone_search_query("report_2024").unwrap(), "report_2024");
+        assert_eq!(validate_phone_search_query("a-b_c.d").unwrap(), "a-b_c.d");
+
+        // 解析 `find` 结果行。
+        let results = parse_find_results(
+            "/storage/emulated/0/Download/report.pdf\n\
+             /storage/emulated/0/DCIM/report_2024.jpg\n",
+        );
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].name, "report.pdf");
+        assert_eq!(results[0].path, "/storage/emulated/0/Download/report.pdf");
+        assert_eq!(results[1].name, "report_2024.jpg");
+    }
+
+    #[test]
+    fn storage_and_search_with_require_ready_device() {
+        // 未授权设备：不发命令。
+        let adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Unauthorized)]);
+        let calls = Arc::clone(&adb.calls);
+        let runtimes = screenshot_runtimes(adb);
+        assert_eq!(
+            storage_analysis_with(&runtimes, "phone".into())
+                .unwrap_err()
+                .code,
+            "device_unauthorized"
+        );
+        assert_eq!(
+            search_phone_files_with(&runtimes, "phone".into(), "report".into())
+                .unwrap_err()
+                .code,
+            "device_unauthorized"
+        );
+        assert!(calls.lock().unwrap().is_empty(), "未授权设备不得发命令");
+
+        // 就绪设备：正常下发并解析。
+        let mut adb = FakeAdb::with_devices(vec![device("phone", DeviceState::Ready)]);
+        adb.storage_analysis_output = Some(
+            "--- df ---\nFilesystem Size Used Avail Use% Mounted on\n\
+             /dev/block/dm-0 107G 52G 55G 49% /storage/emulated/0\n\
+             --- du ---\n1.2G\t/storage/emulated/0/Android\n"
+                .to_owned(),
+        );
+        adb.search_output =
+            Some("/storage/emulated/0/Download/report.pdf\n".to_owned());
+        let runtimes = screenshot_runtimes(adb);
+        let analysis = storage_analysis_with(&runtimes, "phone".into()).unwrap();
+        assert_eq!(analysis.total.as_deref(), Some("107G"));
+        assert_eq!(analysis.top_dirs.len(), 1);
+        let results = search_phone_files_with(&runtimes, "phone".into(), "report".into()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "report.pdf");
     }
 
     #[test]

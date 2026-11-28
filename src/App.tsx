@@ -446,6 +446,10 @@ export function readOptions(): SessionOptions {
 // 虚拟屏启动的应用」按设备单独保存（localStorage），其余设置仍是全局一份。
 // 手机序列号（无线端点）在重连后可能变化，此时按新端点重新设置即可。
 export type DeviceApp = { package: string; name: string };
+// X10-167：导出 APK 的回执（Rust `export_apk`）。一个应用可能是 split APK，
+// files 是导出目录里的一个或多个文件，dir 是本机保存目录。
+type ApkExportFile = { name: string; path: string; bytes: number };
+type ApkExportReceipt = { package: string; dir: string; files: ApkExportFile[]; total_bytes: number };
 
 /** X10-136 电池与存储摘要：字段可缺失（后端读不到就返回 null，不猜默认值）。 */
 export type DevicePowerStorage = {
@@ -455,6 +459,23 @@ export type DevicePowerStorage = {
   storage_total: string | null;
   storage_free: string | null;
 };
+// X10-168：设备控制（亮度/音量读取）与性能快照。字段可缺失，读不到如实 null。
+export type DeviceDisplaySettings = { brightness: number | null; volume: number | null };
+export type DevicePerformance = {
+  cpu_percent: number | null;
+  mem_total_mb: number | null;
+  mem_avail_mb: number | null;
+  temperature: number | null;
+};
+// X10-169：存储分析（存储卷摘要 + 顶层目录占用）与手机文件搜索结果。
+export type StorageTopDir = { name: string; bytes: number; human: string };
+export type StorageAnalysis = {
+  total: string | null;
+  free: string | null;
+  used: string | null;
+  top_dirs: StorageTopDir[];
+};
+export type PhoneSearchResult = { path: string; name: string; bytes: number };
 export type DesktopPref = { desktop_mode: boolean; desktop_app: string | null };
 
 // 把某台设备的桌面模式偏好叠加到全局设置上：仅覆盖桌面模式相关字段，并维持
@@ -645,6 +666,16 @@ export function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} 字节`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// X10-169：存储分析顶层目录占用条宽度。以「所有已列目录字节和」为基准，
+// 避免与 df 的 used 口径不一致造成超过 100% 的条。
+export function dirFillPercent(analysis: StorageAnalysis, bytes: number) {
+  const dirs = analysis.top_dirs ?? [];
+  const sum = dirs.reduce((acc, dir) => acc + dir.bytes, 0);
+  if (sum <= 0) return 0;
+  const percent = (bytes / sum) * 100;
+  return Math.min(100, Math.max(2, percent));
 }
 
 export function lockSummary(report: DeviceLockReport) {
@@ -1585,6 +1616,26 @@ function App() {
     }
   }
 
+  // X10-167：导出应用的所有 APK 到本机「下载 / MirrorDock / APK / <包名>」。
+  // 支持 split APK（一次拉取多个文件）；成功后定位到导出目录。
+  async function exportDeviceApp(packageName: string, appName: string) {
+    if (!readySerial || appActionBusy) return;
+    setAppActionBusy(packageName);
+    setAppActionNotice(null);
+    try {
+      const receipt = await invoke<ApkExportReceipt>("export_apk", { serial: readySerial, package: packageName });
+      const summary = receipt.files.length > 1 ? `${receipt.files.length} 个文件（含 split 拆分包）` : "1 个文件";
+      setAppActionNotice({ text: `已导出 ${appName || packageName}（${summary}，共 ${formatBytes(receipt.total_bytes)}）到 ${receipt.dir}。`, error: false });
+      if (receipt.files.length > 0) {
+        try { await revealItemInDir(receipt.files[0].path); } catch { /* 定位失败不影响成功提示。 */ }
+      }
+    } catch (error) {
+      setAppActionNotice({ text: errorMessage(error, "APK 没有导出到本机。"), error: true });
+    } finally {
+      setAppActionBusy(null);
+    }
+  }
+
   // X10-136 电池与存储摘要：进入设备信息视图自动读取一次，可手动刷新；
   // 结果按设备标记，换设备后不显示旧数据。只读，不落盘。
   const [powerStorage, setPowerStorage] = useState<DevicePowerStorage | null>(null);
@@ -1618,6 +1669,135 @@ function App() {
       setPowerError(errorMessage(error, "无法读取电池与存储信息。"));
     } finally {
       setPowerBusy(false);
+    }
+  }
+
+  // X10-168：设备控制（亮度/音量）与性能快照。数据按设备标记，换设备即失效；
+  // 只读部分进入「设备信息」页自动读取一次，可手动刷新。
+  const [displaySettings, setDisplaySettings] = useState<DeviceDisplaySettings | null>(null);
+  const [displaySerial, setDisplaySerial] = useState<string | null>(null);
+  const [displayBusy, setDisplayBusy] = useState(false);
+  const [performance, setPerformance] = useState<DevicePerformance | null>(null);
+  const [performanceSerial, setPerformanceSerial] = useState<string | null>(null);
+  const [performanceBusy, setPerformanceBusy] = useState(false);
+  const [deviceControlError, setDeviceControlError] = useState<string | null>(null);
+  const [deviceControlBusy, setDeviceControlBusy] = useState(false);
+  const brightnessTimer = useRef<number | null>(null);
+
+  async function loadDisplaySettings(serial: string) {
+    setDisplayBusy(true);
+    setDeviceControlError(null);
+    try {
+      const settings = await invoke<DeviceDisplaySettings>("device_display_settings", { serial });
+      setDisplaySettings(settings);
+      setDisplaySerial(serial);
+    } catch (error) {
+      setDisplaySettings(null);
+      setDisplaySerial(serial);
+      setDeviceControlError(errorMessage(error, "无法读取亮度与音量。"));
+    } finally {
+      setDisplayBusy(false);
+    }
+  }
+
+  async function loadDevicePerformance(serial: string) {
+    setPerformanceBusy(true);
+    setDeviceControlError(null);
+    try {
+      const perf = await invoke<DevicePerformance>("device_performance", { serial });
+      setPerformance(perf);
+      setPerformanceSerial(serial);
+    } catch (error) {
+      setPerformance(null);
+      setPerformanceSerial(serial);
+      setDeviceControlError(errorMessage(error, "无法读取设备性能。"));
+    } finally {
+      setPerformanceBusy(false);
+    }
+  }
+
+  async function commitBrightness(value: number) {
+    if (!readySerial || deviceControlBusy) return;
+    setDeviceControlBusy(true);
+    try {
+      await invoke("set_device_brightness", { serial: readySerial, value });
+      setDisplaySettings((prev) => (prev ? { ...prev, brightness: value } : prev));
+    } catch (error) {
+      setDeviceControlError(errorMessage(error, "亮度没有调整。"));
+    } finally {
+      setDeviceControlBusy(false);
+    }
+  }
+
+  async function commitVolume(value: number) {
+    if (!readySerial || deviceControlBusy) return;
+    setDeviceControlBusy(true);
+    try {
+      await invoke("set_device_volume", { serial: readySerial, value });
+      setDisplaySettings((prev) => (prev ? { ...prev, volume: value } : prev));
+    } catch (error) {
+      setDeviceControlError(errorMessage(error, "音量没有调整。"));
+    } finally {
+      setDeviceControlBusy(false);
+    }
+  }
+
+  // 滑条拖动 debounce 300ms：拖动过程中只更新本地 UI，松手停顿后提交一次，
+  // 避免拖动整条亮度/音量把 adb 命令风暴压向手机。
+  function onBrightnessInput(value: number) {
+    setDisplaySettings((prev) => (prev ? { ...prev, brightness: value } : prev));
+    if (brightnessTimer.current) window.clearTimeout(brightnessTimer.current);
+    brightnessTimer.current = window.setTimeout(() => void commitBrightness(value), 300);
+  }
+  function onVolumeInput(value: number) {
+    setDisplaySettings((prev) => (prev ? { ...prev, volume: value } : prev));
+    if (brightnessTimer.current) window.clearTimeout(brightnessTimer.current);
+    brightnessTimer.current = window.setTimeout(() => void commitVolume(value), 300);
+  }
+
+  // X10-169：存储分析与手机文件搜索。数据按设备标记，换设备即失效；
+  // 进入「设备信息」页自动读取一次存储分析（只读），可手动刷新。
+  const [storageAnalysis, setStorageAnalysis] = useState<StorageAnalysis | null>(null);
+  const [storageSerial, setStorageSerial] = useState<string | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [searchResults, setSearchResults] = useState<PhoneSearchResult[] | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  async function loadStorageAnalysis(serial: string) {
+    setStorageBusy(true);
+    setDeviceControlError(null);
+    try {
+      const analysis = await invoke<StorageAnalysis>("storage_analysis", { serial });
+      setStorageAnalysis(analysis);
+      setStorageSerial(serial);
+    } catch (error) {
+      setStorageAnalysis(null);
+      setStorageSerial(serial);
+      setDeviceControlError(errorMessage(error, "无法读取存储分析。"));
+    } finally {
+      setStorageBusy(false);
+    }
+  }
+
+  async function runPhoneSearch(query: string) {
+    if (!readySerial || searchBusy) return;
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setSearchBusy(true);
+    setSearchError(null);
+    try {
+      const results = await invoke<PhoneSearchResult[]>("search_phone_files", {
+        serial: readySerial,
+        query: trimmed,
+      });
+      setSearchResults(results);
+    } catch (error) {
+      setSearchResults([]);
+      setSearchError(errorMessage(error, "搜索没有完成。"));
+    } finally {
+      setSearchBusy(false);
     }
   }
 
@@ -3967,10 +4147,22 @@ function App() {
 
   // X10-136：进入设备信息视图自动读取一次电池与存储；换设备即重读。
   // X10-150：设备中心 Hero 卡需要真实电量，进入设备中心也自动读取。
+  // X10-168：进入设备信息视图同时读取亮度/音量与性能快照。
   useEffect(() => {
     if ((view !== "info" && view !== "home") || !readySerial) return;
     if (powerSerial === readySerial && (powerStorage || powerBusy)) return;
     void loadPowerStorage(readySerial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, readySerial]);
+
+  useEffect(() => {
+    if (view !== "info" || !readySerial) return;
+    if (displaySerial === readySerial && (displaySettings || displayBusy)) return;
+    void loadDisplaySettings(readySerial);
+    if (performanceSerial === readySerial && (performance || performanceBusy)) return;
+    void loadDevicePerformance(readySerial);
+    if (storageSerial === readySerial && (storageAnalysis || storageBusy)) return;
+    void loadStorageAnalysis(readySerial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, readySerial]);
 
@@ -4130,9 +4322,179 @@ function App() {
             ],
           },
           {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">设备控制与性能</h3>
+                  <span className="badge neutral">{readySerial ? (displayBusy || performanceBusy ? "读取中…" : "已读取") : "未连接"}</span>
+                  <span className="spacer" />
+                </div>
+                <div className="card-body">
+                  {deviceControlError && <p className="setting-desc warn" role="alert">{deviceControlError}</p>}
+                  <label className="device-control-row">
+                    <span className="device-control-label">亮度</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={255}
+                      step={1}
+                      value={displaySettings?.brightness ?? 0}
+                      disabled={!readySerial || displayBusy || deviceControlBusy}
+                      onChange={(event) => onBrightnessInput(Number(event.target.value))}
+                      aria-label="屏幕亮度"
+                    />
+                    <span className="device-control-value">
+                      {displaySettings?.brightness != null ? `${Math.round((displaySettings.brightness / 255) * 100)}%` : "—"}
+                    </span>
+                  </label>
+                  <label className="device-control-row">
+                    <span className="device-control-label">音量</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={15}
+                      step={1}
+                      value={displaySettings?.volume ?? 0}
+                      disabled={!readySerial || displayBusy || deviceControlBusy}
+                      onChange={(event) => onVolumeInput(Number(event.target.value))}
+                      aria-label="媒体音量"
+                    />
+                    <span className="device-control-value">
+                      {displaySettings?.volume != null ? `${Math.round((displaySettings.volume / 15) * 100)}%` : "—"}
+                    </span>
+                  </label>
+                  <div className="kv-grid">
+                    <div className="device-metric">
+                      <span className="device-metric-label">CPU 占用</span>
+                      <strong className="device-metric-value">{performance?.cpu_percent != null ? `${performance.cpu_percent.toFixed(1)}%` : "未读取"}</strong>
+                    </div>
+                    <div className="device-metric">
+                      <span className="device-metric-label">内存</span>
+                      <strong className="device-metric-value">{performance?.mem_total_mb != null ? `${performance.mem_avail_mb ?? "?"} / ${performance.mem_total_mb} MB` : "未读取"}</strong>
+                    </div>
+                    <div className="device-metric">
+                      <span className="device-metric-label">电池温度</span>
+                      <strong className="device-metric-value">{performance?.temperature != null ? `${performance.temperature.toFixed(1)}°C` : "未读取"}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div className="card-foot">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => readySerial && void loadDevicePerformance(readySerial)}
+                    disabled={performanceBusy || !readySerial}
+                  >
+                    刷新性能
+                  </button>
+                  <span className="spacer" />
+                  <span>仅调节亮度/音量并读取性能，不修改其他设置</span>
+                </div>
+              </section>
+            ),
+          },
+          {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">存储分析与文件搜索</h3>
+                  <span className="badge neutral">{readySerial ? (storageBusy ? "读取中…" : "已读取") : "未连接"}</span>
+                </div>
+                <div className="card-body">
+                  <div className="kv-grid">
+                    <div className="device-metric">
+                      <span className="device-metric-label">总容量</span>
+                      <strong className="device-metric-value">{storageAnalysis?.total ?? "未读取"}</strong>
+                    </div>
+                    <div className="device-metric">
+                      <span className="device-metric-label">已用</span>
+                      <strong className="device-metric-value">{storageAnalysis?.used ?? "未读取"}</strong>
+                    </div>
+                    <div className="device-metric">
+                      <span className="device-metric-label">可用</span>
+                      <strong className="device-metric-value">{storageAnalysis?.free ?? "未读取"}</strong>
+                    </div>
+                  </div>
+                  {storageAnalysis && storageAnalysis.top_dirs?.length ? (
+                    <div className="storage-dir-list">
+                      {storageAnalysis.top_dirs.map((dir) => (
+                        <div key={dir.name} className="storage-dir-row">
+                          <span className="storage-dir-name">{dir.name}</span>
+                          <span className="storage-dir-bar">
+                            <span
+                              className="storage-dir-fill"
+                              style={{ width: `${dirFillPercent(storageAnalysis, dir.bytes)}%` }}
+                            />
+                          </span>
+                          <span className="storage-dir-size">{dir.human}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="phone-search-row">
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void runPhoneSearch(searchQuery);
+                      }}
+                      placeholder="搜索手机公共存储文件名…"
+                      disabled={!readySerial || searchBusy}
+                      aria-label="手机文件搜索"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void runPhoneSearch(searchQuery)}
+                      disabled={!readySerial || searchBusy || !searchQuery.trim()}
+                    >
+                      {searchBusy ? "搜索中…" : "搜索"}
+                    </button>
+                  </div>
+                  {searchError && (
+                    <p className="setting-desc" style={{ color: "var(--danger, #d33)" }}>{searchError}</p>
+                  )}
+                  {searchResults !== null && !searchError && (
+                    <div className="phone-search-results">
+                      {searchResults.length === 0 ? (
+                        <p className="setting-desc">没有找到匹配的文件。</p>
+                      ) : (
+                        searchResults.slice(0, 50).map((result) => (
+                          <div key={result.path} className="phone-search-item">
+                            <span className="phone-search-name" title={result.path}>{result.name}</span>
+                            <span className="phone-search-path" title={result.path}>{result.path}</span>
+                          </div>
+                        ))
+                      )}
+                      {searchResults.length > 50 && (
+                        <p className="setting-desc">共 {searchResults.length} 个匹配，仅显示前 50 条。</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="card-foot">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => readySerial && void loadStorageAnalysis(readySerial)}
+                    disabled={storageBusy || !readySerial}
+                  >
+                    刷新存储分析
+                  </button>
+                  <span className="spacer" />
+                  <span>分析公共存储顶层目录占用；搜索跳过低权限目录</span>
+                </div>
+              </section>
+            ),
+          },
+          {
             kind: "actions",
             actions: [
               { label: "刷新电池 / 存储", onClick: () => readySerial && void loadPowerStorage(readySerial), disabled: powerBusy || !readySerial },
+              { label: "刷新设备控制", onClick: () => readySerial && void loadDisplaySettings(readySerial), disabled: displayBusy || !readySerial },
               { label: "预览诊断内容", onClick: () => void previewDiagnostics(), disabled: diagnosticsBusy },
               { label: "导出诊断包", onClick: () => void exportDiagnostics(), disabled: diagnosticsBusy || !diagnostics },
             ],
@@ -5106,6 +5468,15 @@ function App() {
                                   onClick={() => void launchDeviceApp(app.package)}
                                 >
                                   打开
+                                </button>
+                                {/* X10-167：导出 APK（支持 split 拆分包），成功后定位到本机目录。 */}
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  disabled={!readySerial || appActionBusy !== null}
+                                  onClick={() => void exportDeviceApp(app.package, app.name)}
+                                >
+                                  {appActionBusy === app.package ? "导出中…" : "导出 APK"}
                                 </button>
                                 <button
                                   type="button"

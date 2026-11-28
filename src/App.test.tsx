@@ -1460,3 +1460,221 @@ describe("file management (X10-166)", () => {
     expect(await screen.findByText("这个文件夹是空的。")).toBeInTheDocument();
   });
 });
+
+describe("app management (X10-167)", () => {
+  function withApps(extra?: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      if (cmd === "list_device_apps") {
+        return Promise.resolve([{ package: "com.example.app", name: "示例应用" }]);
+      }
+      if (cmd === "list_device_files") return Promise.resolve([]);
+      const custom = extra?.(cmd);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  async function openApps() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "应用管理" }));
+  }
+
+  it("exports_an_apk_and_reports_the_save_directory", async () => {
+    withApps((cmd) => {
+      if (cmd === "export_apk") {
+        return Promise.resolve({
+          package: "com.example.app",
+          dir: "/Users/test/Download/MirrorDock/APK/com.example.app",
+          files: [
+            { name: "base.apk", path: "/Users/test/Download/MirrorDock/APK/com.example.app/base.apk", bytes: 12345 },
+          ],
+          total_bytes: 12345,
+        });
+      }
+      return undefined;
+    });
+    await openApps();
+
+    expect(await screen.findByText("示例应用")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "导出 APK" }));
+    await waitFor(() => {
+      expect(screen.getByText(/已导出 示例应用/)).toBeInTheDocument();
+    });
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "export_apk");
+    expect(call?.[1]).toMatchObject({ serial: "phone", package: "com.example.app" });
+  });
+
+  it("reports_an_honest_error_when_export_fails", async () => {
+    withApps((cmd) => {
+      if (cmd === "export_apk") {
+        return Promise.reject({ code: "apk_export_no_apk", message: "没有找到这个应用的 APK 文件。", recovery: "可能是系统预装或精简安装的应用。" });
+      }
+      return undefined;
+    });
+    await openApps();
+
+    await screen.findByText("示例应用");
+    fireEvent.click(screen.getByRole("button", { name: "导出 APK" }));
+    await waitFor(() => {
+      expect(screen.getByText(/没有找到这个应用的 APK/)).toBeInTheDocument();
+    });
+  });
+});
+
+describe("device control (X10-168)", () => {
+  function withInfoDevice(extra?: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      if (cmd === "device_battery_storage") {
+        return Promise.resolve({ battery_level: 80, charging: true, temperature: 30, storage_total: "107G", storage_free: "55G" });
+      }
+      if (cmd === "device_display_settings") {
+        return Promise.resolve({ brightness: 128, volume: 7 });
+      }
+      if (cmd === "device_performance") {
+        return Promise.resolve({ cpu_percent: 14.5, mem_total_mb: 3906, mem_avail_mb: 1953, temperature: 33 });
+      }
+      if (cmd === "storage_analysis") {
+        return Promise.resolve({ total: "107G", free: "55G", used: "52G", top_dirs: [] });
+      }
+      if (cmd === "list_device_files") return Promise.resolve([]);
+      const custom = extra?.(cmd);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  async function openInfo() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "设备信息" }));
+  }
+
+  it("loads_display_settings_and_performance_on_entering", async () => {
+    withInfoDevice();
+    await openInfo();
+
+    expect(await screen.findByText("设备控制与性能")).toBeInTheDocument();
+    await waitFor(() => {
+      const disp = invokeMock.mock.calls.find(([cmd]) => cmd === "device_display_settings");
+      expect(disp?.[1]).toMatchObject({ serial: "phone" });
+      const perf = invokeMock.mock.calls.find(([cmd]) => cmd === "device_performance");
+      expect(perf?.[1]).toMatchObject({ serial: "phone" });
+    });
+    // 性能指标用真实数据渲染（非演示）。
+    expect(await screen.findByText("14.5%")).toBeInTheDocument();
+    expect(await screen.findByText("1953 / 3906 MB")).toBeInTheDocument();
+  });
+
+  it("brightness_slider_commits_set_device_brightness", async () => {
+    withInfoDevice();
+    await openInfo();
+
+    const slider = await screen.findByRole("slider", { name: "屏幕亮度" });
+    fireEvent.change(slider, { target: { value: "200" } });
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "set_device_brightness");
+      expect(call?.[1]).toMatchObject({ serial: "phone", value: 200 });
+    });
+  });
+
+  it("volume_slider_commits_set_device_volume", async () => {
+    withInfoDevice();
+    await openInfo();
+
+    const slider = await screen.findByRole("slider", { name: "媒体音量" });
+    fireEvent.change(slider, { target: { value: "12" } });
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "set_device_volume");
+      expect(call?.[1]).toMatchObject({ serial: "phone", value: 12 });
+    });
+  });
+});
+
+describe("storage & file search (X10-169)", () => {
+  function withStorageDevice(extra?: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      if (cmd === "device_battery_storage") {
+        return Promise.resolve({ battery_level: 80, charging: true, temperature: 30, storage_total: "107G", storage_free: "55G" });
+      }
+      if (cmd === "device_display_settings") {
+        return Promise.resolve({ brightness: 128, volume: 7 });
+      }
+      if (cmd === "device_performance") {
+        return Promise.resolve({ cpu_percent: 14.5, mem_total_mb: 3906, mem_avail_mb: 1953, temperature: 33 });
+      }
+      if (cmd === "storage_analysis") {
+        return Promise.resolve({
+          total: "107G", free: "55G", used: "52G",
+          top_dirs: [
+            { name: "Android", bytes: 1288490188, human: "1.2G" },
+            { name: "Download", bytes: 361758720, human: "345M" },
+          ],
+        });
+      }
+      if (cmd === "list_device_files") return Promise.resolve([]);
+      const custom = extra?.(cmd);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  async function openInfo() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "设备信息" }));
+  }
+
+  it("loads_storage_analysis_and_renders_top_dirs", async () => {
+    withStorageDevice();
+    await openInfo();
+
+    expect(await screen.findByText("存储分析与文件搜索")).toBeInTheDocument();
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "storage_analysis");
+      expect(call?.[1]).toMatchObject({ serial: "phone" });
+    });
+    expect(await screen.findByText("1.2G")).toBeInTheDocument();
+    expect(await screen.findByText("345M")).toBeInTheDocument();
+    expect(await screen.findByText("Android")).toBeInTheDocument();
+  });
+
+  it("runs_file_search_and_lists_results", async () => {
+    withStorageDevice((cmd) => {
+      if (cmd === "search_phone_files") {
+        return Promise.resolve([
+          { path: "/storage/emulated/0/Download/report.pdf", name: "report.pdf", bytes: 0 },
+        ]);
+      }
+      return undefined;
+    });
+    await openInfo();
+
+    await screen.findByText("存储分析与文件搜索");
+    const input = await screen.findByRole("searchbox", { name: "手机文件搜索" });
+    fireEvent.change(input, { target: { value: "report" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "search_phone_files");
+      expect(call?.[1]).toMatchObject({ serial: "phone", query: "report" });
+    });
+    expect(await screen.findByText("report.pdf")).toBeInTheDocument();
+  });
+
+  it("shows_an_honest_empty_search_result", async () => {
+    withStorageDevice((cmd) => {
+      if (cmd === "search_phone_files") return Promise.resolve([]);
+      return undefined;
+    });
+    await openInfo();
+
+    await screen.findByText("存储分析与文件搜索");
+    const input = await screen.findByRole("searchbox", { name: "手机文件搜索" });
+    fireEvent.change(input, { target: { value: "nothing" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    expect(await screen.findByText("没有找到匹配的文件。")).toBeInTheDocument();
+  });
+});

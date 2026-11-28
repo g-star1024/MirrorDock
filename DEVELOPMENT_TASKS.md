@@ -1708,4 +1708,28 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
   - **前端**：`AssistantViewKey "fileman"` + 注册/图标；面包屑路径（逐级可点回退 + 根目录/上一级）；目录列表表格（名称/类型/大小/修改时间/操作）；上传（多选 push 到当前目录）/下载（pull 到「下载 / MirrorDock / 文件管理」并定位）/新建文件夹/重命名/删除（目录 recursive=true 需显式确认）；目录内搜索过滤；文件夹恒排前、文件按名后。进入视图/换设备自动读根目录（不要求先点刷新）。
   - **诚实边界**：Android/data、Android/obb 与应用私有目录受系统保护，如实拒绝不假装能进；读取失败置空报错，不伪装成「空目录」。
 - **验证**：cargo test **250/250**（新增 `phone_path_*` / `phone_name_*` / `parse_phone_listing_*` / `toybox_mtime` / `days_from_civil` 共 10 例）；cargo clippy `--all-targets -D warnings` **0 warning**；tsc 0 error；vitest **133/133**（`assistantViews` 20 视图 + `App` 新增 fileman 3 例）；Playwright 走查文件管理两态（1792/1100px）**0 横向溢出、0 控制台错误**。
-- **状态**：代码完成，待并入发版（版本号 + tag + CI + 官网/README 同步）。
+- **状态**：✅ 已随 **v0.4.42-beta** 发版（2026-11-28）。commit `a2f8d60`（功能）+ `305a580`（tauri.conf.json 版本补漏）；CI run `46159213750` **completed success**；Release `461657240` 已发布（15:31:45Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.42（四平台）；README/官网同步 v0.4.42。
+  - ⚠️ 发版教训：CI 首次失败于「核验产物版本与 tag 一致」——**漏改 `src-tauri/tauri.conf.json` 的 version**（tauri 产物按它命名）。「版本四件套」= Cargo.toml / Cargo.lock / package.json / **tauri.conf.json**，四件缺一不可。
+
+## X10-167 应用管理加「导出 APK」（2026-11-28）
+- **功能**：应用管理每行加「导出 APK」；`pm path <pkg>` 拿全部 APK 路径（base + split_*.apk），逐个 pull 到本机「下载 / MirrorDock / APK / <包名>」，成功后定位导出目录。支持 split APK（一次导出多文件）。
+- **Rust**：trait `app_apk_paths`（默认 Err）+ `SystemAdbRuntime`（`pm path`）；`parse_pm_path`（每行 `package:<路径>`，只取 `/` 开头的绝对路径）；`export_apk_with`（校验 serial/package/就绪 → pm path → 空则如实报「没有找到 APK」→ 逐路径 pull + `unique_file_path` 去重）；命令 `export_apk`（`transfer_download_dir` + `APK` 子目录）；回执 `ApkExportReceipt`。
+- **前端**：`exportDeviceApp`（invoke export_apk + `revealItemInDir` 定位）+ 应用行「导出 APK」按钮（busy 时「导出中…」）。
+- **验证**：cargo test **255/255**（新增 5 例）；clippy 0 warning；tsc 0 error；vitest **135/135**（新增 app management 2 例）。
+- **状态**：代码完成，待并入 v0.4.43 发版。
+
+## X10-168 设备控制（亮度/音量调节）+ 性能监控（2026-11-28）
+- **功能**：设备信息页新增「设备控制与性能」卡片——亮度滑条（0-255，先切手动模式再写）、音量滑条（0-15，`media volume --stream 3`）、性能快照（CPU 占用 / 内存 / 电池温度）。
+- **Rust**：trait 5 方法（`get_screen_brightness` / `get_media_volume` / `set_screen_brightness` / `set_media_volume` / `performance_snapshot`，默认 Err）；`SystemAdbRuntime` 实现（`settings get/put`、`media volume --get/--set`、`top -n 1 -b` + `/proc/meminfo` + `dumpsys battery` 合并）；解析 `parse_screen_brightness` / `parse_media_volume`（取首个整数）/ `parse_cpu_percent`（`Cpu:` 行 usr+sys）/ `parse_meminfo_kb` / `parse_performance`；4 命令（`device_display_settings` / `set_device_brightness` / `set_device_volume` / `device_performance`）。
+- **前端**：状态按设备标记、换设备失效；进入设备信息页自动读一次（可手动「刷新性能」）；滑条 onChange 本地更新 + **300ms debounce** 提交（避免拖动命令风暴）；性能指标 kv（CPU%/内存 MB/温度）。
+- **诚实边界**：读不到字段如实 null（不猜默认值）；音量越界（>15）如实拒绝。
+- **验证**：cargo test **263/263**（新增 8 例）；clippy 0 warning；tsc 0 error；vitest **138/138**（新增 device control 3 例）。
+- **状态**：代码完成，待并入 v0.4.43 发版。
+
+## X10-169 存储空间分析 + 手机文件搜索（2026-11-28）
+- **功能**：设备信息页新增「存储分析与文件搜索」卡片——存储卷摘要（总/已用/可用）+ 公共存储顶层目录占用条；文件名全盘搜索（`find -iname *query*`）。
+- **Rust**：trait `storage_analysis`（`df -h /storage/emulated/0` + `du -sh /storage/emulated/0/*` 合并）+ `search_phone_files`（`find -type f -iname *query* -not -path */Android/data/* -not -path */Android/obb/*`）；解析 `parse_df_h`（按列名定位，不依赖列序）/ `parse_du_sh`（`SIZE\tPATH`，basename，字节降序）/ `parse_human_size`（`1.2G`/`345M`/`12K`）；`validate_phone_search_query`（1-64 字符，拒空白与 shell 元字符）；结构 `StorageAnalysis` / `StorageTopDir` / `PhoneSearchResult`；2 命令（`storage_analysis` / `search_phone_files`）。
+- **前端**：进入设备信息页自动读一次存储分析（可手动刷新）；目录占用条按「已列目录字节和」为基准（避免 df 口径超 100%）；搜索 Enter/按钮触发，结果按路径列表，超 50 条如实截断提示。
+- **诚实边界**：`find` 不保证输出大小 → `bytes` 恒 0，前端如实显示「大小未知」不伪装 0 字节；搜索关键词含 shell 危险字符如实拒绝；读不到字段如实 null。
+- **验证**：cargo test **267/267**（新增 4 例）；clippy 0 warning；tsc 0 error；vitest **141/141**（新增 storage & file search 3 例）；Playwright 0 溢出 / 0 控制台错误。
+- **状态**：代码完成，待并入 v0.4.43 发版。
