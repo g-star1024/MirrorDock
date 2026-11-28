@@ -1716,7 +1716,7 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **Rust**：trait `app_apk_paths`（默认 Err）+ `SystemAdbRuntime`（`pm path`）；`parse_pm_path`（每行 `package:<路径>`，只取 `/` 开头的绝对路径）；`export_apk_with`（校验 serial/package/就绪 → pm path → 空则如实报「没有找到 APK」→ 逐路径 pull + `unique_file_path` 去重）；命令 `export_apk`（`transfer_download_dir` + `APK` 子目录）；回执 `ApkExportReceipt`。
 - **前端**：`exportDeviceApp`（invoke export_apk + `revealItemInDir` 定位）+ 应用行「导出 APK」按钮（busy 时「导出中…」）。
 - **验证**：cargo test **255/255**（新增 5 例）；clippy 0 warning；tsc 0 error；vitest **135/135**（新增 app management 2 例）。
-- **状态**：代码完成，待并入 v0.4.43 发版。
+- **状态**：已并入 `v0.4.43-beta` 发版。commit `c5c7f47`（X10-168/169）+ `cee33c9`（X10-170）+ `64ce24f`（发版准备），CI run `46169878255` **completed success**，Release `461737578` 已发布（2026-11-28 17:38:48Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.43（darwin-aarch64/x86_64、linux-x86_64、windows-x86_64）；README/官网版本同步 0.4.43。
 
 ## X10-168 设备控制（亮度/音量调节）+ 性能监控（2026-11-28）
 - **功能**：设备信息页新增「设备控制与性能」卡片——亮度滑条（0-255，先切手动模式再写）、音量滑条（0-15，`media volume --stream 3`）、性能快照（CPU 占用 / 内存 / 电池温度）。
@@ -1724,7 +1724,7 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **前端**：状态按设备标记、换设备失效；进入设备信息页自动读一次（可手动「刷新性能」）；滑条 onChange 本地更新 + **300ms debounce** 提交（避免拖动命令风暴）；性能指标 kv（CPU%/内存 MB/温度）。
 - **诚实边界**：读不到字段如实 null（不猜默认值）；音量越界（>15）如实拒绝。
 - **验证**：cargo test **263/263**（新增 8 例）；clippy 0 warning；tsc 0 error；vitest **138/138**（新增 device control 3 例）。
-- **状态**：代码完成，待并入 v0.4.43 发版。
+- **状态**：已并入 `v0.4.43-beta` 发版。commit `c5c7f47`（X10-168/169）+ `cee33c9`（X10-170）+ `64ce24f`（发版准备），CI run `46169878255` **completed success**，Release `461737578` 已发布（2026-11-28 17:38:48Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.43（darwin-aarch64/x86_64、linux-x86_64、windows-x86_64）；README/官网版本同步 0.4.43。
 
 ## X10-169 存储空间分析 + 手机文件搜索（2026-11-28）
 - **功能**：设备信息页新增「存储分析与文件搜索」卡片——存储卷摘要（总/已用/可用）+ 公共存储顶层目录占用条；文件名全盘搜索（`find -iname *query*`）。
@@ -1732,7 +1732,7 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **前端**：进入设备信息页自动读一次存储分析（可手动刷新）；目录占用条按「已列目录字节和」为基准（避免 df 口径超 100%）；搜索 Enter/按钮触发，结果按路径列表，超 50 条如实截断提示。
 - **诚实边界**：`find` 不保证输出大小 → `bytes` 恒 0，前端如实显示「大小未知」不伪装 0 字节；搜索关键词含 shell 危险字符如实拒绝；读不到字段如实 null。
 - **验证**：cargo test **267/267**（新增 4 例）；clippy 0 warning；tsc 0 error；vitest **141/141**（新增 storage & file search 3 例）；Playwright 0 溢出 / 0 控制台错误。
-- **状态**：代码完成，待并入 v0.4.43 发版。
+- **状态**：已并入 `v0.4.43-beta` 发版。commit `c5c7f47`（X10-168/169）+ `cee33c9`（X10-170）+ `64ce24f`（发版准备），CI run `46169878255` **completed success**，Release `461737578` 已发布（2026-11-28 17:38:48Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.43（darwin-aarch64/x86_64、linux-x86_64、windows-x86_64）；README/官网版本同步 0.4.43。
 
 ## X10-170 录屏转 GIF（2026-11-28）
 - **功能**：录像视图加「转为 GIF」——把已结束的录屏 .mp4 转成同目录同名 .gif（本机 ffmpeg）。
@@ -1740,4 +1740,4 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **前端**：录像视图 actions 加「转为 GIF」（禁用条件：无录制 / 仍在录制）；成功后提示文件名 + 大小并写入最近任务；ffmpeg 缺失时如实报错并提示安装命令。
 - **诚实边界**：非绝对路径 / 非 .mp4 / 文件不存在 / ffmpeg 缺失 / 转换失败，各自如实报错，不猜默认。
 - **验证**：cargo test **269/269**（新增 2 例）；clippy 0 warning；tsc 0 error；vitest **143/143**（新增 recording to gif 2 例）；Playwright 0 溢出 / 0 控制台错误（本机 ffmpeg 9.0.2 实测存在）。
-- **状态**：代码完成，待并入 v0.4.43 发版。
+- **状态**：已并入 `v0.4.43-beta` 发版。commit `c5c7f47`（X10-168/169）+ `cee33c9`（X10-170）+ `64ce24f`（发版准备），CI run `46169878255` **completed success**，Release `461737578` 已发布（2026-11-28 17:38:48Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.43（darwin-aarch64/x86_64、linux-x86_64、windows-x86_64）；README/官网版本同步 0.4.43。
