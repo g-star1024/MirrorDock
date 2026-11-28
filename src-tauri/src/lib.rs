@@ -383,6 +383,34 @@ trait AdbRuntime: Send + Sync {
     /// 电池与存储摘要原始输出（X10-136）：`dumpsys battery` + `df -h /sdcard`。
     /// 只读操作，调用方自行解析感兴趣的字段。
     fn battery_storage(&self, serial: &str) -> Result<String, std::io::Error>;
+    /// 列出设备目录条目（`ls -la` 原始输出），供文件管理解析目录/文件/大小/时间（X10-166）。
+    /// 默认实现返回错误：测试替身不关心文件管理，真实实现覆盖。
+    fn list_phone_dir(&self, _serial: &str, _remote_dir: &str) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("list_phone_dir not implemented"))
+    }
+    /// 删除设备上一个文件或目录（`rm`）。路径经调用方校验且限公共存储（X10-166）。
+    /// `recursive=false` 用 `rm -f`（对目录会失败，保护误删）；`true` 用 `rm -rf`（目录递归，前端显式确认）。
+    fn remove_phone_entry(
+        &self,
+        _serial: &str,
+        _remote_path: &str,
+        _recursive: bool,
+    ) -> Result<(), std::io::Error> {
+        Err(std::io::Error::other("remove_phone_entry not implemented"))
+    }
+    /// 在设备上新建目录（`mkdir -p`，X10-166）。
+    fn make_phone_dir(&self, _serial: &str, _remote_path: &str) -> Result<(), std::io::Error> {
+        Err(std::io::Error::other("make_phone_dir not implemented"))
+    }
+    /// 重命名设备上的文件或目录（`mv`，X10-166）。
+    fn rename_phone_entry(
+        &self,
+        _serial: &str,
+        _old_path: &str,
+        _new_name: &str,
+    ) -> Result<(), std::io::Error> {
+        Err(std::io::Error::other("rename_phone_entry not implemented"))
+    }
 }
 
 /// 一个已启动的镜像进程。抽象出 `try_wait` 与 `kill`，使会话生命周期可在测试中验证。
@@ -1054,6 +1082,66 @@ impl AdbRuntime for SystemAdbRuntime {
     fn list_directory(&self, serial: &str, remote_dir: &str) -> Result<String, std::io::Error> {
         // `-1`：每行恰好一个条目，文件名里的空格不会被拆开。
         Self::capture(&["-s", serial, "shell", "ls", "-1", remote_dir])
+    }
+
+    fn list_phone_dir(&self, serial: &str, remote_dir: &str) -> Result<String, std::io::Error> {
+        // `-la`：带权限/大小/修改时间，供文件管理区分目录与文件、显示大小。
+        // 目录名/文件名里的空格不会被 `-la` 拆行（toybox 每行一条），但字段以空白分隔，
+        // 解析见 `parse_phone_listing`（按前缀长度切片，名称取整行剩余，空格安全）。
+        Self::capture(&["-s", serial, "shell", "ls", "-la", remote_dir])
+    }
+
+    fn remove_phone_entry(
+        &self,
+        serial: &str,
+        remote_path: &str,
+        recursive: bool,
+    ) -> Result<(), std::io::Error> {
+        // 路径经调用方校验且限公共存储；目录递归删除需前端显式确认（recursive=true）。
+        // 非递归用 `rm -f`（对目录会失败，保护误删）；递归用 `rm -rf`。
+        // 路径用 shell_quote 保护（2026-10-03 真机实证：adb shell 会把 argv 拼回命令串）。
+        let mut argv = vec!["-s".to_string(), serial.to_string(), "shell".to_string(), "rm".to_string()];
+        if recursive {
+            argv.push("-rf".to_string());
+        } else {
+            argv.push("-f".to_string());
+        }
+        argv.push("--".to_string());
+        argv.push(shell_quote(remote_path));
+        let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        Self::run(&argv_refs)
+    }
+
+    fn make_phone_dir(&self, serial: &str, remote_path: &str) -> Result<(), std::io::Error> {
+        // `mkdir -p`：父目录缺失时一并创建；路径经调用方校验。
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "mkdir",
+            "-p",
+            &shell_quote(remote_path),
+        ])
+    }
+
+    fn rename_phone_entry(
+        &self,
+        serial: &str,
+        old_path: &str,
+        new_name: &str,
+    ) -> Result<(), std::io::Error> {
+        // `mv`：同一目录内重命名。new_name 只允许文件名（无路径分隔符，调用方校验）。
+        // old 与目标都用 shell_quote 保护空格。
+        let new_path = format!("{}/{}", old_path.trim_end_matches('/'), new_name);
+        Self::run(&[
+            "-s",
+            serial,
+            "shell",
+            "mv",
+            "--",
+            &shell_quote(old_path),
+            &shell_quote(&new_path),
+        ])
     }
 
     fn display_info(&self, serial: &str) -> Result<String, std::io::Error> {
@@ -4750,6 +4838,177 @@ struct TransferReceipt {
     bytes: u64,
 }
 
+/// X10-166 文件管理：设备目录条目（`ls -la` 解析）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PhoneDirEntry {
+    name: String,
+    /// "dir" / "file"
+    kind: String,
+    /// 文件字节数；目录为 0（Android toybox 目录无可靠字节数）。
+    size: i64,
+    /// 修改时间（Unix 秒；`ls -la` 解析失败时为 0，前端显示「—」）。
+    modified: i64,
+}
+
+/// X10-166 文件管理：手机公共存储的规范根（`/sdcard` 是 `/storage/emulated/0` 的符号链接）。
+const PHONE_STORAGE_ROOTS: [&str; 2] = ["/storage/emulated/0", "/sdcard"];
+
+/// X10-166 文件管理：scoped storage 下 adb shell 受限、不可管理的目录（如实拒绝，不假装能进）。
+const PHONE_RESTRICTED_SEGMENTS: [&str; 2] = ["/Android/data", "/Android/obb"];
+
+fn phone_path_invalid_error() -> AppError {
+    AppError::new(
+        "phone_path_invalid",
+        "这个路径不能访问。",
+        "文件管理只允许浏览手机公共存储（Download / DCIM / Pictures / Movies / Music / Documents 等）；Android/data、Android/obb 与应用私有目录受系统保护，无法管理。",
+    )
+}
+
+fn phone_name_invalid_error() -> AppError {
+    AppError::new(
+        "phone_name_invalid",
+        "名称不可用。",
+        "请使用不包含路径分隔符的常规名称后重试。",
+    )
+}
+
+/// X10-166：校验设备端路径，只允许公共存储根下、无 `..`、非受限目录的路径。
+/// 返回去尾部斜杠后的规范路径（根 `/` 保留）。
+fn validate_phone_path(path: &str) -> Result<String, AppError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.len() > 1024 {
+        return Err(phone_path_invalid_error());
+    }
+    let normalized = trimmed.trim_end_matches('/').to_string();
+    let normalized = if normalized.is_empty() { "/".to_string() } else { normalized };
+    if !normalized.starts_with('/') {
+        return Err(phone_path_invalid_error());
+    }
+    // 拒绝任何 `..` 段（防止路径逃逸到公共存储之外）。
+    if normalized.split('/').any(|segment| segment == "..") {
+        return Err(phone_path_invalid_error());
+    }
+    // 必须落在公共存储根下（等于根或在根之后）。
+    let under_root = PHONE_STORAGE_ROOTS
+        .iter()
+        .any(|root| normalized == *root || normalized.starts_with(&format!("{root}/")));
+    if !under_root {
+        return Err(phone_path_invalid_error());
+    }
+    // 拒绝受限目录段。
+    if PHONE_RESTRICTED_SEGMENTS
+        .iter()
+        .any(|seg| normalized.contains(seg))
+    {
+        return Err(phone_path_invalid_error());
+    }
+    Ok(normalized)
+}
+
+/// X10-166：校验重命名 / 新建的名称——只允许单个文件名，不含路径分隔符与 `..`。
+fn validate_phone_name(name: &str) -> Result<String, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 128
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed == "."
+        || trimmed == ".."
+    {
+        return Err(phone_name_invalid_error());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// X10-166：解析 `adb shell ls -la <dir>` 输出为目录条目。
+///
+/// Android toybox 的 `ls -la` 每行一条，格式为：
+/// `drwxrwx--x 2 root sdcard_rw 4096 2024-01-01 12:00 DirName`
+/// `-rw-rw---- 1 root sdcard_rw 12345 2024-01-01 12:00 file name.txt`
+///
+/// 名称字段是「第 9 个空白分隔字段之后的整行剩余部分」，因此文件名含空格也安全。
+/// 跳过 `total N` 行与 `.`/`..` 条目。解析失败的单行被忽略（不报错，保持可浏览）。
+fn parse_phone_listing(raw: &str) -> Vec<PhoneDirEntry> {
+    let mut entries = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with("total ") {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        // fields[0] 权限串：首字符 d = 目录，l = 符号链接（视为文件，避免误进）。
+        let kind = if fields[0].starts_with('d') { "dir" } else { "file" };
+        // 字段布局：权限 链接 用户 组 大小 [时间...] 名称。
+        // Android toybox `ls -la` 时间通常是 2 字段（YYYY-MM-DD HH:MM，含年份）；
+        // 个别系统用 3 字段（Mon DD HH:MM）。按第 6 个字段（索引5）是否含 '-' 判断。
+        let (time_len, name_start) = if fields.get(5).map(|s| s.contains('-')).unwrap_or(false) {
+            (2usize, 7usize)
+        } else {
+            (3usize, 8usize)
+        };
+        if fields.len() < name_start {
+            continue;
+        }
+        // 名称 = 名称起点之后的全部字段用空格重组（名称内的空格会被 split_whitespace 拆开，
+        // join(" ") 重组；连续多空格的极端情况会折叠，可接受）。
+        let name = fields[name_start..].join(" ");
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let size: i64 = fields.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let time_slice = &fields[5..5 + time_len];
+        let modified = parse_toybox_mtime(time_slice);
+        entries.push(PhoneDirEntry { name, kind: kind.to_string(), size, modified });
+    }
+    entries
+}
+
+/// X10-166：解析 toybox `ls -la` 的时间字段（`YYYY-MM-DD HH:MM`）为 Unix 秒。
+/// 只解析带完整年份的日期；toybox 当年省略年份时返回 0（前端显示「—」，不猜年份）。
+/// 用纯整数日期算法（Howard Hinnant days_from_civil），不引入 chrono 依赖。
+fn parse_toybox_mtime(fields: &[&str]) -> i64 {
+    if fields.len() < 2 {
+        return 0;
+    }
+    let date = fields[0];
+    let time = fields[1];
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 || parts[0].len() != 4 {
+        return 0;
+    }
+    let year: i64 = match parts[0].parse() { Ok(value) => value, Err(_) => return 0 };
+    let month: u32 = match parts[1].parse() { Ok(value) => value, Err(_) => return 0 };
+    let day: u32 = match parts[2].parse() { Ok(value) => value, Err(_) => return 0 };
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return 0;
+    }
+    let hour_min: Vec<&str> = time.split(':').collect();
+    if hour_min.len() < 2 {
+        return 0;
+    }
+    let hour: i64 = match hour_min[0].parse() { Ok(value) => value, Err(_) => return 0 };
+    let minute: i64 = match hour_min[1].parse() { Ok(value) => value, Err(_) => return 0 };
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) {
+        return 0;
+    }
+    let days = days_from_civil(year, month, day);
+    days * 86_400 + hour * 3_600 + minute * 60
+}
+
+/// Howard Hinnant 的 civil-days 算法（纯整数，无依赖），把公历日期转成 Unix 天数。
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m as i64 + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 fn transfer_name_invalid_error() -> AppError {
     AppError::new(
         "transfer_name_invalid",
@@ -5008,6 +5267,198 @@ fn delete_device_file_with(
             )
         })
 }
+
+// ---------------------------------------------------------------------------
+// 文件管理：adb 浏览 / 管理手机公共存储（X10-166）
+// ---------------------------------------------------------------------------
+
+/// 列出手机公共存储里的一个目录（目录 + 文件，含大小 / 修改时间）。
+#[tauri::command]
+fn list_phone_dir(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    path: String,
+) -> Result<Vec<PhoneDirEntry>, AppError> {
+    let serial = validate_serial(&serial)?;
+    let path = validate_phone_path(&path)?;
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    let raw = runtimes
+        .adb
+        .list_phone_dir(&serial, &path)
+        .map_err(|_| AppError::new(
+            "phone_dir_list_failed",
+            "无法读取这个目录。",
+            "请确认连接仍然有效、目录可访问（公共存储可读写；Android/data 等受限）。",
+        ))?;
+    Ok(parse_phone_listing(&raw))
+}
+
+/// 把本机文件上传到手机公共存储的指定目录。
+#[tauri::command]
+fn push_to_phone_dir(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    local_path: String,
+    remote_dir: String,
+) -> Result<TransferReceipt, AppError> {
+    let result = push_to_phone_dir_with(&runtimes, serial.clone(), local_path.clone(), remote_dir.clone());
+    log.record_outcome("phone_push", result.as_ref().err(), &[&serial]);
+    result
+}
+
+fn push_to_phone_dir_with(
+    runtimes: &AppRuntimes,
+    serial: String,
+    local_path: String,
+    remote_dir: String,
+) -> Result<TransferReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+    let remote_dir = validate_phone_path(&remote_dir)?;
+    if let Some(error) = device_readiness_error(device_lookup(runtimes, &serial)) {
+        return Err(error);
+    }
+    let local = PathBuf::from(&local_path);
+    let metadata = fs::metadata(&local).map_err(|_| transfer_local_invalid_error())?;
+    if !metadata.is_file() {
+        return Err(transfer_local_invalid_error());
+    }
+    let bytes = metadata.len();
+    let file_name = local
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .ok_or_else(transfer_local_invalid_error)?;
+    let file_name = validate_transfer_name(&file_name)?;
+    runtimes
+        .adb
+        .make_directory(&serial, &remote_dir)
+        .map_err(|_| AppError::new("phone_push_failed", "无法在手机上准备目标目录。", "请确认手机存储可用、连接仍然有效。"))?;
+    runtimes
+        .adb
+        .push_file(&serial, &local, &remote_dir)
+        .map_err(|_| AppError::new("phone_push_failed", "文件没有传到手机上。", "请确认连接仍然有效、手机存储空间充足。"))?;
+    Ok(TransferReceipt { path: format!("{remote_dir}/{file_name}"), file_name, bytes })
+}
+
+/// 把手机公共存储里的文件下载到本机「下载 / MirrorDock / 文件管理」。
+#[tauri::command]
+fn pull_from_phone_dir(
+    app: AppHandle,
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    remote_path: String,
+) -> Result<TransferReceipt, AppError> {
+    let serial = validate_serial(&serial)?;
+    let remote_path = validate_phone_path(&remote_path)?;
+    let directory = {
+        let mut dir = transfer_download_dir(&app)?;
+        dir.push("文件管理");
+        dir
+    };
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    fs::create_dir_all(&directory).map_err(|_| transfer_dir_unavailable_error())?;
+    let file_name = remote_path
+        .rsplit('/')
+        .next()
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(phone_path_invalid_error)?;
+    let local = unique_file_path(&directory, &file_name);
+    let result = runtimes
+        .adb
+        .pull_file(&serial, &remote_path, &local)
+        .map_err(|_| AppError::new("phone_pull_failed", "文件没有从手机下载回来。", "请确认手机上这个文件还在，然后重试。"))
+        .map(|_| {
+            let bytes = fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+            TransferReceipt {
+                file_name: local.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or(file_name),
+                path: local.to_string_lossy().into_owned(),
+                bytes,
+            }
+        });
+    log.record_outcome("phone_pull", result.as_ref().err(), &[&serial]);
+    result
+}
+
+/// 删除手机公共存储里的文件或目录（目录需 recursive=true，前端显式确认）。
+#[tauri::command]
+fn delete_phone_entry(
+    runtimes: State<AppRuntimes>,
+    log: State<DiagnosticsLog>,
+    serial: String,
+    path: String,
+    recursive: bool,
+) -> Result<(), AppError> {
+    let serial = validate_serial(&serial)?;
+    let path = validate_phone_path(&path)?;
+    // 根目录（/storage/emulated/0 或 /sdcard 本身）禁止删除。
+    if PHONE_STORAGE_ROOTS.iter().any(|root| path == *root) {
+        return Err(phone_path_invalid_error());
+    }
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    let result = runtimes
+        .adb
+        .remove_phone_entry(&serial, &path, recursive)
+        .map_err(|_| AppError::new("phone_delete_failed", "没有从手机上删除。", "请确认连接仍然有效，然后重试。"));
+    log.record_outcome("phone_delete", result.as_ref().err(), &[&serial, &path]);
+    result
+}
+
+/// 在手机公共存储里新建文件夹。
+#[tauri::command]
+fn mkdir_phone_dir(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    parent: String,
+    name: String,
+) -> Result<String, AppError> {
+    let serial = validate_serial(&serial)?;
+    let parent = validate_phone_path(&parent)?;
+    let name = validate_phone_name(&name)?;
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    let target = format!("{}/{}", parent.trim_end_matches('/'), name);
+    runtimes
+        .adb
+        .make_phone_dir(&serial, &target)
+        .map_err(|_| AppError::new("phone_mkdir_failed", "没有创建文件夹。", "请确认连接仍然有效、名称可用。"))?;
+    Ok(target)
+}
+
+/// 重命名手机公共存储里的文件或文件夹（同一目录内）。
+#[tauri::command]
+fn rename_phone_entry(
+    runtimes: State<AppRuntimes>,
+    serial: String,
+    old_path: String,
+    new_name: String,
+) -> Result<String, AppError> {
+    let serial = validate_serial(&serial)?;
+    let old_path = validate_phone_path(&old_path)?;
+    let new_name = validate_phone_name(&new_name)?;
+    if let Some(error) = device_readiness_error(device_lookup(&runtimes, &serial)) {
+        return Err(error);
+    }
+    let parent = old_path
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or("/");
+    let new_path = format!("{}/{}", parent.trim_end_matches('/'), new_name);
+    runtimes
+        .adb
+        .rename_phone_entry(&serial, &old_path, &new_name)
+        .map_err(|_| AppError::new("phone_rename_failed", "没有重命名。", "请确认连接仍然有效、目标名称未被占用。"))?;
+    Ok(new_path)
+}
+
 
 // ---------------------------------------------------------------------------
 // 相册：浏览固定白名单目录并把照片 / 视频取回到本机（X10-129）
@@ -9731,6 +10182,12 @@ pub fn run() {
             fetch_gallery_media,
             fetch_gallery_preview,
             restore_desktop_display,
+            list_phone_dir,
+            push_to_phone_dir,
+            pull_from_phone_dir,
+            delete_phone_entry,
+            mkdir_phone_dir,
+            rename_phone_entry,
             inject_device_key,
             inject_device_tap,
             inject_device_swipe,
@@ -16627,3 +17084,89 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
     }
 }
+
+    // -- X10-166 文件管理：路径校验与目录清单解析（纯函数，无 adb） --
+
+    #[test]
+    fn phone_path_accepts_public_storage_roots() {
+        assert!(validate_phone_path("/storage/emulated/0").is_ok());
+        assert!(validate_phone_path("/sdcard").is_ok());
+        assert!(validate_phone_path("/sdcard/Download").is_ok());
+        assert!(validate_phone_path("/storage/emulated/0/DCIM/Camera").is_ok());
+        assert!(validate_phone_path("/sdcard/Download/MirrorDock/").is_ok());
+    }
+
+    #[test]
+    fn phone_path_rejects_escape_and_restricted() {
+        assert!(validate_phone_path("").is_err());
+        assert!(validate_phone_path("relative/path").is_err());
+        assert!(validate_phone_path("/etc/passwd").is_err());
+        assert!(validate_phone_path("/sdcard/../etc").is_err());
+        assert!(validate_phone_path("/data/data/com.x").is_err());
+        assert!(validate_phone_path("/sdcard/Android/data").is_err());
+        assert!(validate_phone_path("/sdcard/Android/obb").is_err());
+    }
+
+    #[test]
+    fn phone_name_rejects_separators_and_dots() {
+        assert!(validate_phone_name("new folder").is_ok());
+        assert!(validate_phone_name("a.txt").is_ok());
+        assert!(validate_phone_name("").is_err());
+        assert!(validate_phone_name("../x").is_err());
+        assert!(validate_phone_name("a/b").is_err());
+        assert!(validate_phone_name(".").is_err());
+        assert!(validate_phone_name("..").is_err());
+    }
+
+    #[test]
+    fn parse_phone_listing_reads_dirs_files_and_sizes() {
+        let raw = "total 4096\n\
+            drwxrwx--x 2 root sdcard_rw 4096 2024-01-01 12:00 Documents\n\
+            -rw-rw---- 1 root sdcard_rw 12345 2024-01-02 08:30 report final.txt\n\
+            -rw-rw---- 1 root sdcard_rw 678 2024-01-03 09:00 small.jpg\n";
+        let entries = parse_phone_listing(raw);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "Documents");
+        assert_eq!(entries[0].kind, "dir");
+        assert_eq!(entries[1].name, "report final.txt");
+        assert_eq!(entries[1].kind, "file");
+        assert_eq!(entries[1].size, 12345);
+        assert_eq!(entries[2].name, "small.jpg");
+        assert_eq!(entries[2].size, 678);
+        assert!(entries[0].modified > 0);
+    }
+
+    #[test]
+    fn parse_phone_listing_skips_total_and_dot_entries() {
+        let raw = "total 0\n\
+            drwxrwx--x 1 root sdcard_rw 4096 2024-01-01 12:00 .\n\
+            drwxrwx--x 1 root sdcard_rw 4096 2024-01-01 12:00 ..\n\
+            -rw-rw---- 1 root sdcard_rw 5 2024-01-01 12:00 x.txt\n";
+        let entries = parse_phone_listing(raw);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "x.txt");
+    }
+
+    #[test]
+    fn parse_phone_listing_ignores_malformed_lines() {
+        let raw = "total 4\nnot enough fields\n-rw-rw---- 1 root sdcard_rw 100 2024-01-01 12:00 ok.txt\n";
+        let entries = parse_phone_listing(raw);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "ok.txt");
+    }
+
+    #[test]
+    fn toybox_mtime_parses_full_dates_only() {
+        assert!(parse_toybox_mtime(&["2024-01-02", "08:30", "x"]) > 0);
+        assert_eq!(parse_toybox_mtime(&["01-02", "08:30", "x"]), 0); // 省略年份不猜
+        assert_eq!(parse_toybox_mtime(&["bad", "time", "x"]), 0);
+        assert_eq!(parse_toybox_mtime(&["2024-13-99", "25:99", "x"]), 0);
+    }
+
+    #[test]
+    fn days_from_civil_matches_epoch() {
+        // 1970-01-01 = 0 天
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        // 2024-01-01 = 19723 天（已知锚点）
+        assert_eq!(days_from_civil(2024, 1, 1), 19723);
+    }

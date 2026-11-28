@@ -334,6 +334,10 @@ export function expiryText(expiresAt: number | null) {
 type Screenshot = { file_name: string; path: string; bytes: number };
 // 与截图共用同一回执形状：发送时 path 是手机上的路径，取回时是本机路径。
 type TransferReceipt = { file_name: string; path: string; bytes: number };
+// X10-166 文件管理：`list_phone_dir` 返回的目录条目（与 Rust PhoneDirEntry 一一对应）。
+type PhoneDirEntry = { name: string; kind: "dir" | "file"; size: number; modified: number };
+// 文件管理起始目录：公共存储根（`/sdcard` 是 `/storage/emulated/0` 的符号链接，走规范根）。
+const PHONE_FM_ROOT = "/storage/emulated/0";
 
 /** X10-66 通知镜像一期：手机转来的通知（内容只在内存，不落盘）。
  * `key`/`replyable` 由 0.2.5+ 伴侣端提供：只有 replyable=true（通知自带
@@ -835,6 +839,7 @@ const assistantViewIcons: Record<AssistantViewKey, ReactElement> = {
   schedule: <NavIcon d="M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" />,
   replay: <NavIcon d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4M12 8v4l3 2" />,
   files: <NavIcon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  fileman: <NavIcon d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 10h18M8 15h4" />,
   shot: <NavIcon d="M4 7h3l1.5-2h7L17 7h3v12H4zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />,
   record: <NavIcon d="M12 19a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z" />,
   album: <NavIcon d="M3 5h18v14H3zM7 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM4 18l5-5 4 4 3-3 4 4" />,
@@ -894,6 +899,9 @@ function App() {
   const [viewFilter, setViewFilter] = useState("");
   // X10-146：应用管理按预览在卡头提供名称 / 包名排序；只影响展示顺序。
   const [appsSort, setAppsSort] = useState<"name" | "package">("name");
+  // X10-166 懒加载：应用清单首屏只渲染 120 条，避免数百行全量渲染卡顿。
+  const [appsLimit, setAppsLimit] = useState(120);
+  const APPS_PAGE = 120;
   // X10-153：侧栏按重构预览 1:1 复刻——静态分组标题 + 常显导航项（无折叠、无设备树）。
   // 分组数据与视图键见 assistantViews.tsx ASSISTANT_GROUPS（与预览 NAV 完全一致）。
   const [uiTheme, setUiTheme] = useState<UiThemeKey>(() => readUiTheme());
@@ -1023,6 +1031,9 @@ function App() {
   const [galleryPreviewLoading, setGalleryPreviewLoading] = useState<Record<string, boolean>>({});
   const [galleryPreviewFailed, setGalleryPreviewFailed] = useState<Record<string, boolean>>({});
   const [galleryLightbox, setGalleryLightbox] = useState<{ src: string; name: string } | null>(null);
+  // X10-166 相册懒加载：首屏只渲染 120 条，避免 2000 条全量渲染卡顿；点「加载更多」再 +120。
+  const [galleryLimit, setGalleryLimit] = useState(120);
+  const GALLERY_PAGE = 120;
   // X10-130 按键映射：方案与绑定只保存在本机 localStorage。
   const [keymaps, setKeymaps] = useState<{ profiles: KeymapProfile[]; activeId: string | null }>(() => readKeymaps());
   const [capturingKey, setCapturingKey] = useState(false);
@@ -1058,6 +1069,15 @@ function App() {
   const [diagnosticsMessage, setDiagnosticsMessage] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [deviceFiles, setDeviceFiles] = useState<string[] | null>(null);
+  // X10-166 文件管理：浏览手机公共存储（完整读写）。目录按需加载，不随会话轮询。
+  const [fmPath, setFmPath] = useState<string>(PHONE_FM_ROOT);
+  const [fmEntries, setFmEntries] = useState<PhoneDirEntry[] | null>(null);
+  const [fmBusy, setFmBusy] = useState(false);
+  const [fmMessage, setFmMessage] = useState<string | null>(null);
+  const [fmError, setFmError] = useState<string | null>(null);
+  const [fmSearch, setFmSearch] = useState("");
+  // 正在操作的条目（行内 loading，只让该行转圈，不整表转圈）。
+  const [fmBusyEntry, setFmBusyEntry] = useState<string | null>(null);
   // X10-60：伴侣端推送「发送区有新文件」的时间戳（null = 无新事件）。
   const [filesChangedHint, setFilesChangedHint] = useState<number | null>(null);
   // X10-60：伴侣端报来的崩溃堆栈（仅内存展示，不落盘、不上传；点「知道了」即散）。
@@ -2662,6 +2682,8 @@ function App() {
     const query = galleryQuery.trim().toLowerCase();
     return !query || item.name.toLowerCase().includes(query) || item.path.toLowerCase().includes(query);
   });
+  // X10-166 懒加载：只渲染首屏 galleryLimit 条（缩略图 grid 与表格同批），其余点「加载更多」。
+  const galleryVisible = visibleGalleryItems.slice(0, galleryLimit);
   const galleryImageCount = (galleryItems ?? []).filter((item) => item.kind === "image").length;
   const galleryVideoCount = (galleryItems ?? []).filter((item) => item.kind === "video").length;
 
@@ -3183,6 +3205,162 @@ function App() {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // X10-166 文件管理：浏览手机公共存储（完整读写）。
+  // 路径统一以 `/storage/emulated/0` 为根；`/sdcard` 是其符号链接，走规范根避免歧义。
+  // -------------------------------------------------------------------------
+
+  // 拼接手机路径：父目录与条目名之间恰好一个 `/`。
+  function fmJoin(parent: string, name: string): string {
+    return `${parent.replace(/\/+$/, "")}/${name}`;
+  }
+
+  // 取父目录（根目录时返回自身，即「向上」在根上是空操作）。
+  function fmParentOf(path: string): string {
+    if (path === PHONE_FM_ROOT || path === "/sdcard") return path;
+    const index = path.lastIndexOf("/");
+    if (index <= 0) return PHONE_FM_ROOT;
+    return path.slice(0, index);
+  }
+
+  async function loadFmDir(serial: string, path: string) {
+    setFmBusy(true);
+    setFmError(null);
+    try {
+      setFmEntries(await invoke<PhoneDirEntry[]>("list_phone_dir", { serial, path }));
+      setFmPath(path);
+    } catch (error) {
+      setFmError(errorMessage(error, "无法读取这个目录。"));
+      // 读取失败不要留下「上一个目录的内容」冒充当前目录 —— 置空回到诚实状态。
+      setFmEntries(null);
+    } finally {
+      setFmBusy(false);
+    }
+  }
+
+  // 进入目录 / 打开文件：目录则导航，文件则下载到本机。
+  async function fmOpenEntry(serial: string, entry: PhoneDirEntry) {
+    if (entry.kind === "dir") {
+      await loadFmDir(serial, fmJoin(fmPath, entry.name));
+    } else {
+      await fmDownload(serial, entry);
+    }
+  }
+
+  async function fmGoUp(serial: string) {
+    await loadFmDir(serial, fmParentOf(fmPath));
+  }
+
+  async function fmGoRoot(serial: string) {
+    await loadFmDir(serial, PHONE_FM_ROOT);
+  }
+
+  // 把本机文件上传到「当前目录」。
+  async function fmUpload(serial: string) {
+    setFmMessage(null);
+    setFmError(null);
+    let picked: string | string[] | null;
+    try {
+      picked = await openFilePicker({ multiple: true, title: `选择要上传到手机「${fmPath}」的文件` });
+    } catch (error) {
+      setFmError(errorMessage(error, "无法打开文件选择器。"));
+      return;
+    }
+    if (!Array.isArray(picked) || picked.length === 0) return;
+    setFmBusy(true);
+    try {
+      const results: string[] = [];
+      for (const localPath of picked) {
+        const receipt = await invoke<TransferReceipt>("push_to_phone_dir", { serial, localPath, remoteDir: fmPath });
+        results.push(receipt.file_name);
+      }
+      setFmMessage(`已上传 ${results.length} 个文件到「${fmPath}」。`);
+      await loadFmDir(serial, fmPath);
+    } catch (error) {
+      setFmError(errorMessage(error, "文件没有传到手机上。"));
+    } finally {
+      setFmBusy(false);
+    }
+  }
+
+  // 在手机当前目录新建文件夹。
+  async function fmMkdir(serial: string) {
+    const name = window.prompt("新建文件夹名称：");
+    if (!name) return;
+    setFmMessage(null);
+    setFmError(null);
+    setFmBusy(true);
+    try {
+      const created = await invoke<string>("mkdir_phone_dir", { serial, parent: fmPath, name });
+      setFmMessage(`已创建文件夹「${created}」。`);
+      await loadFmDir(serial, fmPath);
+    } catch (error) {
+      setFmError(errorMessage(error, "没有创建文件夹。"));
+    } finally {
+      setFmBusy(false);
+    }
+  }
+
+  // 把手机上的文件下载到本机「下载 / MirrorDock / 文件管理」并定位。
+  async function fmDownload(serial: string, entry: PhoneDirEntry) {
+    setFmMessage(null);
+    setFmError(null);
+    setFmBusyEntry(entry.name);
+    try {
+      const receipt = await invoke<TransferReceipt>("pull_from_phone_dir", { serial, remotePath: fmJoin(fmPath, entry.name) });
+      setFmMessage(`已下载「${entry.name}」，保存在「下载 / MirrorDock / 文件管理」。`);
+      try { await revealItemInDir(receipt.path); } catch { /* 定位失败不影响下载成功提示。 */ }
+    } catch (error) {
+      setFmError(errorMessage(error, "没有下载成功。"));
+    } finally {
+      setFmBusyEntry(null);
+    }
+  }
+
+  // 重命名文件 / 文件夹（同一目录内）。目录也允许改名，后端校验名称。
+  async function fmRename(serial: string, entry: PhoneDirEntry) {
+    const name = window.prompt(`重命名「${entry.name}」为：`, entry.name);
+    if (!name || name === entry.name) return;
+    setFmMessage(null);
+    setFmError(null);
+    setFmBusyEntry(entry.name);
+    try {
+      await invoke<string>("rename_phone_entry", { serial, oldPath: fmJoin(fmPath, entry.name), newName: name });
+      setFmMessage(`已重命名「${entry.name}」为「${name}」。`);
+      await loadFmDir(serial, fmPath);
+    } catch (error) {
+      setFmError(errorMessage(error, "没有重命名。"));
+    } finally {
+      setFmBusyEntry(null);
+    }
+  }
+
+  // 删除文件 / 文件夹。目录必须显式确认（recursive=true 后端才执行 `rm -rf` 语义）。
+  function fmDelete(serial: string, entry: PhoneDirEntry) {
+    const target = fmJoin(fmPath, entry.name);
+    const isDir = entry.kind === "dir";
+    const ok = window.confirm(
+      isDir
+        ? `删除文件夹「${entry.name}」？\n\n会连同里面的所有内容一起从手机删除，无法恢复。`
+        : `删除文件「${entry.name}」？\n\n会从手机删除这个文件，无法恢复。`,
+    );
+    if (!ok) return;
+    void (async () => {
+      setFmMessage(null);
+      setFmError(null);
+      setFmBusyEntry(entry.name);
+      try {
+        await invoke("delete_phone_entry", { serial, path: target, recursive: isDir });
+        setFmMessage(`已从手机删除「${entry.name}」。`);
+        await loadFmDir(serial, fmPath);
+      } catch (error) {
+        setFmError(errorMessage(error, "没有从手机上删除。"));
+      } finally {
+        setFmBusyEntry(null);
+      }
+    })();
+  }
+
 
   // 修改快捷键组合：立即持久化；会话进行中会按新组合重新注册（见注册 effect）。
   function updateShortcuts(next: ShortcutSettings) {
@@ -3643,6 +3821,22 @@ function App() {
     void refreshGallery();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, transferDeviceSerial]);
+  // X10-166 文件管理：进入视图 / 换设备时自动读取根目录（不要求先点「刷新」）。
+  useEffect(() => {
+    if (view !== "fileman") return;
+    if (fmEntries !== null || fmBusy) return;
+    if (!transferDeviceSerial) return;
+    void loadFmDir(transferDeviceSerial, PHONE_FM_ROOT);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, transferDeviceSerial]);
+  // X10-166 懒加载：筛选 / 搜索变化时回到首屏，避免分页停在深处。
+  useEffect(() => {
+    setGalleryLimit(GALLERY_PAGE);
+  }, [galleryFilter, galleryQuery]);
+  // X10-166 懒加载：应用清单搜索 / 排序变化时回到首屏。
+  useEffect(() => {
+    setAppsLimit(APPS_PAGE);
+  }, [viewFilter, appsSort]);
   // X10-60：伴侣端崩溃堆栈上报（本地点对点，仅界面展示）。
   useEffect(() => {
     const hasTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -4495,6 +4689,161 @@ function App() {
             text: [transferError, transferMessage].filter(Boolean).join(" "),
           },
         ];
+      case "fileman": {
+        // X10-166 文件管理：浏览手机公共存储（完整读写）。目录按需加载，不随会话轮询。
+        // 排序：文件夹在前、文件在后，各自按名称本地化排序（不依赖 ls 返回顺序）。
+        const entries = (fmEntries ?? []).slice().sort((a, b) => {
+          if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
+          return a.name.localeCompare(b.name, "zh-Hans-CN");
+        });
+        const query = fmSearch.trim().toLowerCase();
+        const visible = query
+          ? entries.filter((entry) => entry.name.toLowerCase().includes(query))
+          : entries;
+        // 面包屑：相对根的路径段（`/storage/emulated/0` 之上不展示）。
+        const rel = fmPath === PHONE_FM_ROOT ? "" : fmPath.slice(PHONE_FM_ROOT.length).replace(/^\/+/, "");
+        const crumbs = rel ? rel.split("/") : [];
+        const crumbPath = (index: number) => `${PHONE_FM_ROOT}/${crumbs.slice(0, index + 1).join("/")}`;
+        const fmSize = (entry: PhoneDirEntry) => {
+          if (entry.kind === "dir") return "—";
+          if (entry.size < 1024) return `${entry.size} 字节`;
+          if (entry.size < 1024 * 1024) return `${Math.round(entry.size / 1024)} KB`;
+          if (entry.size < 1024 * 1024 * 1024) return `${(entry.size / 1024 / 1024).toFixed(1)} MB`;
+          return `${(entry.size / 1024 / 1024 / 1024).toFixed(2)} GB`;
+        };
+        const fmTime = (entry: PhoneDirEntry) => {
+          if (!entry.modified) return "—";
+          const date = new Date(entry.modified * 1000);
+          const pad = (value: number) => String(value).padStart(2, "0");
+          return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        };
+        const canFm = Boolean(transferDeviceSerial) && !fmBusy;
+        return [
+          {
+            kind: "custom",
+            children: (
+              <section className="card">
+                <div className="card-head">
+                  <h3 className="card-title">手机存储</h3>
+                  {fmEntries !== null && <span className="badge neutral">{visible.length} 项</span>}
+                  <span className="spacer" />
+                </div>
+                <div className="card-body">
+                  {/* 面包屑：根目录常显，路径段逐级可点回退。 */}
+                  <div className="fm-pathbar" role="navigation" aria-label="当前目录">
+                    <button type="button" className="btn-ghost" disabled={!canFm || fmPath === PHONE_FM_ROOT} onClick={() => transferDeviceSerial && void fmGoRoot(transferDeviceSerial)}>
+                      根目录
+                    </button>
+                    {crumbs.map((crumb, index) => (
+                      <span className="fm-crumb" key={crumbPath(index)}>
+                        <span className="fm-crumb-sep">/</span>
+                        <button type="button" className="btn-ghost" disabled={!canFm} onClick={() => transferDeviceSerial && void loadFmDir(transferDeviceSerial, crumbPath(index))}>
+                          {crumb}
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  {/* 工具栏：上传 / 新建文件夹 / 向上 / 刷新。 */}
+                  <div className="fm-toolbar">
+                    <button type="button" className="btn btn-primary btn-sm" disabled={!canFm} onClick={() => transferDeviceSerial && void fmUpload(transferDeviceSerial)}>
+                      上传到当前目录
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={!canFm} onClick={() => transferDeviceSerial && void fmMkdir(transferDeviceSerial)}>
+                      新建文件夹
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={!canFm} onClick={() => transferDeviceSerial && void fmGoUp(transferDeviceSerial)}>
+                      上一级
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={!canFm} onClick={() => transferDeviceSerial && void loadFmDir(transferDeviceSerial, fmPath)}>
+                      刷新
+                    </button>
+                    <span className="spacer" />
+                    <input
+                      className="fm-search"
+                      type="search"
+                      placeholder="筛选当前目录…"
+                      value={fmSearch}
+                      onChange={(event) => setFmSearch(event.target.value)}
+                      aria-label="筛选当前目录"
+                    />
+                  </div>
+                  {!transferDeviceSerial ? (
+                    <div className="empty hint">
+                      <p>连接设备并选择「文件传输」后，这里会显示手机公共存储。</p>
+                    </div>
+                  ) : fmEntries === null ? (
+                    <div className="empty hint">
+                      <p>{fmBusy ? "正在读取目录…" : "尚未读取，点「刷新」查看当前目录。"}</p>
+                    </div>
+                  ) : visible.length === 0 ? (
+                    <div className="empty hint">
+                      <p>{query ? `没有匹配「${fmSearch}」的条目。` : "这个文件夹是空的。"}</p>
+                    </div>
+                  ) : (
+                    <div className="table-wrap" role="region" aria-label="手机存储目录" tabIndex={0}>
+                      <table className="table">
+                        <thead>
+                          <tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间</th><th data-col="ops">操作</th></tr>
+                        </thead>
+                        <tbody>
+                          {visible.map((entry) => {
+                            const isDir = entry.kind === "dir";
+                            const busy = fmBusyEntry === entry.name;
+                            return (
+                              <tr key={entry.name}>
+                                <td className="cell-main">
+                                  <button
+                                    type="button"
+                                    className="fm-name"
+                                    disabled={busy}
+                                    onClick={() => transferDeviceSerial && void fmOpenEntry(transferDeviceSerial, entry)}
+                                  >
+                                    <span className={`fm-kind${isDir ? " dir" : ""}`} aria-hidden="true">{isDir ? "▸" : "▤"}</span>
+                                    {entry.name}
+                                  </button>
+                                </td>
+                                <td>{isDir ? <span className="badge neutral">文件夹</span> : <span className="badge ok">文件</span>}</td>
+                                <td>{fmSize(entry)}</td>
+                                <td>{fmTime(entry)}</td>
+                                <td data-col="ops">
+                                  <span className="assistant-row-actions">
+                                    {busy ? (
+                                      <span className="hint">处理中…</span>
+                                    ) : (
+                                      <>
+                                        {isDir ? (
+                                          <button type="button" className="btn-ghost" disabled={!canFm} onClick={() => transferDeviceSerial && void fmOpenEntry(transferDeviceSerial, entry)}>打开</button>
+                                        ) : (
+                                          <button type="button" className="btn-ghost" disabled={!canFm} onClick={() => transferDeviceSerial && void fmDownload(transferDeviceSerial, entry)}>下载</button>
+                                        )}
+                                        <button type="button" className="btn-ghost" disabled={!canFm} onClick={() => transferDeviceSerial && void fmRename(transferDeviceSerial, entry)}>重命名</button>
+                                        <button type="button" className="btn-ghost" disabled={!canFm} onClick={() => transferDeviceSerial && void fmDelete(transferDeviceSerial, entry)}>删除</button>
+                                      </>
+                                    )}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+                <div className="card-foot">
+                  <span>{fmEntries !== null ? `路径：${fmPath}` : ""}</span>
+                  <span className="spacer" />
+                  <span className="hint">支持上传 / 下载 / 新建 / 重命名 / 删除；Android/data、Android/obb 与应用私有目录受系统保护，无法管理。</span>
+                </div>
+              </section>
+            ),
+          },
+          {
+            kind: "note",
+            text: [fmError, fmMessage].filter(Boolean).join(" "),
+          },
+        ];
+      }
       case "shot":
         return [
           {
@@ -4585,7 +4934,7 @@ function App() {
                   <div className="card-body tight">
                     <p className="hint gallery-preview-hint">点击缩略图查看大图或用系统播放器打开视频；缩略图只在本机缓存。</p>
                     <div className="gallery-preview-grid" aria-label="媒体缩略图">
-                      {visibleGalleryItems.map((item) => (
+                      {galleryVisible.map((item) => (
                         <button
                           key={item.path}
                           type="button"
@@ -4620,7 +4969,7 @@ function App() {
                         <tr><th>类型</th><th>文件</th><th>来源目录</th><th>状态</th><th data-col="ops">操作</th></tr>
                       </thead>
                       <tbody>
-                        {visibleGalleryItems.map((item) => (
+                        {galleryVisible.map((item) => (
                           <tr key={item.path}>
                             <td><span className="badge neutral">{item.kind === "image" ? "图片" : "视频"}</span></td>
                             <td className="cell-main" title={item.name}>{item.name}</td>
@@ -4640,6 +4989,13 @@ function App() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                )}
+                {galleryLimit < visibleGalleryItems.length && (
+                  <div className="load-more-row">
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setGalleryLimit((limit) => limit + GALLERY_PAGE)}>
+                      加载更多（还有 {visibleGalleryItems.length - galleryLimit} 条）
+                    </button>
                   </div>
                 )}
                 <div className="card-foot">
@@ -4703,6 +5059,8 @@ function App() {
         const filteredApps = appQuery
           ? visibleDeviceApps.filter((app) => `${app.name} ${app.package}`.toLowerCase().includes(appQuery))
           : visibleDeviceApps;
+        // X10-166 懒加载：只渲染首屏 appsLimit 条，其余点「加载更多」。
+        const appsVisible = filteredApps.slice(0, appsLimit);
         return [
           {
             kind: "custom",
@@ -4734,7 +5092,7 @@ function App() {
                         <tr><th>应用</th><th>包名</th><th data-col="ops">操作</th></tr>
                       </thead>
                       <tbody>
-                        {filteredApps.map((app) => (
+                        {appsVisible.map((app) => (
                           <tr key={app.package}>
                             <td className="cell-main">{app.name || app.package}</td>
                             <td className="mono">{app.package}</td>
@@ -4766,6 +5124,13 @@ function App() {
                   </div>
                 ) : (
                   <div className="empty hint"><p>{appQuery ? `没有匹配「${viewFilter}」的应用` : "尚未读取应用清单；连接设备后点「刷新清单」。"}</p></div>
+                )}
+                {appsLimit < filteredApps.length && (
+                  <div className="load-more-row">
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setAppsLimit((limit) => limit + APPS_PAGE)}>
+                      加载更多（还有 {filteredApps.length - appsLimit} 项）
+                    </button>
+                  </div>
                 )}
                 <div className="card-foot">
                   <button type="button" className="btn btn-primary btn-sm" onClick={() => appsTargetSerial && void ensureDeviceApps(appsTargetSerial)} disabled={!appsTargetSerial}>刷新清单</button>

@@ -1020,31 +1020,34 @@ button, input, select { font-family: inherit; }
 .tool-ico.c4 { background: var(--cat-pink-soft); color: var(--cat-pink); }
 .tool-ico.c5 { background: var(--cat-amber-soft); color: var(--cat-amber); }
 .tool-ico.c6 { background: var(--cat-green-soft); color: var(--cat-green); }
+/* X10-166：设备中心 Hero 高度对齐重构预览（预览实测 112px）。
+   预览 .device-hero 为 flex + --sp-5 padding + --sp-4 gap；phone 是自然高度图标列（非固定盒子），
+   id 16px 设备名、chips 4px 间距、divider align-self:stretch。客户端原固定 100px 大盒子 + 26px 设备名
+   + 10px chips 撑到约 136px，改为预览同款后自然回落到 ~112px。 */
 .device-hero {
-  display: grid; grid-template-columns: 84px minmax(0, 1fr) 1px minmax(180px, 1fr) auto; gap: 16px;
-  align-items: center; padding: 18px; border-radius: var(--radius); background: var(--accent-soft);
+  display: grid; grid-template-columns: 76px minmax(0, 1fr) 1px minmax(180px, 1fr) auto; gap: var(--sp-4);
+  align-items: center; padding: var(--sp-5); border-radius: var(--r-card);
   margin-bottom: 14px;
 }
 /* X10-151：电量文本（如「78% · 充电中」）加宽列并禁止换行，修复错行溢出。 */
 .hero-phone {
-  width: 76px; height: 100px; border: 2px solid var(--accent); border-radius: 12px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-  color: var(--accent); background: var(--surface); font-size: 12px; font-weight: 700;
+  width: 76px; flex: none; color: var(--accent);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
 .hero-phone svg { width: 26px; height: 26px; }
-.hero-phone small { font-size: 11px; font-weight: 600; white-space: nowrap; }
-.hero-id { min-width: 0; }
+.hero-phone small { font-family: var(--font-mono); font-size: var(--fs-11); color: var(--muted); white-space: nowrap; }
+.hero-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 /* X10-159：收藏星标放设备名后面（用户指定）。 */
 .hero-name-row { display: flex; align-items: center; gap: 6px; }
 .hero-name-row .fav-toggle { font-size: 18px; color: var(--accent); }
-.hero-id b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
-.hero-id > span { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
-.hero-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.hero-id b { display: block; font-size: var(--fs-16); font-weight: 600; overflow-wrap: anywhere; }
+.hero-id > span { display: block; font-size: var(--fs-12); color: var(--muted); }
+.hero-chips { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: 4px; }
 .hero-chips .badge { display: inline-flex; align-items: center; gap: 6px; }
-.hero-divider { width: 1px; height: 72px; background: var(--line); }
-.hero-media { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.hero-media b { display: block; font-size: 13px; }
-.hero-media small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.hero-divider { width: 1px; align-self: stretch; background: var(--line); }
+.hero-media { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.hero-media b { display: block; font-size: var(--fs-13); }
+.hero-media small { display: block; color: var(--muted); font-size: var(--fs-12); margin-top: 2px; }
 /* X10-159：改横向单行——重新检查与屏幕唤醒/开始镜像/取消授权在同一行（放不下时才换行）。 */
 .hero-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .hero-actions .device-card-actions { display: flex; flex-direction: row; align-items: center; gap: 8px; white-space: nowrap; flex-wrap: wrap; justify-content: flex-end; }
@@ -1648,7 +1651,6 @@ h2 { font-size: var(--fs-16); }
 
 /* Hero：预览 surface + hairline（非 accent-soft 底） */
 .device-hero { border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
-.hero-phone { border-radius: var(--r-card); }
 
 /* 拖放区 / 缩略图 / 通知 */
 .dropzone { border-radius: var(--r-card); background: var(--surface-2); }
@@ -1834,3 +1836,41 @@ form.detail-row > button[type="submit"] { flex: 0 0 auto; }
   border-radius: var(--r-card); background: var(--surface); box-shadow: 0 20px 60px rgba(0, 0, 0, .35); overflow: hidden;
 }
 .gallery-lightbox-panel img { max-width: 100%; max-height: calc(88vh - 60px); object-fit: contain; background: var(--surface-2); }
+/* X10-166 懒加载：分页「加载更多」行（相册 / 应用管理共用） */
+.load-more-row {
+  display: flex; justify-content: center; padding: 12px 0 4px;
+}
+.load-more-row .btn { min-width: 160px; }
+
+/* X10-166 文件管理：面包屑路径条 */
+.fm-pathbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  padding: 6px 8px; margin-bottom: 10px;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-2);
+}
+.fm-pathbar .btn-ghost { min-height: 22px; padding: 2px 6px; font-size: var(--fs-12); }
+.fm-crumb { display: inline-flex; align-items: center; gap: 2px; }
+.fm-crumb-sep { color: var(--muted); font-size: var(--fs-12); }
+
+/* X10-166 文件管理：工具栏（上传 / 新建 / 上一级 / 刷新 / 筛选） */
+.fm-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.fm-toolbar .spacer { flex: 1; }
+.fm-search {
+  width: 200px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: var(--r-control); background: var(--surface-2);
+  color: var(--text); font: inherit; font-size: var(--fs-12);
+}
+.fm-search:focus { border-color: var(--accent); outline: none; }
+
+/* X10-166 文件管理：名称单元格按钮（目录可点进入、文件可点下载） */
+.fm-name {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 0; background: none; border: 0; color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.fm-name:hover:not(:disabled) { color: var(--accent); }
+.fm-name:disabled { opacity: .6; cursor: default; }
+.fm-kind { color: var(--muted); font-size: 13px; flex: none; }
+.fm-kind.dir { color: var(--accent); }

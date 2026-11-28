@@ -8,10 +8,10 @@ import {
 } from "./assistantViews";
 
 describe("assistant view map (X10-128)", () => {
-  it("exposes all 19 views from the i4-style prototype", () => {
+  it("exposes all views from the i4-style prototype", () => {
     const keys = Object.keys(ASSISTANT_VIEWS) as AssistantViewKey[];
-    expect(keys).toHaveLength(19);
-    expect(new Set(keys).size).toBe(19);
+    expect(keys).toHaveLength(20);
+    expect(new Set(keys).size).toBe(20);
     for (const key of keys) {
       expect(ASSISTANT_VIEWS[key].title).toBeTruthy();
       expect(ASSISTANT_VIEWS[key].subtitle).toBeTruthy();
@@ -20,8 +20,8 @@ describe("assistant view map (X10-128)", () => {
 
   it("groups every view under exactly one of four modules", () => {
     const grouped = ASSISTANT_GROUPS.flatMap((group) => group.ids);
-    expect(grouped).toHaveLength(19);
-    expect(new Set(grouped).size).toBe(19);
+    expect(grouped).toHaveLength(20);
+    expect(new Set(grouped).size).toBe(20);
     expect(ASSISTANT_MODULES).toHaveLength(4);
 
     for (const group of ASSISTANT_GROUPS) {

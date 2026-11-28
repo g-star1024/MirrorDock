@@ -1402,3 +1402,61 @@ describe("file transfer presentation (X10-75)", () => {
     confirmSpy.mockRestore();
   });
 });
+
+describe("file management (X10-166)", () => {
+  function withPhoneEntries(entries: unknown[], extra?: (cmd: string) => Promise<unknown> | undefined) {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_adb_devices") {
+        return Promise.resolve(adbCheck({ devices: [testDevice("phone", "Pixel 8", "ready")] }));
+      }
+      if (cmd === "list_phone_dir") return Promise.resolve(entries);
+      if (cmd === "list_device_files") return Promise.resolve([]);
+      const custom = extra?.(cmd);
+      return custom ?? baseInvoke(cmd);
+    });
+  }
+
+  async function openFileManager() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "文件管理" }));
+  }
+
+  it("loads_the_phone_directory_on_entering_without_any_button_press", async () => {
+    withPhoneEntries([
+      { name: "Download", kind: "dir", size: 0, modified: 1735689600 },
+      { name: "发票.pdf", kind: "file", size: 2048, modified: 1735689600 },
+    ]);
+    await openFileManager();
+
+    expect(await screen.findByText("Download")).toBeInTheDocument();
+    expect(screen.getByText("发票.pdf")).toBeInTheDocument();
+    // 面包屑常显「根目录」；目录 / 文件各有其操作入口。
+    expect(screen.getByRole("button", { name: "根目录" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "下载" }).length).toBeGreaterThan(0);
+    // 自动加载走 adb，且带的是这台设备的 serial 与公共存储根。
+    await waitFor(() => {
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "list_phone_dir");
+      expect(call?.[1]).toMatchObject({ serial: "phone", path: "/storage/emulated/0" });
+    });
+  });
+
+  it("sorts_directories_before_files_in_the_same_directory", async () => {
+    withPhoneEntries([
+      { name: "zebra.txt", kind: "file", size: 10, modified: 0 },
+      { name: "Download", kind: "dir", size: 0, modified: 0 },
+    ]);
+    await openFileManager();
+
+    const download = await screen.findByText("Download");
+    const zebra = screen.getByText("zebra.txt");
+    // Download 在 zebra.txt 之前（文件夹恒排前，文件按名在后）。
+    expect(download.compareDocumentPosition(zebra) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows_an_honest_empty_state_when_the_directory_is_empty", async () => {
+    withPhoneEntries([]);
+    await openFileManager();
+
+    expect(await screen.findByText("这个文件夹是空的。")).toBeInTheDocument();
+  });
+});

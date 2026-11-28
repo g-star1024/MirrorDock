@@ -16,7 +16,7 @@ import type { ReactElement, ReactNode } from "react";
 export type AssistantViewKey =
   | "home" | "connect" | "info" | "multi"
   | "mirror" | "present" | "keymap" | "schedule" | "replay"
-  | "files" | "shot" | "record" | "album" | "install" | "apps"
+  | "files" | "fileman" | "shot" | "record" | "album" | "install" | "apps"
   | "notify" | "settings" | "help" | "pro";
 
 export type AssistantModuleKey = "device" | "tools" | "content" | "system";
@@ -47,7 +47,7 @@ export const ASSISTANT_GROUPS: {
 }[] = [
   { name: "设备", ids: ["home", "connect", "info", "multi"], openByDefault: true },
   { name: "镜像与会话", ids: ["mirror", "present", "keymap", "schedule", "replay"], openByDefault: true },
-  { name: "内容与传输", ids: ["files", "shot", "record", "album", "install", "apps"], openByDefault: true },
+  { name: "内容与传输", ids: ["files", "fileman", "shot", "record", "album", "install", "apps"], openByDefault: true },
   { name: "系统", ids: ["notify", "settings", "help", "pro"], openByDefault: true },
 ];
 
@@ -64,6 +64,7 @@ export const ASSISTANT_VIEWS: Record<AssistantViewKey, AssistantViewMeta> = {
   replay: { key: "replay", title: "操作回放", subtitle: "动作序列编排与回放 · 本机保存", action: "开始回放" },
 
   files: { key: "files", title: "文件传输", subtitle: "手机发送区与电脑之间互传", action: "刷新文件" },
+  fileman: { key: "fileman", title: "文件管理", subtitle: "浏览手机公共存储 · 完整读写", action: "上传到当前目录" },
   shot: { key: "shot", title: "截图", subtitle: "保存到本机 · 不自动上传", action: "立即截图" },
   record: { key: "record", title: "录像", subtitle: "手动启停 · 不重启镜像", action: "开始录制" },
   album: { key: "album", title: "相册", subtitle: "相册目录浏览与取回 · 本机保存", action: "刷新相册" },

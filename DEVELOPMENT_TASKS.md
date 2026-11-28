@@ -1697,3 +1697,15 @@ e2e 真服务：GET→PUT(sharp/30)→落盘→status 联动→重启后设置�
 - **验证**：cargo test **242/242**（新增 5 个 `heartbeat_probe_*` 用例：Ready→false；connect 失败/offline/端点消失/列表不可用→true）；cargo clippy `--all-targets -D warnings` **0 warning**。
 - **诚实边界**：心跳 10s 间隔对「路由器空闲超时 <10s」的极端环境防不住（属异常网络）；保温效果需用户真机观察。用户侧同步建议（非代码）：路由器关客户端隔离/空口省电、固定信道；手机 WiFi「休眠时保持连接=始终」、关电池优化；尽量 5GHz 靠近路由器；能插线就插线。
 - **状态**：已并入 `v0.4.41-beta` 发版。commit `0fbea88`（`feat: v0.4.41 无线心跳保温与断连归因`），CI run `46032586421` **completed success**，Release `460841542` 已发布（2026-11-27 16:32:48Z），**34 个资产全部 uploaded**；`latest.json` version=0.4.41；官网中英站线上均 v0.4.41。前端 0 改动（纯后端保温），README/官网版本同步。
+
+## X10-166 客户端高度对齐 + 相册/应用管理懒加载 + 新增「文件管理」（2026-11-28，用户 4 点请求）
+- **用户请求（4 点）**：①客户端高度对齐预览版（设备中心卡太高）；②相册 + 应用管理首次进入卡顿 → 先进入再懒加载；③USB「文件传输」后加文件管理功能管理手机文件夹；④罗列可加入的手机助手功能（用户随后全选：APK 提取、存储空间分析、剪贴板同步、设备性能监控、音量/亮度调节、录屏转 GIF、通知历史+回复、手机文件搜索 + 文件管理完整读写）。
+- **点 ① 高度对齐**：`.device-hero` 去固定 100px 大盒，改自然高度图标列（`.hero-phone` 不再固定高）；设备名 26→16px、chips 10→4px、divider `align-self:stretch`、padding 18→20px。Playwright 实测 **114.8px vs 预览 112px**（差 2.8px，<3%）。
+- **点 ② 懒加载**：`GALLERY_PAGE=APPS_PAGE=120` 分批渲染 + 共用 `load-more-row`「加载更多（还有 N 条）」；筛选/搜索/排序变化 `useEffect` 回首页。相册 grid 与表格同批。
+- **点 ③ 文件管理（X10-166 核心）**：adb 浏览手机公共存储**完整读写**。
+  - **Rust**：trait 新增 `list_phone_dir` / `push_to_phone_dir` / `pull_from_phone_dir` / `remove_phone_entry` / `mkdir_phone_dir` / `rename_phone_entry`（默认 Err，测试替身免改）；`SystemAdbRuntime` 实现（`ls -la` 解析、`rm -rf --` 用 shell_quote 保护、`push`/`pull`/`mkdir -p`/`mv`）；命令注册 6 个。
+  - **校验**：`validate_phone_path`（公共存储白名单、拒 `..` 逃逸、拒 `/data`、`Android/data`、`Android/obb`）；`validate_phone_name`（拒分隔符/`.`/`..`）；`parse_phone_listing`（`fields[8..].join(" ")` 重组含空格名称，跳 `total` 与 `.`/`..`）；`parse_toybox_mtime`（Howard Hinnant days_from_civil 纯整数，无 chrono 依赖）。
+  - **前端**：`AssistantViewKey "fileman"` + 注册/图标；面包屑路径（逐级可点回退 + 根目录/上一级）；目录列表表格（名称/类型/大小/修改时间/操作）；上传（多选 push 到当前目录）/下载（pull 到「下载 / MirrorDock / 文件管理」并定位）/新建文件夹/重命名/删除（目录 recursive=true 需显式确认）；目录内搜索过滤；文件夹恒排前、文件按名后。进入视图/换设备自动读根目录（不要求先点刷新）。
+  - **诚实边界**：Android/data、Android/obb 与应用私有目录受系统保护，如实拒绝不假装能进；读取失败置空报错，不伪装成「空目录」。
+- **验证**：cargo test **250/250**（新增 `phone_path_*` / `phone_name_*` / `parse_phone_listing_*` / `toybox_mtime` / `days_from_civil` 共 10 例）；cargo clippy `--all-targets -D warnings` **0 warning**；tsc 0 error；vitest **133/133**（`assistantViews` 20 视图 + `App` 新增 fileman 3 例）；Playwright 走查文件管理两态（1792/1100px）**0 横向溢出、0 控制台错误**。
+- **状态**：代码完成，待并入发版（版本号 + tag + CI + 官网/README 同步）。
